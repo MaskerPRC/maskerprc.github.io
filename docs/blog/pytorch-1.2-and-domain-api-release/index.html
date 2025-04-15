@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      New Releases: PyTorch 1.2, torchtext 0.4, torchaudio 0.3, and torchvision 0.4 | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Since the release of PyTorch 1.0, we’ve seen the community expand to add new tools, contribute to a growing set of models available in the PyTorch Hub, and continually increase usage in both research and production.
+
+From a core perspective, PyTorch has continued to add features to support both research and production usage, including the ability to bridge these two worlds via TorchScript. Today, we are excited to announce that we have four new releases including PyTorch 1.2, torchvision 0.4, torchaudio 0.3, and torchtext 0.4. You can get started now with any of these releases at pytorch.org.
+
+PyTorch 1.2
+
+With PyTorch 1.2, the open source ML framework takes a major step forward for production usage with the addition of an improved and more polished TorchScript environment. These improvements make it even easier to ship production models, expand support for exporting ONNX formatted models, and enhance module level support for Transformers. In addition to these new features, TensorBoard is now no longer experimental - you can simply type from torch.utils.tensorboard import SummaryWriter to get started.
+
+TorchScript Improvements
+
+Since its release in PyTorch 1.0, TorchScript has provided a path to production for eager PyTorch models. The TorchScript compiler converts PyTorch models to a statically typed graph representation, opening up opportunities for
+optimization and execution in constrained environments where Python is not available. You can incrementally convert your model to TorchScript, mixing compiled code seamlessly with Python.
+
+PyTorch 1.2 significantly expands TorchScript’s support for the subset of Python used in PyTorch models and delivers a new, easier-to-use API for compiling your models to TorchScript. See the migration guide for details. Below is an example usage of the new API:
+
+import torch
+
+class MyModule(torch.nn.Module):
+    def __init__(self, N, M):
+        super(MyModule, self).__init__()
+        self.weight = torch.nn.Parameter(torch.rand(N, M))
+
+    def forward(self, input):
+        if input.sum() > 0:
+          output = self.weight.mv(input)
+        else:
+          output = self.weight + input
+        return output
+
+# Compile the model code to a static representation
+my_script_module = torch.jit.script(MyModule(3, 4))
+
+# Save the compiled code and model data so it can be loaded elsewhere
+my_script_module.save(" my_script_module.pt")="" to="" learn="" more,="" see="" our="" introduction="" torchscript="" and="" loading="" a="" pytorch="" model="" in="" c++="" tutorials.="" expanded="" onnx="" export="" the="" community="" continues="" grow="" with="" an="" open="" governance="" structure="" additional="" steering="" committee="" members,="" special="" interest="" groups="" (sigs),="" working="" (wgs).="" collaboration="" microsoft,="" we’ve="" added="" full="" support="" opset="" versions="" 7(v1.2),="" 8(v1.3),="" 9(v1.4)="" 10="" (v1.5).="" have="" also="" enhanced="" constant="" folding="" pass="" 10,="" latest="" available="" version="" of="" onnx.="" scriptmodule="" has="" been="" improved="" including="" for="" multiple="" outputs,="" tensor="" factories,="" tuples="" as="" inputs="" outputs.="" additionally,="" users="" are="" now="" able="" register="" their="" own="" symbolic="" custom="" ops,="" specify="" dynamic="" dimensions="" during="" export.="" here="" is="" summary="" all="" major="" improvements:="" opsets="" ability="" dropout,="" slice,="" flip,="" interpolate="" 10.="" improvements="" more="" than="" dozen="" operators="" supported="" operator.="" many="" big="" fixes="" test="" infra="" improvements.="" you="" can="" try="" out="" tutorial="" here,="" contributed="" by="" @lara-hdr="" at="" microsoft.="" thank="" entire="" microsoft="" team="" hard="" work="" make="" this="" release="" happen!="" nn.transformer="" 1.2,="" we="" include="" standard="" module,="" based="" on="" paper="" “attention="" need”.="" module="" relies="" entirely="" attention="" mechanism="" draw="" global="" dependencies="" between="" input="" output.="" individual="" components="" designed="" so="" they="" be="" adopted="" independently.="" example,="" nn.transformerencoder="" used="" itself,="" without="" larger="" nn.transformer.="" new="" apis="" include:="" nn.transformerencoderlayer="" nn.transformerdecoder="" nn.transformerdecoderlayer="" transformer="" layers="" documentation="" information.="" 1.2="" notes.="" domain="" api="" library="" updates="" libraries="" like="" torchvision,="" torchtext,="" torchaudio="" provide="" convenient="" access="" common="" datasets,="" models,="" transforms="" that="" quickly="" create="" state-of-the-art="" baseline.="" moreover,="" abstractions="" reduce="" boilerplate="" code="" might="" otherwise="" repeatedly="" write.="" since="" research="" domains="" distinct="" requirements,="" ecosystem="" specialized="" called="" (dapi)="" emerged="" around="" simplify="" development="" existing="" algorithms="" number="" fields.="" we’re="" excited="" three="" updated="" dapi="" text,="" audio,="" vision="" compliment="" core="" release.="" 0.3="" kaldi="" compatibility,="" specializes="" machine="" understanding="" audio="" waveforms.="" it="" ml="" provides="" relevant="" signal="" processing="" functionality="" (but="" not="" general="" library).="" leverages="" pytorch’s="" gpu="" tools="" transformations="" waveforms="" data="" standardization="" easier="" readable.="" offers="" loaders="" using="" sox,="" such="" spectrograms,="" resampling,="" mu-law="" encoding="" decoding.="" happy="" announce="" availability="" 0.3.0,="" focus="" complex="" numbers,="" transformation="" (resample)="" two="" functionals="" (phase_vocoder,="" istft),="" tutorial.="" was="" redesigned="" extension="" part="" ecosystem.="" significant="" effort="" solving="" learning="" problems="" goes="" into="" preparation.="" release,="" torchaudio’s="" interfaces="" its="" standardize="" following="" vocabulary="" conventions.="" tensors="" assumed="" channel="" first="" dimension="" time="" last="" (when="" applicable).="" makes="" consistent="" dimensions.="" size="" names,="" prefix="" n_="" (e.g.="" “a="" (n_freq,="" n_mel)”)="" whereas="" names="" do="" (channel,="" time)”).="" functions="" assumes="" first.="" done="" pytorch,="" which="" followed="" samples.="" parameter="" deprecated.="" output="" stft="" frequency,="" time,="" 2),="" meaning="" each="" channel,="" columns="" fourier="" transform="" certain="" window,="" travel="" horizontally="" column="" (the="" transformed="" waveform)="" change="" over="" time.="" matches="" librosa="" no="" longer="" need="" transpose="" comparisons="" spectrogram,="" melscale,="" melspectrogram,="" mfcc.="" because="" these="" conventions,="" deprecated="" lc2cl="" blc2cbl="" were="" transfer="" from="" one="" shape="" another.="" introducing="" numbers="" via="" (…,="" providing="" magphase="" convert="" magnitude="" phase,="" similarly="" complex_norm="" angle.="" details="" provided="" readme.="" functionals,="" transformations,="" compatibility="" prior="" standardization,="" separated="" state="" computation="" torchaudio.transforms="" torchaudio.functional.="" transforms,="" adding="" 0.3.0:="" resample.="" resample="" upsample="" or="" downsample="" waveform="" different="" frequency.="" introducing:="" phase_vocoder,="" phase="" vocoder="" speed="" changing="" pitch,="" istft,="" inverse="" implemented="" compatible="" pytorch.="" separation="" allows="" us="" weak="" scriptable="" utilize="" jit="" 0.3.0.="" thus="" cuda="" transformations:="" amplitudetodb="" (previously="" named="" spectrogramtodb),="" mfcc,="" mulawencoding,="" mulawdecoding="" mulawexpanding).="" interface="" ease="" onboarding="" user’s="" dependency="" kaldi.="" fbank,="" resample_waveform.="" showcase="" conventions="" demonstrating="" how="" preprocess="" torchaudio.="" walks="" through="" example="" applying="" some="" it.="" active="" eager="" further="" encourage="" go="" ahead="" experiment="" yourself="" datasets="" available:="" vctk="" yesno!="" download="" them="" format.="" find="" notes="" here.="" torchtext="" 0.4="" supervised="" key="" area="" fundamental="" elements="" help="" accelerate="" nlp="" research.="" includes="" easy="" commonly="" basic="" preprocessing="" pipelines="" raw="" text="" data.="" 0.4.0="" several="" popular="" baselines="" “one-command”="" loading.="" included="" show="" use="" classification="" analysis.="" few="" get_tokenizer="" build_vocab_from_iterator="" implement="" future="" datasets.="" examples="" found="" important="" task="" natural="" language="" applications,="" sentiment="" including:="" ag_news="" sogounews="" dbpedia="" yelpreviewpolarity="" yelpreviewfull="" yahooanswers="" amazonreviewpolarity="" amazonreviewfull="" dataset="" comes="" parts="" (train="" vs.="" test),="" easily="" loaded="" single="" command.="" ngrams="" feature="" capture="" partial="" information="" about="" local="" word="" order.="" take="" look="" torchtext.datasets.text_classification="" import="" train_dataset,="" test_dataset="DATASETS['AG_NEWS'](ngrams=2)" addition="" library,="" easy.="" load="" well="" tools,="" torch.utils.data.dataloader="" torch.utils.data.iterabledataset.="" lines="" wrap="" dataloader.="" torch.utils.data="" dataloader="" collate_fn="generate_batch)" check="" torchvision="" video="" first-class="" citizen="" loading,="" pre-trained="" transforms.="" includes:="" efficient="" io="" primitives="" reading="" writing="" files="" (including="" audio),="" arbitrary="" encodings="" formats.="" torch.utils.data.dataset="" torch.utils.data.dataloader.="" models="" built="" kinetics-400="" action="" videos="" training="" scripts).="" reference="" scripts="" your="" models.="" wanted="" straightforward="" possible,="" compromising="" too="" much="" performance.="" such,="" avoid="" steps="" would="" require="" re-encoding="" beforehand,="" involve:="" step="" duplicates="" order="" re-encode="" overhead="" space="" time-consuming.="" generally,="" external="" script="" should="" perform="" re-encoding.="" utility="" class,="" videoclips,="" simplifies="" enumerating="" possible="" clips="" fixed="" list="" creating="" index="" set="" videos.="" frame-rate="" below:="" torchvision.datasets.video_utils="" videoclips="" class="" myvideodataset(object):="" def="" __init__(self,="" video_paths):="" self.video_clips="VideoClips(video_paths," clip_length_in_frames="16," frames_between_clips="1," frame_rate="15)" __getitem__(self,="" idx):="" video,="" info,="" video_idx="self.video_clips.get_clip(idx)" return="" __len__(self):="" self.video_clips.num_clips()="" most="" user-facing="" python,="" similar="" extensible.="" plus,="" underlying="" implementation="" fast="" —="" decodes="" little="" on-the-fly="" clip="" video.="" details.="" forward="" continuing="" hearing="" feedback="" improve="" expand="" deep="" platform.="" we’d="" contributions="" work!="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="New Releases: PyTorch 1.2, torchtext 0.4, torchaudio 0.3, and torchvision 0.4">
+<meta property="og:description" content="Since the release of PyTorch 1.0, we’ve seen the community expand to add new tools, contribute to a growing set of models available in the PyTorch Hub, and continually increase usage in both research and production.
+
+From a core perspective, PyTorch has continued to add features to support both research and production usage, including the ability to bridge these two worlds via TorchScript. Today, we are excited to announce that we have four new releases including PyTorch 1.2, torchvision 0.4, torchaudio 0.3, and torchtext 0.4. You can get started now with any of these releases at pytorch.org.
+
+PyTorch 1.2
+
+With PyTorch 1.2, the open source ML framework takes a major step forward for production usage with the addition of an improved and more polished TorchScript environment. These improvements make it even easier to ship production models, expand support for exporting ONNX formatted models, and enhance module level support for Transformers. In addition to these new features, TensorBoard is now no longer experimental - you can simply type from torch.utils.tensorboard import SummaryWriter to get started.
+
+TorchScript Improvements
+
+Since its release in PyTorch 1.0, TorchScript has provided a path to production for eager PyTorch models. The TorchScript compiler converts PyTorch models to a statically typed graph representation, opening up opportunities for
+optimization and execution in constrained environments where Python is not available. You can incrementally convert your model to TorchScript, mixing compiled code seamlessly with Python.
+
+PyTorch 1.2 significantly expands TorchScript’s support for the subset of Python used in PyTorch models and delivers a new, easier-to-use API for compiling your models to TorchScript. See the migration guide for details. Below is an example usage of the new API:
+
+import torch
+
+class MyModule(torch.nn.Module):
+    def __init__(self, N, M):
+        super(MyModule, self).__init__()
+        self.weight = torch.nn.Parameter(torch.rand(N, M))
+
+    def forward(self, input):
+        if input.sum() > 0:
+          output = self.weight.mv(input)
+        else:
+          output = self.weight + input
+        return output
+
+# Compile the model code to a static representation
+my_script_module = torch.jit.script(MyModule(3, 4))
+
+# Save the compiled code and model data so it can be loaded elsewhere
+my_script_module.save(" my_script_module.pt")="" to="" learn="" more,="" see="" our="" introduction="" torchscript="" and="" loading="" a="" pytorch="" model="" in="" c++="" tutorials.="" expanded="" onnx="" export="" the="" community="" continues="" grow="" with="" an="" open="" governance="" structure="" additional="" steering="" committee="" members,="" special="" interest="" groups="" (sigs),="" working="" (wgs).="" collaboration="" microsoft,="" we’ve="" added="" full="" support="" opset="" versions="" 7(v1.2),="" 8(v1.3),="" 9(v1.4)="" 10="" (v1.5).="" have="" also="" enhanced="" constant="" folding="" pass="" 10,="" latest="" available="" version="" of="" onnx.="" scriptmodule="" has="" been="" improved="" including="" for="" multiple="" outputs,="" tensor="" factories,="" tuples="" as="" inputs="" outputs.="" additionally,="" users="" are="" now="" able="" register="" their="" own="" symbolic="" custom="" ops,="" specify="" dynamic="" dimensions="" during="" export.="" here="" is="" summary="" all="" major="" improvements:="" opsets="" ability="" dropout,="" slice,="" flip,="" interpolate="" 10.="" improvements="" more="" than="" dozen="" operators="" supported="" operator.="" many="" big="" fixes="" test="" infra="" improvements.="" you="" can="" try="" out="" tutorial="" here,="" contributed="" by="" @lara-hdr="" at="" microsoft.="" thank="" entire="" microsoft="" team="" hard="" work="" make="" this="" release="" happen!="" nn.transformer="" 1.2,="" we="" include="" standard="" module,="" based="" on="" paper="" “attention="" need”.="" module="" relies="" entirely="" attention="" mechanism="" draw="" global="" dependencies="" between="" input="" output.="" individual="" components="" designed="" so="" they="" be="" adopted="" independently.="" example,="" nn.transformerencoder="" used="" itself,="" without="" larger="" nn.transformer.="" new="" apis="" include:="" nn.transformerencoderlayer="" nn.transformerdecoder="" nn.transformerdecoderlayer="" transformer="" layers="" documentation="" information.="" 1.2="" notes.="" domain="" api="" library="" updates="" libraries="" like="" torchvision,="" torchtext,="" torchaudio="" provide="" convenient="" access="" common="" datasets,="" models,="" transforms="" that="" quickly="" create="" state-of-the-art="" baseline.="" moreover,="" abstractions="" reduce="" boilerplate="" code="" might="" otherwise="" repeatedly="" write.="" since="" research="" domains="" distinct="" requirements,="" ecosystem="" specialized="" called="" (dapi)="" emerged="" around="" simplify="" development="" existing="" algorithms="" number="" fields.="" we’re="" excited="" three="" updated="" dapi="" text,="" audio,="" vision="" compliment="" core="" release.="" 0.3="" kaldi="" compatibility,="" specializes="" machine="" understanding="" audio="" waveforms.="" it="" ml="" provides="" relevant="" signal="" processing="" functionality="" (but="" not="" general="" library).="" leverages="" pytorch’s="" gpu="" tools="" transformations="" waveforms="" data="" standardization="" easier="" readable.="" offers="" loaders="" using="" sox,="" such="" spectrograms,="" resampling,="" mu-law="" encoding="" decoding.="" happy="" announce="" availability="" 0.3.0,="" focus="" complex="" numbers,="" transformation="" (resample)="" two="" functionals="" (phase_vocoder,="" istft),="" tutorial.="" was="" redesigned="" extension="" part="" ecosystem.="" significant="" effort="" solving="" learning="" problems="" goes="" into="" preparation.="" release,="" torchaudio’s="" interfaces="" its="" standardize="" following="" vocabulary="" conventions.="" tensors="" assumed="" channel="" first="" dimension="" time="" last="" (when="" applicable).="" makes="" consistent="" dimensions.="" size="" names,="" prefix="" n_="" (e.g.="" “a="" (n_freq,="" n_mel)”)="" whereas="" names="" do="" (channel,="" time)”).="" functions="" assumes="" first.="" done="" pytorch,="" which="" followed="" samples.="" parameter="" deprecated.="" output="" stft="" frequency,="" time,="" 2),="" meaning="" each="" channel,="" columns="" fourier="" transform="" certain="" window,="" travel="" horizontally="" column="" (the="" transformed="" waveform)="" change="" over="" time.="" matches="" librosa="" no="" longer="" need="" transpose="" comparisons="" spectrogram,="" melscale,="" melspectrogram,="" mfcc.="" because="" these="" conventions,="" deprecated="" lc2cl="" blc2cbl="" were="" transfer="" from="" one="" shape="" another.="" introducing="" numbers="" via="" (…,="" providing="" magphase="" convert="" magnitude="" phase,="" similarly="" complex_norm="" angle.="" details="" provided="" readme.="" functionals,="" transformations,="" compatibility="" prior="" standardization,="" separated="" state="" computation="" torchaudio.transforms="" torchaudio.functional.="" transforms,="" adding="" 0.3.0:="" resample.="" resample="" upsample="" or="" downsample="" waveform="" different="" frequency.="" introducing:="" phase_vocoder,="" phase="" vocoder="" speed="" changing="" pitch,="" istft,="" inverse="" implemented="" compatible="" pytorch.="" separation="" allows="" us="" weak="" scriptable="" utilize="" jit="" 0.3.0.="" thus="" cuda="" transformations:="" amplitudetodb="" (previously="" named="" spectrogramtodb),="" mfcc,="" mulawencoding,="" mulawdecoding="" mulawexpanding).="" interface="" ease="" onboarding="" user’s="" dependency="" kaldi.="" fbank,="" resample_waveform.="" showcase="" conventions="" demonstrating="" how="" preprocess="" torchaudio.="" walks="" through="" example="" applying="" some="" it.="" active="" eager="" further="" encourage="" go="" ahead="" experiment="" yourself="" datasets="" available:="" vctk="" yesno!="" download="" them="" format.="" find="" notes="" here.="" torchtext="" 0.4="" supervised="" key="" area="" fundamental="" elements="" help="" accelerate="" nlp="" research.="" includes="" easy="" commonly="" basic="" preprocessing="" pipelines="" raw="" text="" data.="" 0.4.0="" several="" popular="" baselines="" “one-command”="" loading.="" included="" show="" use="" classification="" analysis.="" few="" get_tokenizer="" build_vocab_from_iterator="" implement="" future="" datasets.="" examples="" found="" important="" task="" natural="" language="" applications,="" sentiment="" including:="" ag_news="" sogounews="" dbpedia="" yelpreviewpolarity="" yelpreviewfull="" yahooanswers="" amazonreviewpolarity="" amazonreviewfull="" dataset="" comes="" parts="" (train="" vs.="" test),="" easily="" loaded="" single="" command.="" ngrams="" feature="" capture="" partial="" information="" about="" local="" word="" order.="" take="" look="" torchtext.datasets.text_classification="" import="" train_dataset,="" test_dataset="DATASETS['AG_NEWS'](ngrams=2)" addition="" library,="" easy.="" load="" well="" tools,="" torch.utils.data.dataloader="" torch.utils.data.iterabledataset.="" lines="" wrap="" dataloader.="" torch.utils.data="" dataloader="" collate_fn="generate_batch)" check="" torchvision="" video="" first-class="" citizen="" loading,="" pre-trained="" transforms.="" includes:="" efficient="" io="" primitives="" reading="" writing="" files="" (including="" audio),="" arbitrary="" encodings="" formats.="" torch.utils.data.dataset="" torch.utils.data.dataloader.="" models="" built="" kinetics-400="" action="" videos="" training="" scripts).="" reference="" scripts="" your="" models.="" wanted="" straightforward="" possible,="" compromising="" too="" much="" performance.="" such,="" avoid="" steps="" would="" require="" re-encoding="" beforehand,="" involve:="" step="" duplicates="" order="" re-encode="" overhead="" space="" time-consuming.="" generally,="" external="" script="" should="" perform="" re-encoding.="" utility="" class,="" videoclips,="" simplifies="" enumerating="" possible="" clips="" fixed="" list="" creating="" index="" set="" videos.="" frame-rate="" below:="" torchvision.datasets.video_utils="" videoclips="" class="" myvideodataset(object):="" def="" __init__(self,="" video_paths):="" self.video_clips="VideoClips(video_paths," clip_length_in_frames="16," frames_between_clips="1," frame_rate="15)" __getitem__(self,="" idx):="" video,="" info,="" video_idx="self.video_clips.get_clip(idx)" return="" __len__(self):="" self.video_clips.num_clips()="" most="" user-facing="" python,="" similar="" extensible.="" plus,="" underlying="" implementation="" fast="" —="" decodes="" little="" on-the-fly="" clip="" video.="" details.="" forward="" continuing="" hearing="" feedback="" improve="" expand="" deep="" platform.="" we’d="" contributions="" work!="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="New Releases: PyTorch 1.2, torchtext 0.4, torchaudio 0.3, and torchvision 0.4">
+<meta name="twitter:description" content="Since the release of PyTorch 1.0, we’ve seen the community expand to add new tools, contribute to a growing set of models available in the PyTorch Hub, and continually increase usage in both research and production.
+
+From a core perspective, PyTorch has continued to add features to support both research and production usage, including the ability to bridge these two worlds via TorchScript. Today, we are excited to announce that we have four new releases including PyTorch 1.2, torchvision 0.4, torchaudio 0.3, and torchtext 0.4. You can get started now with any of these releases at pytorch.org.
+
+PyTorch 1.2
+
+With PyTorch 1.2, the open source ML framework takes a major step forward for production usage with the addition of an improved and more polished TorchScript environment. These improvements make it even easier to ship production models, expand support for exporting ONNX formatted models, and enhance module level support for Transformers. In addition to these new features, TensorBoard is now no longer experimental - you can simply type from torch.utils.tensorboard import SummaryWriter to get started.
+
+TorchScript Improvements
+
+Since its release in PyTorch 1.0, TorchScript has provided a path to production for eager PyTorch models. The TorchScript compiler converts PyTorch models to a statically typed graph representation, opening up opportunities for
+optimization and execution in constrained environments where Python is not available. You can incrementally convert your model to TorchScript, mixing compiled code seamlessly with Python.
+
+PyTorch 1.2 significantly expands TorchScript’s support for the subset of Python used in PyTorch models and delivers a new, easier-to-use API for compiling your models to TorchScript. See the migration guide for details. Below is an example usage of the new API:
+
+import torch
+
+class MyModule(torch.nn.Module):
+    def __init__(self, N, M):
+        super(MyModule, self).__init__()
+        self.weight = torch.nn.Parameter(torch.rand(N, M))
+
+    def forward(self, input):
+        if input.sum() > 0:
+          output = self.weight.mv(input)
+        else:
+          output = self.weight + input
+        return output
+
+# Compile the model code to a static representation
+my_script_module = torch.jit.script(MyModule(3, 4))
+
+# Save the compiled code and model data so it can be loaded elsewhere
+my_script_module.save(" my_script_module.pt")="" to="" learn="" more,="" see="" our="" introduction="" torchscript="" and="" loading="" a="" pytorch="" model="" in="" c++="" tutorials.="" expanded="" onnx="" export="" the="" community="" continues="" grow="" with="" an="" open="" governance="" structure="" additional="" steering="" committee="" members,="" special="" interest="" groups="" (sigs),="" working="" (wgs).="" collaboration="" microsoft,="" we’ve="" added="" full="" support="" opset="" versions="" 7(v1.2),="" 8(v1.3),="" 9(v1.4)="" 10="" (v1.5).="" have="" also="" enhanced="" constant="" folding="" pass="" 10,="" latest="" available="" version="" of="" onnx.="" scriptmodule="" has="" been="" improved="" including="" for="" multiple="" outputs,="" tensor="" factories,="" tuples="" as="" inputs="" outputs.="" additionally,="" users="" are="" now="" able="" register="" their="" own="" symbolic="" custom="" ops,="" specify="" dynamic="" dimensions="" during="" export.="" here="" is="" summary="" all="" major="" improvements:="" opsets="" ability="" dropout,="" slice,="" flip,="" interpolate="" 10.="" improvements="" more="" than="" dozen="" operators="" supported="" operator.="" many="" big="" fixes="" test="" infra="" improvements.="" you="" can="" try="" out="" tutorial="" here,="" contributed="" by="" @lara-hdr="" at="" microsoft.="" thank="" entire="" microsoft="" team="" hard="" work="" make="" this="" release="" happen!="" nn.transformer="" 1.2,="" we="" include="" standard="" module,="" based="" on="" paper="" “attention="" need”.="" module="" relies="" entirely="" attention="" mechanism="" draw="" global="" dependencies="" between="" input="" output.="" individual="" components="" designed="" so="" they="" be="" adopted="" independently.="" example,="" nn.transformerencoder="" used="" itself,="" without="" larger="" nn.transformer.="" new="" apis="" include:="" nn.transformerencoderlayer="" nn.transformerdecoder="" nn.transformerdecoderlayer="" transformer="" layers="" documentation="" information.="" 1.2="" notes.="" domain="" api="" library="" updates="" libraries="" like="" torchvision,="" torchtext,="" torchaudio="" provide="" convenient="" access="" common="" datasets,="" models,="" transforms="" that="" quickly="" create="" state-of-the-art="" baseline.="" moreover,="" abstractions="" reduce="" boilerplate="" code="" might="" otherwise="" repeatedly="" write.="" since="" research="" domains="" distinct="" requirements,="" ecosystem="" specialized="" called="" (dapi)="" emerged="" around="" simplify="" development="" existing="" algorithms="" number="" fields.="" we’re="" excited="" three="" updated="" dapi="" text,="" audio,="" vision="" compliment="" core="" release.="" 0.3="" kaldi="" compatibility,="" specializes="" machine="" understanding="" audio="" waveforms.="" it="" ml="" provides="" relevant="" signal="" processing="" functionality="" (but="" not="" general="" library).="" leverages="" pytorch’s="" gpu="" tools="" transformations="" waveforms="" data="" standardization="" easier="" readable.="" offers="" loaders="" using="" sox,="" such="" spectrograms,="" resampling,="" mu-law="" encoding="" decoding.="" happy="" announce="" availability="" 0.3.0,="" focus="" complex="" numbers,="" transformation="" (resample)="" two="" functionals="" (phase_vocoder,="" istft),="" tutorial.="" was="" redesigned="" extension="" part="" ecosystem.="" significant="" effort="" solving="" learning="" problems="" goes="" into="" preparation.="" release,="" torchaudio’s="" interfaces="" its="" standardize="" following="" vocabulary="" conventions.="" tensors="" assumed="" channel="" first="" dimension="" time="" last="" (when="" applicable).="" makes="" consistent="" dimensions.="" size="" names,="" prefix="" n_="" (e.g.="" “a="" (n_freq,="" n_mel)”)="" whereas="" names="" do="" (channel,="" time)”).="" functions="" assumes="" first.="" done="" pytorch,="" which="" followed="" samples.="" parameter="" deprecated.="" output="" stft="" frequency,="" time,="" 2),="" meaning="" each="" channel,="" columns="" fourier="" transform="" certain="" window,="" travel="" horizontally="" column="" (the="" transformed="" waveform)="" change="" over="" time.="" matches="" librosa="" no="" longer="" need="" transpose="" comparisons="" spectrogram,="" melscale,="" melspectrogram,="" mfcc.="" because="" these="" conventions,="" deprecated="" lc2cl="" blc2cbl="" were="" transfer="" from="" one="" shape="" another.="" introducing="" numbers="" via="" (…,="" providing="" magphase="" convert="" magnitude="" phase,="" similarly="" complex_norm="" angle.="" details="" provided="" readme.="" functionals,="" transformations,="" compatibility="" prior="" standardization,="" separated="" state="" computation="" torchaudio.transforms="" torchaudio.functional.="" transforms,="" adding="" 0.3.0:="" resample.="" resample="" upsample="" or="" downsample="" waveform="" different="" frequency.="" introducing:="" phase_vocoder,="" phase="" vocoder="" speed="" changing="" pitch,="" istft,="" inverse="" implemented="" compatible="" pytorch.="" separation="" allows="" us="" weak="" scriptable="" utilize="" jit="" 0.3.0.="" thus="" cuda="" transformations:="" amplitudetodb="" (previously="" named="" spectrogramtodb),="" mfcc,="" mulawencoding,="" mulawdecoding="" mulawexpanding).="" interface="" ease="" onboarding="" user’s="" dependency="" kaldi.="" fbank,="" resample_waveform.="" showcase="" conventions="" demonstrating="" how="" preprocess="" torchaudio.="" walks="" through="" example="" applying="" some="" it.="" active="" eager="" further="" encourage="" go="" ahead="" experiment="" yourself="" datasets="" available:="" vctk="" yesno!="" download="" them="" format.="" find="" notes="" here.="" torchtext="" 0.4="" supervised="" key="" area="" fundamental="" elements="" help="" accelerate="" nlp="" research.="" includes="" easy="" commonly="" basic="" preprocessing="" pipelines="" raw="" text="" data.="" 0.4.0="" several="" popular="" baselines="" “one-command”="" loading.="" included="" show="" use="" classification="" analysis.="" few="" get_tokenizer="" build_vocab_from_iterator="" implement="" future="" datasets.="" examples="" found="" important="" task="" natural="" language="" applications,="" sentiment="" including:="" ag_news="" sogounews="" dbpedia="" yelpreviewpolarity="" yelpreviewfull="" yahooanswers="" amazonreviewpolarity="" amazonreviewfull="" dataset="" comes="" parts="" (train="" vs.="" test),="" easily="" loaded="" single="" command.="" ngrams="" feature="" capture="" partial="" information="" about="" local="" word="" order.="" take="" look="" torchtext.datasets.text_classification="" import="" train_dataset,="" test_dataset="DATASETS['AG_NEWS'](ngrams=2)" addition="" library,="" easy.="" load="" well="" tools,="" torch.utils.data.dataloader="" torch.utils.data.iterabledataset.="" lines="" wrap="" dataloader.="" torch.utils.data="" dataloader="" collate_fn="generate_batch)" check="" torchvision="" video="" first-class="" citizen="" loading,="" pre-trained="" transforms.="" includes:="" efficient="" io="" primitives="" reading="" writing="" files="" (including="" audio),="" arbitrary="" encodings="" formats.="" torch.utils.data.dataset="" torch.utils.data.dataloader.="" models="" built="" kinetics-400="" action="" videos="" training="" scripts).="" reference="" scripts="" your="" models.="" wanted="" straightforward="" possible,="" compromising="" too="" much="" performance.="" such,="" avoid="" steps="" would="" require="" re-encoding="" beforehand,="" involve:="" step="" duplicates="" order="" re-encode="" overhead="" space="" time-consuming.="" generally,="" external="" script="" should="" perform="" re-encoding.="" utility="" class,="" videoclips,="" simplifies="" enumerating="" possible="" clips="" fixed="" list="" creating="" index="" set="" videos.="" frame-rate="" below:="" torchvision.datasets.video_utils="" videoclips="" class="" myvideodataset(object):="" def="" __init__(self,="" video_paths):="" self.video_clips="VideoClips(video_paths," clip_length_in_frames="16," frames_between_clips="1," frame_rate="15)" __getitem__(self,="" idx):="" video,="" info,="" video_idx="self.video_clips.get_clip(idx)" return="" __len__(self):="" self.video_clips.num_clips()="" most="" user-facing="" python,="" similar="" extensible.="" plus,="" underlying="" implementation="" fast="" —="" decodes="" little="" on-the-fly="" clip="" video.="" details.="" forward="" continuing="" hearing="" feedback="" improve="" expand="" deep="" platform.="" we’d="" contributions="" work!="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2019年8月8日</p>
+            <h1>
+                <a class="blog-title">新版本发布：PyTorch 1.2，torchtext 0.4，torchaudio 0.3，以及 torchvision 0.4</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队编写</p>
+                    <p>自 PyTorch 1.0 版本发布以来，我们看到了社区不断扩展，添加新工具，为 PyTorch Hub 中日益增长的模型集做出贡献，并在研究和生产中不断增加使用。从核心角度来看，PyTorch 一直在添加功能以支持研究和生产使用，包括通过 <a id="0">TorchScript</a> 桥接这两个世界的能力。今天，我们非常高兴地宣布，我们推出了四个新版本，包括 PyTorch 1.2、torchvision 0.4、torchaudio 0.3 和 torchtext 0.4。您现在可以开始使用这些版本中的任何一个，请访问 <a id="1">pytorch.org</a>。</p>
+
+<p>从核心角度来看，PyTorch 一直在添加功能以支持研究和生产使用，包括通过 <a href="https://pytorch.org/docs/stable/jit.html">TorchScript</a> 桥接这两个世界的能力。今天，我们非常高兴地宣布，我们推出了四个新版本，包括 PyTorch 1.2、torchvision 0.4、torchaudio 0.3 和 torchtext 0.4。您现在可以开始使用这些版本中的任何一个，请访问 <a href="https://pytorch.org/get-started/locally/">pytorch.org</a>。</p>
+
+<h1 id="pytorch-12">PyTorch 1.2</h1>
+
+<p>在 PyTorch 1.2 版本中，这个开源的机器学习框架在投入生产使用方面迈出了重大步伐，新增了一个改进且更加完善的 TorchScript 环境。这些改进使得发布生产模型变得更加容易，扩展了对导出 ONNX 格式模型的支撑，并增强了 Transformer 模块级别的支持。除了这些新特性之外，<a href="https://pytorch.org/docs/stable/tensorboard.html">TensorBoard</a> 现在已不再处于实验状态——您只需输入 <code class="language-plaintext highlighter-rouge">from torch.utils.tensorboard import SummaryWriter</code> 即可开始使用。</p>
+
+<h2 id="torchscript-improvements">TorchScript 改进</h2>
+
+<p>自从 PyTorch 1.0 版本发布以来，TorchScript 为急切模式的 PyTorch 模型提供了通往生产环境的途径。TorchScript 编译器将 PyTorch 模型转换为静态类型图表示，为在 Python 不可用的受限环境中进行优化和执行打开了机会。您可以逐步将模型转换为 TorchScript，将编译代码与 Python 代码无缝混合。</p>
+
+<p>PyTorch 1.2 显著扩展了 TorchScript 对 PyTorch 模型中使用的 Python 子集的支持，并提供了一个新的、易于使用的 API 来编译模型到 TorchScript。有关详细信息，请参阅<a href="https://pytorch.org/docs/master/jit.html#migrating-to-pytorch-1-2-recursive-scripting-api">迁移指南 </a>。以下是新 API 的示例用法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+
+<span class="k">class</span> <span class="nc">MyModule</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MyModule</span><span class="p">,</span> <span class="bp">self</span><span class="p">).</span><span class="n">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Parameter</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">input</span><span class="p">.</span><span class="nb">sum</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+          <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">weight</span><span class="p">.</span><span class="n">mv</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+          <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">weight</span> <span class="o">+</span> <span class="nb">input</span>
+        <span class="k">return</span> <span class="n">output</span>
+
+<span class="c1"># Compile the model code to a static representation
+</span><span class="n">my_script_module</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">jit</span><span class="p">.</span><span class="n">script</span><span class="p">(</span><span class="n">MyModule</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+
+<span class="c1"># Save the compiled code and model data so it can be loaded elsewhere
+</span><span class="n">my_script_module</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="s">"my_script_module.pt"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">了解更多，请参阅我们的《TorchScript 简介》和《加载模型》
+PyTorch 模型在 C++ 中的教程。</font></font></font></p>
+
+<h2 id="expanded-onnx-export">扩展 ONNX 导出</h2>
+
+<p>ONNX 社区继续扩大，拥有开放的治理结构和额外的指导委员会成员、特别兴趣小组（SIGs）和工作组（WGs）。与微软合作，我们已添加对导出 ONNX Opset 版本 7（v1.2）、8（v1.3）、9（v1.4）和 10（v1.5）的全面支持。我们还增强了常量折叠传递，以支持 ONNX 的最新版本 10。ScriptModule 也得到了改进，包括支持多个输出、张量工厂以及将元组作为输入和输出。此外，用户现在可以注册自己的符号以导出自定义操作，并在导出时指定输入的动态维度。以下是所有主要改进的总结：</p>
+
+<ul>
+  <li>支持多个 Opsets，包括在 Opset 10 中导出 dropout、slice、flip 和 interpolate 的功能。</li>
+  <li>对 ScriptModule 的改进，包括支持多个输出、张量工厂以及元组作为输入和输出。</li>
+  <li>支持超过一打额外的 PyTorch 算子，包括导出自定义算子的功能。</li>
+  <li>许多重大修复和测试基础设施改进。</li>
+</ul>
+
+<p>您可以尝试最新的教程<a href="https://maskerprc.github.io/tutorials/advanced/super_resolution_with_onnxruntime.html">这里 </a>，由微软的@lara-hdr 贡献。非常感谢整个微软团队为这次发布所付出的辛勤努力！</p>
+
+<h2 id="nntransformer">nn.Transformer</h2>
+
+<p>在 PyTorch 1.2 版本中，我们现在包括了一个基于论文“<a href="https://arxiv.org/abs/1706.03762">Attention is All You Need</a>”的标准 <a href="https://pytorch.org/docs/stable/nn.html?highlight=transformer#torch.nn.Transformer">nn.Transformer</a> 模块。该 <code class="language-plaintext highlighter-rouge">nn.Transformer 模块完全依赖于<a href="https://pytorch.org/docs/stable/nn.html?highlight=nn%20multiheadattention#torch.nn.MultiheadAttention">注意力机制</a>来在输入和输出之间建立全局依赖关系。该模块的各个组成部分被设计成可以独立采用。例如，可以单独使用 <a href="https://pytorch.org/docs/stable/nn.html?highlight=nn%20transformerencoder#torch.nn.TransformerEncoder">nn.TransformerEncoder</a>，而不需要更大的 <code class="language-plaintext highlighter-rouge">nn.Transformer。新的 API 包括：</code></code></p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">nn.Transformer</code></li>
+  <li><code class="language-plaintext highlighter-rouge">nn.TransformerEncoder</code> 和 <code class="language-plaintext highlighter-rouge">nn.TransformerEncoderLayer</code></li>
+  <li><code class="language-plaintext highlighter-rouge">nn.TransformerDecoder</code> 和 <code class="language-plaintext highlighter-rouge">nn.TransformerDecoderLayer</code></li>
+</ul>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/transformer.png" width="70%">
+</div>
+
+<p>请参阅 <a href="https://pytorch.org/docs/stable/nn.html#transformer-layers">Transformer 层</a>文档获取更多信息。请参阅<a href="https://github.com/pytorch/pytorch/releases">此处</a>获取完整的 PyTorch 1.2 版本发布说明。</p>
+
+<h1 id="domain-api-library-updates">领域 API 库更新</h1>
+
+<p>PyTorch 领域的库，如 torchvision、torchtext 和 torchaudio，提供了方便访问常用数据集、模型和转换的功能，可以快速创建最先进的基线。此外，它们还提供了常见的抽象，以减少用户可能需要反复编写的样板代码。由于研究领域的特定要求，围绕 PyTorch 出现了一个名为领域 API（DAPI）的专业化库生态系统，以简化多个领域中新算法和现有算法的开发。我们很高兴发布三个更新的 DAPI 库，用于文本、音频和视觉，以补充 PyTorch 1.2 核心版本。</p>
+
+<h2 id="torchaudio-03-with-kaldi-compatibility-new-transforms">支持 Kaldi 兼容性的 Torchaudio 0.3，新增转换</h2>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/spectrograms.png" width="100%">
+</div>
+
+<p>Torchaudio 专注于音频波形机器理解。它是一个提供相关信号处理功能（但不是通用信号处理库）的 ML 库。它利用 PyTorch 的 GPU 支持，提供许多工具和变换，使数据加载和标准化更加容易和可读。例如，它提供了使用 sox 的波形数据加载器，以及频谱图、重采样和 mu-law 编码解码等变换。</p>
+
+<p>我们很高兴地宣布 torchaudio 0.3.0 版本的发布，该版本专注于标准化和复数，一个变换（重采样）和两个新的功能（相位声码器，ISTFT），Kaldi 兼容性，以及一个新教程。Torchaudio 被重新设计为 PyTorch 的扩展，成为领域 API（DAPI）生态系统的一部分。</p>
+
+<h3 id="standardization">标准化</h3>
+
+<p>解决机器学习问题的大量努力都投入到数据准备中。在这个新版本中，我们更新了 torchaudio 的变换接口，以标准化以下词汇和约定。</p>
+
+<p>张量假定通道为第一维度，时间（当适用时）为最后一维度。这使得它与 PyTorch 的维度保持一致。对于尺寸名称，使用前缀 <code class="language-plaintext highlighter-rouge">n_</code>（例如，“尺寸为（<code class="language-plaintext highlighter-rouge">n_freq</code>，<code class="language-plaintext highlighter-rouge">n_mel</code>）的张量”）而维度名称没有这个前缀（例如，“维度为（通道，时间）的张量”）。所有转换和函数的输入现在假定通道优先。这样做是为了与 PyTorch 保持一致，PyTorch 的顺序是通道后跟样本数量。所有转换和函数的通道参数现在已弃用。</p>
+
+<p><code class="language-plaintext highlighter-rouge">STFT</code> 的输出是（通道，频率，时间，2），这意味着对于每个通道，列是某个窗口的傅里叶变换，因此当我们水平移动时，我们可以看到每个列（傅里叶变换的波形）随时间变化。这与 librosa 的输出相匹配，因此我们不再需要在测试比较中转置 <code class="language-plaintext highlighter-rouge">Spectrogram</code>、<code class="language-plaintext highlighter-rouge">MelScale</code>、<code class="language-plaintext highlighter-rouge">MelSpectrogram</code> 和 <code class="language-plaintext highlighter-rouge">MFCC</code>。此外，由于这些新约定，我们弃用了 <code class="language-plaintext highlighter-rouge">LC2CL</code> 和 <code class="language-plaintext highlighter-rouge">BLC2CBL</code>，这些函数用于将信号从一个形状转换为另一个形状。</p>
+
+<p>作为这次发布的一部分，我们还引入了对复数的支持，通过维度为（…，2）的张量，并提供了 <code class="language-plaintext highlighter-rouge">magphase</code> 将此类张量转换为它的幅度和相位，同样还有 <code class="language-plaintext highlighter-rouge">complex_norm</code> 和 <code class="language-plaintext highlighter-rouge">angle</code>。</p>
+
+<p>标准化的详细信息请参阅 <a href="https://github.com/pytorch/audio/blob/v0.3.0/README.md#Conventions">README</a>。</p>
+
+<h3 id="functionals-transformations-and-kaldi-compatibility">函数，变换和 Kaldi 兼容性</h3>
+
+<p>在标准化之前，我们将状态和计算分离为 <code class="language-plaintext highlighter-rouge">torchaudio.transforms</code> 和 <code class="language-plaintext highlighter-rouge">torchaudio.functional</code>。</p>
+
+<p>作为转换的一部分，我们在 0.3.0 版本中添加了一个新的转换：<code class="language-plaintext highlighter-rouge">Resample</code>。 <code class="language-plaintext highlighter-rouge">Resample</code> 可以将波形上采样或下采样到不同的频率。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">作为功能的一部分，我们引入了：<code class="language-plaintext highlighter-rouge">phase_vocoder</code>，一个相位声码器，可以在不改变音调的情况下改变波形的速度，以及 <code class="language-plaintext highlighter-rouge">ISTFT</code>，这是为了与 PyTorch 提供的 STFT 兼容而实现的逆 STFT。这种分离使我们能够使功能弱脚本化，并在 0.3.0 版本中利用 JIT。因此，我们对以下转换提供了 JIT 和 CUDA 支持：<code class="language-plaintext highlighter-rouge">Spectrogram</code>、<code class="language-plaintext highlighter-rouge">AmplitudeToDB</code>（之前命名为 <code class="language-plaintext highlighter-rouge">SpectrogramToDB</code>）、<code class="language-plaintext highlighter-rouge">MelScale</code>。
+<code class="language-plaintext highlighter-rouge">MelSpectrogram</code>、<code class="language-plaintext highlighter-rouge">MFCC</code>、<code class="language-plaintext highlighter-rouge">MuLawEncoding</code>、<code class="language-plaintext highlighter-rouge">MuLawDecoding</code>（之前命名为 <code class="language-plaintext highlighter-rouge">MuLawExpanding</code>）。</font></font></font></p>
+
+<p>现在我们还提供与 Kaldi 的兼容接口，以简化用户上手并减少对 Kaldi 的代码依赖。我们现在有了对<code class="language-plaintext highlighter-rouge">频谱图 </code>、<code class="language-plaintext highlighter-rouge"> 倒谱系数</code>和<code class="language-plaintext highlighter-rouge">重采样波形</code>的接口。</p>
+
+<h3 id="new-tutorial">新教程</h3>
+
+<p>为了展示新的规范和转换，我们有一个<a href="https://maskerprc.github.io/tutorials/beginner/audio_preprocessing_tutorial.html">新教程 </a>，演示如何使用 torchaudio 预处理波形。这个教程通过一个示例来加载波形并应用一些可用的转换。</p>
+
+<p>我们很高兴看到 torchaudio 有一个活跃的社区，并渴望进一步发展和支持它。我们鼓励您尝试使用这个教程和可用的两个数据集：VCTK 和 YESNO！它们提供了一个下载数据集并方便格式预处理的接口。详细信息请见<a href="https://github.com/pytorch/audio/releases">此处 </a>。</p>
+
+<h2 id="torchtext-04-with-supervised-learning-datasets">Torchtext 0.4 与监督学习数据集</h2>
+
+<p>torchtext 的一个关键关注领域是提供基本元素以帮助加速自然语言处理研究。这包括对常用数据集的便捷访问以及用于处理原始文本数据的预处理管道。torchtext 0.4.0 版本包括几个流行的监督学习基线，支持“一键”数据加载。包含一个<a href="https://maskerprc.github.io/tutorials/beginner/text_sentiment_ngrams_tutorial.html">教程 </a>，展示如何使用新数据集进行文本分类分析。我们还添加和改进了一些函数，如 get_tokenizer 和 build_vocab_from_iterator，以使实现未来数据集更加容易。更多示例可以在<a href="https://github.com/pytorch/text/tree/master/examples/text_classification">这里</a>找到。</p>
+
+<p>文本分类是自然语言处理中的一个重要任务，具有许多应用，例如情感分析。新版本包括几个流行的文本分类数据集，用于监督学习，包括：</p>
+
+<ul>
+  <li>AG_NEWS</li>
+  <li>搜狗新闻</li>
+  <li>DBpedia</li>
+  <li>Yelp 评论极性</li>
+  <li>Yelp 评论全文</li>
+  <li>Yahoo 问答</li>
+  <li>亚马逊评论极性</li>
+  <li>亚马逊评论全文</li>
+</ul>
+
+<p>每个数据集都包含两部分（训练集与测试集），并且可以轻松通过一条命令加载。数据集还支持 ngram 功能，以捕获局部词序的局部信息。请查看<a href="https://maskerprc.github.io/tutorials/beginner/text_sentiment_ngrams_tutorial.html">这里</a>的教程，了解如何使用这些新数据集进行监督问题，如文本分类分析。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchtext.datasets.text_classification</span> <span class="kn">import</span> <span class="n">DATASETS</span>
+<span class="n">train_dataset</span><span class="p">,</span> <span class="n">test_dataset</span> <span class="o">=</span> <span class="n">DATASETS</span><span class="p">[</span><span class="s">'AG_NEWS'</span><span class="p">](</span><span class="n">ngrams</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>除了领域库之外，PyTorch 还提供了许多工具来简化数据加载。现在用户可以使用一些受支持的工具，如 <a href="https://pytorch.org/docs/stable/_modules/torch/utils/data/dataloader.html">torch.utils.data.DataLoader</a> 和 <a href="https://pytorch.org/docs/master/data.html#torch.utils.data.IterableDataset">torch.utils.data.IterableDataset</a>，轻松加载和预处理文本分类数据集。以下是使用 DataLoader 包装数据的几行代码。更多示例请<a href="https://github.com/pytorch/text/tree/master/examples/text_classification">在此处</a>找到。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.utils.data</span> <span class="kn">import</span> <span class="n">DataLoader</span>
+<span class="n">data</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">train_dataset</span><span class="p">,</span> <span class="n">collate_fn</span><span class="o">=</span><span class="n">generate_batch</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>查看发布说明<a href="https://github.com/pytorch/text/releases">此处</a>了解更多信息，并尝试<a href="http://maskerprc.github.io/tutorials/beginner/text_sentiment_ngrams_tutorial.html">此处</a>的教程。</p>
+
+<h2 id="torchvision-04-with-support-for-video">支持视频的 Torchvision 0.4</h2>
+
+<p>视频现在是 torchvision 中的第一公民，支持数据加载、数据集、预训练模型和转换。torchvision 的 0.4 版本包括：</p>
+
+<ul>
+  <li>高效的 IO 原语，用于读取/写入视频文件（包括音频），支持任意编码和格式。</li>
+  <li>标准视频数据集，与 <code class="language-plaintext highlighter-rouge">torch.utils.data.Dataset</code> 和 <code class="language-plaintext highlighter-rouge">torch.utils.data.DataLoader</code> 兼容。</li>
+  <li>基于 Kinetics-400 数据集构建的预训练模型，用于视频动作分类（包括训练脚本）。</li>
+  <li>参考训练脚本，用于训练您自己的视频模型。</li>
+</ul>
+
+<p>我们希望 PyTorch 中处理视频数据尽可能简单，同时不牺牲太多性能。因此，我们避免那些需要事先重新编码视频的步骤，因为这会涉及：</p>
+
+<ul>
+  <li>预处理步骤，该步骤会复制数据集以重新编码。</li>
+  <li>由于重新编码耗时，这会带来时间和空间上的开销。</li>
+  <li>通常，应使用外部脚本执行重新编码。</li>
+</ul>
+
+<p>此外，我们还提供了一些 API，例如实用类 <code class="language-plaintext highlighter-rouge">VideoClips</code>，它通过创建一组视频的所有剪辑索引来简化在视频文件列表中枚举所有固定大小剪辑的任务。它还允许您为视频指定固定的帧率。以下是一个 API 的示例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchvision.datasets.video_utils</span> <span class="kn">import</span> <span class="n">VideoClips</span>
+
+<span class="k">class</span> <span class="nc">MyVideoDataset</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">video_paths</span><span class="p">):</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">video_clips</span> <span class="o">=</span> <span class="n">VideoClips</span><span class="p">(</span><span class="n">video_paths</span><span class="p">,</span>
+                                      <span class="n">clip_length_in_frames</span><span class="o">=</span><span class="mi">16</span><span class="p">,</span>
+                                      <span class="n">frames_between_clips</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                                      <span class="n">frame_rate</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+        <span class="n">video</span><span class="p">,</span> <span class="n">audio</span><span class="p">,</span> <span class="n">info</span><span class="p">,</span> <span class="n">video_idx</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">video_clips</span><span class="p">.</span><span class="n">get_clip</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">video</span><span class="p">,</span> <span class="n">audio</span>
+
+    <span class="k">def</span> <span class="nf">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="p">.</span><span class="n">video_clips</span><span class="p">.</span><span class="n">num_clips</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>大多数面向用户的 API 都是用 Python 编写的，类似于 PyTorch，这使得它很容易扩展。此外，底层实现速度快——torchvision 在动态返回视频剪辑时尽可能少地从视频解码。</p>
+
+<p>查看 torchvision 0.4<a href="https://github.com/pytorch/vision/releases"> 发布说明</a>以获取更多详细信息。</p>
+
+<p>我们期待继续与社区合作，并期待听到您的反馈，以便我们进一步改进和扩展 PyTorch 深度学习平台。</p>
+
+<p><em>我们想感谢整个 PyTorch 团队和社区对这个工作的所有贡献！</em></p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

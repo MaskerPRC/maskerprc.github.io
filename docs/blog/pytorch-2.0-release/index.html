@@ -1,0 +1,2545 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch 2.0: Our next generation release that is faster, more Pythonic and Dynamic as ever | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are excited to announce the release of PyTorch® 2.0 which we highlighted during the PyTorch Conference on 12/2/22! PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood with faster performance and support for Dynamic Shapes and Distributed.
+
+This next-generation release includes a Stable version of Accelerated Transformers (formerly called Better Transformers); Beta includes torch.compile as the main API for PyTorch 2.0,  the scaled_dot_product_attention function as part of torch.nn.functional, the MPS backend, functorch APIs in the torch.func module; and other Beta/Prototype improvements across various inferences, performance and training optimization features on GPUs and CPUs. For a comprehensive introduction and technical overview of torch.compile, please visit the 2.0 Get Started page.
+
+Along with 2.0, we are also releasing a series of beta updates to the PyTorch domain libraries, including those that are in-tree, and separate libraries including TorchAudio, TorchVision, and TorchText. An update for TorchX is also being released as it moves to community supported mode. More details can be found in this library blog.
+
+This release is composed of over 4,541 commits and 428 contributors since 1.13.1. We want to sincerely thank our dedicated community for your contributions. As always, we encourage you to try these out and report any issues as we improve 2.0 and the overall 2-series this year.
+
+Summary:
+
+  torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+  As an underpinning technology of torch.compile, TorchInductor with Nvidia and AMD GPUs will rely on OpenAI Triton deep learning compiler to generate performant code and hide low level hardware details. OpenAI Triton-generated kernels achieve performance that’s on par with hand-written kernels and specialized cuda libraries such as cublas.
+  Accelerated Transformers introduce high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA). The API is integrated with torch.compile() and model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator.
+  Metal Performance Shaders (MPS) backend provides GPU accelerated PyTorch training on Mac platforms with added support for Top 60 most used ops, bringing coverage to over 300 operators.
+  Amazon AWS optimizes the PyTorch CPU inference on AWS Graviton3 based C7g instances. PyTorch 2.0 improves inference performance on Graviton compared to the previous releases, including improvements for Resnet50 and Bert.
+  New prototype features and technologies across TensorParallel, DTensor, 2D parallel, TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+
+
+  
+   
+Stable
+   
+   Beta
+   
+   Prototype
+   
+   Performance Improvements
+   
+  
+  
+  
+   
+
+Accelerated PT 2 Transformers
+   
+   
+
+torch.compile
+   
+   
+
+DTensor
+   
+   
+
+CUDA support for 11.7 &amp; 11.8 (deprecating CUDA 11.6) 
+   
+  
+  
+   
+   
+   
+
+PyTorch MPS Backend
+   
+   
+
+TensorParallel
+   
+    
+
+Python 3.8 (deprecating Python 3.7)
+   
+  
+  
+   
+   
+   
+
+Scaled dot product attention
+   
+   
+
+2D Parallel
+   
+   
+
+AWS Graviton3
+   
+  
+  
+   
+   
+   
+
+functorch
+   
+   
+
+Torch.compile (dynamic=True)
+   
+   
+   
+  
+  
+   
+   
+   Dispatchable Collectives
+   
+   
+   
+  
+  
+   
+   
+   Torch.set_default &amp; torch.device
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+X86 quantization backend
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+GNN inference and training performance
+   
+   
+   
+   
+   
+  
+
+
+*To see a full list of public 2.0, 1.13 and 1.12 feature submissions click here.
+
+Stable Features
+
+[Stable] Accelerated PyTorch 2 Transformers
+
+The PyTorch 2.0 release includes a new high-performance implementation of the PyTorch Transformer API. In releasing Accelerated PT2 Transformers, our goal is to make training and deployment of state-of-the-art Transformer models affordable across the industry. This release introduces high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA), extending the inference “fastpath” architecture, previously known as “Better Transformer.”
+
+Similar to the “fastpath” architecture, custom kernels are fully integrated into the PyTorch Transformer API – thus, using the native Transformer and MultiHeadAttention API will enable users to:
+
+
+  transparently see significant speed improvements;
+  support many more use cases including models using Cross-Attention, Transformer Decoders, and for training models; and
+  continue to use fastpath inference for fixed and variable sequence length Transformer Encoder and Self Attention use cases.
+
+
+To take full advantage of different hardware models and Transformer use cases, multiple SDPA custom kernels are supported (see below), with custom kernel selection logic that will pick the highest-performance kernel for a given model and hardware type. In addition to the existing Transformer API, model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator. Accelerated PyTorch 2 Transformers are integrated with torch.compile() .  To use your model while benefiting from the additional acceleration of PT2-compilation (for inference or training), pre-process the model with model = torch.compile(model).
+
+We have achieved major speedups for training transformer models and in particular large language models with Accelerated PyTorch 2 Transformers using a combination of custom kernels and torch.compile().
+
+
+Figure: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Beta Features
+
+[Beta] torch.compile
+
+torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor:
+
+  TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture.
+  AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block. For intel CPUs, we generate C++ code using multithreading, vectorized instructions and offloading appropriate operations to mkldnn when possible.
+
+
+With all the new technologies, torch.compile is able to work 93% of time across 165 open-source models and runs 20% faster on average at float32 precision and 36% faster on average at AMP precision.
+
+For more information, please refer to https://pytorch.org/get-started/pytorch-2.0/ and for TorchInductor CPU with Intel here.
+
+[Beta] PyTorch MPS Backend
+
+MPS backend provides GPU-accelerated PyTorch training on Mac platforms. This release brings improved correctness, stability, and operator coverage.
+
+MPS backend now includes support for the Top 60 most used ops, along with the most frequently requested operations by the community, bringing coverage to over 300 operators. The major focus of the release was to enable full OpInfo-based forward and gradient mode testing to address silent correctness issues. These changes have resulted in wider adoption of MPS backend by 3rd party networks such as Stable Diffusion, YoloV5, WhisperAI, along with increased coverage for Torchbench networks and Basic tutorials. We encourage developers to update to the latest macOS release to see the best performance and stability on the MPS backend.
+
+Links
+
+
+  MPS Backend
+  Developer information
+  Accelerated PyTorch training on Mac
+  Metal, Metal Performance Shaders &amp; Metal Performance Shaders Graph
+
+
+[Beta] Scaled dot product attention 2.0
+
+We are thrilled to announce the release of PyTorch 2.0, which introduces a powerful scaled dot product attention function as part of torch.nn.functional. This function includes multiple implementations that can be seamlessly applied depending on the input and hardware in use.
+
+In previous versions of PyTorch, you had to rely on third-party implementations and install separate packages to take advantage of memory-optimized algorithms like FlashAttention. With PyTorch 2.0, all these implementations are readily available by default.
+
+These implementations include FlashAttention from HazyResearch, Memory-Efficient Attention from the xFormers project, and a native C++ implementation that is ideal for non-CUDA devices or when high-precision is required.
+
+PyTorch 2.0 will automatically select the optimal implementation for your use case, but you can also toggle them individually for finer-grained control. Additionally, the scaled dot product attention function can be used to build common transformer architecture components.
+
+Learn more with the documentation and this tutorial.
+
+[Beta] functorch -> torch.func
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples include:
+
+  model ensembling
+  efficiently computing jacobians and hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce that, as the final step of upstreaming and integrating functorch into PyTorch, the functorch APIs are now available in the torch.func module. Our function transform APIs are identical to before, but we have changed how the interaction with NN modules work. Please see the docs and the migration guide for more details.
+
+Furthermore, we have added support for torch.autograd.Function: one is now able to apply function transformations (e.g. vmap, grad, jvp) over torch.autograd.Function.
+
+[Beta] Dispatchable Collectives
+
+Dispatchable collectives is an improvement to the existing init_process_group() API which changes backend to an optional argument. For users, the main advantage of this feature is that it will allow them to write code that can run on both GPU and CPU machines without having to change the backend specification. The dispatchability feature will also make it easier for users to support both GPU and CPU collectives, as they will no longer need to specify the backend manually (e.g. “NCCL” or “GLOO”). Existing backend specifications by users will be honored and will not require change.
+
+Usage example:
+import torch.distributed.dist
+…
+# old
+dist.init_process_group(backend=”nccl”, ...)
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors does not work
+
+# new
+dist.init_process_group(...) # backend is optional
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors works
+
+
+Learn more here.
+
+[Beta] torch.set_default_device and torch.device as context manager
+
+torch.set_default_device allows users to change the default device that factory functions in PyTorch allocate on. For example, if you torch.set_default_device(‘cuda’), a call to torch.empty(2) will allocate on CUDA (rather than on CPU). You can also use torch.device as a context manager to change the default device on a local basis. This resolves a long standing feature request from PyTorch’s initial release for a way to do this.
+
+Learn more here.
+
+[Beta] “X86” as the new default quantization backend for x86 CPU
+
+The new X86 quantization backend, which utilizes FBGEMM and oneDNN kernel libraries, replaces FBGEMM as the default quantization backend for x86 CPU platforms and offers improved int8 inference performance compared to the original FBGEMM backend, leveraging the strengths of both libraries, with 1.3X – 2X inference performance speedup measured on 40+ deep learning models. The new backend is functionally compatible with the original FBGEMM backend.
+
+Table: Geomean Speedup of X86 Quantization Backend vs. FBGEMM Backend
+
+
+  
+    
+   
+   1 core/instance
+   
+   2 cores/instance
+   
+   4 cores/instance
+   
+   1 socket (32 cores)/instance
+   
+  
+  
+   Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+   
+   1.76X
+   
+   1.80X
+   
+   2.04X
+   
+   1.34X
+   
+  
+
+
+By default, users on x86 platforms will utilize the x86 quantization backend and their PyTorch programs will remain unchanged when using the default backend. Alternatively, users have the option to specify “X86” as the quantization backend explicitly. Example code is shown below:
+
+import torch
+from torch.ao.quantization import get_default_qconfig_mappingfrom torch.quantization.quantize_fx
+import prepare_fx, convert_fx
+ 
+# get default configuration
+qconfig_mapping = get_default_qconfig_mapping()
+ 
+# or explicitly specify the backend
+# qengine = 'x86'
+# torch.backends.quantized.engine = qengine
+# qconfig_mapping = get_default_qconfig_mapping(qengine)
+ 
+# construct fp32 model
+model_fp32 = ...
+ 
+# prepare
+prepared_model = prepare_fx(model_fp32, qconfig_mapping, example_inputs=x)
+ 
+# calibrate
+...
+ 
+# convert
+quantized_model = convert_fx(prepared_model)
+
+
+Find more information: https://github.com/pytorch/pytorch/issues/83888 and https://www.intel.com/content/www/us/en/developer/articles/technical/accelerate-pytorch-int8-inf-with-new-x86-backend.html.
+
+[Beta] GNN inference and training optimization on CPU
+
+PyTorch 2.0 includes several critical optimizations to improve GNN inference and training performance on CPU. Before 2.0, GNN models of PyG suffers from low efficiency on CPU due to lack of performance tuning for several critical kernels (scatter/gather, etc) and the lack of GNN-related sparse matrix multiplication ops. To be specific, optimizations include:
+
+  scatter_reduce: performance hotspot in Message Passing when the edge index is stored in Coordinate format (COO).
+  gather: backward of scatter_reduce, specially tuned for the GNN compute when the index is an expanded tensor.
+  torch.sparse.mm with reduce flag: performance hotspot in Message Passing when the edge index is stored in Compressed Sparse Row (CSR). Supported reduce flag of: sum, mean, amax, amin.
+
+
+On PyG benchmarks/examples, OGB benchmarks, a 1.12x - 4.07x performance speedup is measured (1.13.1 compared with 2.0) for single node inference and training.
+
+
+  
+  
+   Model-Dataset
+   
+   Option
+   
+   Speedup Ratio
+   
+  
+  
+  
+   GCN-Reddit (inference)
+   
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.25x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.31x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.68x
+   
+  
+  
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+    
+GraphSage-ogbn-products (inference)
+   
+   1024-3-128-dense
+   
+   1.15x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.20x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.33x
+   
+  
+  
+   full-batch-sparse
+   
+   4.07x
+   
+  
+  
+   GCN-PROTEINS (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-REDDIT-BINARY (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-Reddit (training)
+   
+   512-2-64-dense
+   
+   1.20x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.12x
+   
+  
+
+
+Learn more: PyG CPU Performance Optimization.
+
+[Beta] Accelerating inference on CPU with PyTorch by leveraging oneDNN Graph
+
+oneDNN Graph API extends oneDNN with a flexible graph API to maximize the optimization opportunity for generating efficient code on AI hardware.
+
+  It automatically identifies the graph partitions to be accelerated via fusion.
+  The fusion patterns focus on fusing compute-intensive operations such as convolution, matmul and their neighbor operations for both inference and training use cases.
+  Although work is ongoing to integrate oneDNN Graph with TorchDynamo as well, its integration with the PyTorch JIT Fuser attained beta status in PyTorch 2.0 for Float32 &amp; BFloat16 inference (on machines that support AVX512_BF16 ISA).
+
+
+From a developer’s/researcher’s perspective, the usage is quite simple &amp; intuitive, with the only change in code being an API invocation:
+
+  Leverage oneDNN Graph, with JIT-tracing, a model is profiled with an example input.
+  The context manager with torch.jit.fuser(“fuser3”): can also be used instead of invoking torch.jit.enable_onednn_fusion(True).
+  For accelerating BFloat16 inference, we rely on eager-mode AMP (Automatic Mixed Precision) support in PyTorch &amp; disable JIT mode’s AMP, as both of them are currently divergent:
+
+
+# Assuming we have a model of the name 'model'
+ 
+example_input = torch.rand(1, 3, 224, 224)
+ 
+# enable oneDNN Graph
+torch.jit.enable_onednn_fusion(True)
+# Disable AMP for JIT
+torch._C._jit_set_autocast_mode(False)
+with torch.no_grad(), torch.cpu.amp.autocast():
+	model = torch.jit.trace(model, (example_input))
+	model = torch.jit.freeze(model)
+ 	# 2 warm-ups (2 for tracing/scripting with an example, 3 without an example)
+	model(example_input)
+	model(example_input)
+ 
+	# speedup would be observed in subsequent runs.
+	model(example_input)
+
+
+Learn more here.
+
+Prototype Features
+
+Distributed API
+
+[Prototype] DTensor
+
+PyTorch DistributedTensor (DTensor) is a prototyping effort with distributed tensor primitives to allow easier distributed computation authoring in the SPMD (Single Program Multiple Devices) paradigm. The primitives are simple but powerful when used to express tensor distributions with both sharded and replicated parallelism strategies. PyTorch DTensor empowered PyTorch Tensor Parallelism along with other advanced parallelism explorations. In addition, it also offers a uniform way to save/load state_dict for distributed checkpointing purposes, even when there’re complex tensor distribution strategies such as combining tensor parallelism with parameter sharding in FSDP. More details can be found in this RFC and the DTensor examples notebook.
+
+[Prototype] TensorParallel
+
+We now support DTensor based Tensor Parallel which users can distribute their model parameters across different GPU devices. We also support Pairwise Parallel which shards two concatenated linear layers in a col-wise and row-wise style separately so that only one collective(all-reduce/reduce-scatter) is needed in the end.
+
+[Prototype] 2D Parallel
+
+We implemented the integration of the aforementioned TP with FullyShardedDataParallel(FSDP) as 2D parallel to further scale large model training. More details can be found in this slide.
+
+[Prototype] torch.compile(dynamic=True)
+
+Experimental support for PT2 compilation with dynamic shapes is available in this release. Inference compilation with inductor for simple models is supported, but there are a lot of limitations:
+
+
+  Training available in a future release (This is partially fixed in nightlies!)
+  Minifier available in a future release.
+  It is easy to end up in a situation where the dimension you wanted to be dynamic gets specialized anyway. Some of these issues are fixed in nightlies, others are not.
+  We do not appropriately propagate Inductor guards to the top-level, this is tracked at #96296.
+  Data-dependent operations like nonzero still require a graph break.
+  Dynamic does not work with non-standard modes like reduce-overhead or max-autotune.
+  There are many bugs in Inductor compilation. To track known bugs, check the dynamic shapes label on the PyTorch issue tracker.
+
+
+For the latest and greatest news about dynamic shapes support on master, check out our status reports.
+
+Highlights/Performance Improvements
+
+Deprecation of Cuda 11.6 and Python 3.7 support for PyTorch 2.0
+
+If you are still using or depending on CUDA 11.6 or Python 3.7 builds, we strongly recommend moving to at least CUDA 11.7 and Python 3.8, as it would be the minimum versions required for PyTorch 2.0. For more detail, please refer to the Release Compatibility Matrix for PyTorch releases.
+
+Python 3.11 support on Anaconda Platform
+
+Due to lack of Python 3.11 support for packages that PyTorch depends on, including NumPy, SciPy, SymPy, Pillow and others on the Anaconda platform. We will not be releasing Conda binaries compiled with Python 3.11 for PyTorch Release 2.0. The Pip packages with Python 3.11 support will be released, hence if you intend to use PyTorch 2.0 with Python 3.11 please use our Pip packages. Please note: Conda packages with Python 3.11 support will be made available on our nightly channel. Also we are planning on releasing Conda Python 3.11 binaries as part of future release once Anaconda provides these key dependencies. More information and instructions on how to download the Pip packages can be found here.
+
+Optimized PyTorch Inference with AWS Graviton processors
+
+The optimizations focused on three key areas: GEMM kernels, bfloat16 support, primitive caching and the memory allocator. For aarch64 platforms, PyTorch supports Arm Compute Library (ACL) GEMM kernels via Mkldnn(OneDNN) backend. The ACL library provides Neon/SVE GEMM kernels for fp32 and bfloat16 formats. The bfloat16 support on c7g allows efficient deployment of bfloat16 trained, AMP (Automatic Mixed Precision) trained, or even the standard fp32 trained models. The standard fp32 models leverage bfloat16 kernels via OneDNN fast math mode, without any model quantization. Next we implemented primitive caching for conv, matmul and inner product operators. More information on the updated PyTorch user guide with the upcoming 2.0 release improvements and TorchBench benchmark details can be found here.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch 2.0: Our next generation release that is faster, more Pythonic and Dynamic as ever">
+<meta property="og:description" content="We are excited to announce the release of PyTorch® 2.0 which we highlighted during the PyTorch Conference on 12/2/22! PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood with faster performance and support for Dynamic Shapes and Distributed.
+
+This next-generation release includes a Stable version of Accelerated Transformers (formerly called Better Transformers); Beta includes torch.compile as the main API for PyTorch 2.0,  the scaled_dot_product_attention function as part of torch.nn.functional, the MPS backend, functorch APIs in the torch.func module; and other Beta/Prototype improvements across various inferences, performance and training optimization features on GPUs and CPUs. For a comprehensive introduction and technical overview of torch.compile, please visit the 2.0 Get Started page.
+
+Along with 2.0, we are also releasing a series of beta updates to the PyTorch domain libraries, including those that are in-tree, and separate libraries including TorchAudio, TorchVision, and TorchText. An update for TorchX is also being released as it moves to community supported mode. More details can be found in this library blog.
+
+This release is composed of over 4,541 commits and 428 contributors since 1.13.1. We want to sincerely thank our dedicated community for your contributions. As always, we encourage you to try these out and report any issues as we improve 2.0 and the overall 2-series this year.
+
+Summary:
+
+  torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+  As an underpinning technology of torch.compile, TorchInductor with Nvidia and AMD GPUs will rely on OpenAI Triton deep learning compiler to generate performant code and hide low level hardware details. OpenAI Triton-generated kernels achieve performance that’s on par with hand-written kernels and specialized cuda libraries such as cublas.
+  Accelerated Transformers introduce high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA). The API is integrated with torch.compile() and model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator.
+  Metal Performance Shaders (MPS) backend provides GPU accelerated PyTorch training on Mac platforms with added support for Top 60 most used ops, bringing coverage to over 300 operators.
+  Amazon AWS optimizes the PyTorch CPU inference on AWS Graviton3 based C7g instances. PyTorch 2.0 improves inference performance on Graviton compared to the previous releases, including improvements for Resnet50 and Bert.
+  New prototype features and technologies across TensorParallel, DTensor, 2D parallel, TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+
+
+  
+   
+Stable
+   
+   Beta
+   
+   Prototype
+   
+   Performance Improvements
+   
+  
+  
+  
+   
+
+Accelerated PT 2 Transformers
+   
+   
+
+torch.compile
+   
+   
+
+DTensor
+   
+   
+
+CUDA support for 11.7 &amp; 11.8 (deprecating CUDA 11.6) 
+   
+  
+  
+   
+   
+   
+
+PyTorch MPS Backend
+   
+   
+
+TensorParallel
+   
+    
+
+Python 3.8 (deprecating Python 3.7)
+   
+  
+  
+   
+   
+   
+
+Scaled dot product attention
+   
+   
+
+2D Parallel
+   
+   
+
+AWS Graviton3
+   
+  
+  
+   
+   
+   
+
+functorch
+   
+   
+
+Torch.compile (dynamic=True)
+   
+   
+   
+  
+  
+   
+   
+   Dispatchable Collectives
+   
+   
+   
+  
+  
+   
+   
+   Torch.set_default &amp; torch.device
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+X86 quantization backend
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+GNN inference and training performance
+   
+   
+   
+   
+   
+  
+
+
+*To see a full list of public 2.0, 1.13 and 1.12 feature submissions click here.
+
+Stable Features
+
+[Stable] Accelerated PyTorch 2 Transformers
+
+The PyTorch 2.0 release includes a new high-performance implementation of the PyTorch Transformer API. In releasing Accelerated PT2 Transformers, our goal is to make training and deployment of state-of-the-art Transformer models affordable across the industry. This release introduces high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA), extending the inference “fastpath” architecture, previously known as “Better Transformer.”
+
+Similar to the “fastpath” architecture, custom kernels are fully integrated into the PyTorch Transformer API – thus, using the native Transformer and MultiHeadAttention API will enable users to:
+
+
+  transparently see significant speed improvements;
+  support many more use cases including models using Cross-Attention, Transformer Decoders, and for training models; and
+  continue to use fastpath inference for fixed and variable sequence length Transformer Encoder and Self Attention use cases.
+
+
+To take full advantage of different hardware models and Transformer use cases, multiple SDPA custom kernels are supported (see below), with custom kernel selection logic that will pick the highest-performance kernel for a given model and hardware type. In addition to the existing Transformer API, model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator. Accelerated PyTorch 2 Transformers are integrated with torch.compile() .  To use your model while benefiting from the additional acceleration of PT2-compilation (for inference or training), pre-process the model with model = torch.compile(model).
+
+We have achieved major speedups for training transformer models and in particular large language models with Accelerated PyTorch 2 Transformers using a combination of custom kernels and torch.compile().
+
+
+Figure: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Beta Features
+
+[Beta] torch.compile
+
+torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor:
+
+  TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture.
+  AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block. For intel CPUs, we generate C++ code using multithreading, vectorized instructions and offloading appropriate operations to mkldnn when possible.
+
+
+With all the new technologies, torch.compile is able to work 93% of time across 165 open-source models and runs 20% faster on average at float32 precision and 36% faster on average at AMP precision.
+
+For more information, please refer to https://pytorch.org/get-started/pytorch-2.0/ and for TorchInductor CPU with Intel here.
+
+[Beta] PyTorch MPS Backend
+
+MPS backend provides GPU-accelerated PyTorch training on Mac platforms. This release brings improved correctness, stability, and operator coverage.
+
+MPS backend now includes support for the Top 60 most used ops, along with the most frequently requested operations by the community, bringing coverage to over 300 operators. The major focus of the release was to enable full OpInfo-based forward and gradient mode testing to address silent correctness issues. These changes have resulted in wider adoption of MPS backend by 3rd party networks such as Stable Diffusion, YoloV5, WhisperAI, along with increased coverage for Torchbench networks and Basic tutorials. We encourage developers to update to the latest macOS release to see the best performance and stability on the MPS backend.
+
+Links
+
+
+  MPS Backend
+  Developer information
+  Accelerated PyTorch training on Mac
+  Metal, Metal Performance Shaders &amp; Metal Performance Shaders Graph
+
+
+[Beta] Scaled dot product attention 2.0
+
+We are thrilled to announce the release of PyTorch 2.0, which introduces a powerful scaled dot product attention function as part of torch.nn.functional. This function includes multiple implementations that can be seamlessly applied depending on the input and hardware in use.
+
+In previous versions of PyTorch, you had to rely on third-party implementations and install separate packages to take advantage of memory-optimized algorithms like FlashAttention. With PyTorch 2.0, all these implementations are readily available by default.
+
+These implementations include FlashAttention from HazyResearch, Memory-Efficient Attention from the xFormers project, and a native C++ implementation that is ideal for non-CUDA devices or when high-precision is required.
+
+PyTorch 2.0 will automatically select the optimal implementation for your use case, but you can also toggle them individually for finer-grained control. Additionally, the scaled dot product attention function can be used to build common transformer architecture components.
+
+Learn more with the documentation and this tutorial.
+
+[Beta] functorch -> torch.func
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples include:
+
+  model ensembling
+  efficiently computing jacobians and hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce that, as the final step of upstreaming and integrating functorch into PyTorch, the functorch APIs are now available in the torch.func module. Our function transform APIs are identical to before, but we have changed how the interaction with NN modules work. Please see the docs and the migration guide for more details.
+
+Furthermore, we have added support for torch.autograd.Function: one is now able to apply function transformations (e.g. vmap, grad, jvp) over torch.autograd.Function.
+
+[Beta] Dispatchable Collectives
+
+Dispatchable collectives is an improvement to the existing init_process_group() API which changes backend to an optional argument. For users, the main advantage of this feature is that it will allow them to write code that can run on both GPU and CPU machines without having to change the backend specification. The dispatchability feature will also make it easier for users to support both GPU and CPU collectives, as they will no longer need to specify the backend manually (e.g. “NCCL” or “GLOO”). Existing backend specifications by users will be honored and will not require change.
+
+Usage example:
+import torch.distributed.dist
+…
+# old
+dist.init_process_group(backend=”nccl”, ...)
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors does not work
+
+# new
+dist.init_process_group(...) # backend is optional
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors works
+
+
+Learn more here.
+
+[Beta] torch.set_default_device and torch.device as context manager
+
+torch.set_default_device allows users to change the default device that factory functions in PyTorch allocate on. For example, if you torch.set_default_device(‘cuda’), a call to torch.empty(2) will allocate on CUDA (rather than on CPU). You can also use torch.device as a context manager to change the default device on a local basis. This resolves a long standing feature request from PyTorch’s initial release for a way to do this.
+
+Learn more here.
+
+[Beta] “X86” as the new default quantization backend for x86 CPU
+
+The new X86 quantization backend, which utilizes FBGEMM and oneDNN kernel libraries, replaces FBGEMM as the default quantization backend for x86 CPU platforms and offers improved int8 inference performance compared to the original FBGEMM backend, leveraging the strengths of both libraries, with 1.3X – 2X inference performance speedup measured on 40+ deep learning models. The new backend is functionally compatible with the original FBGEMM backend.
+
+Table: Geomean Speedup of X86 Quantization Backend vs. FBGEMM Backend
+
+
+  
+    
+   
+   1 core/instance
+   
+   2 cores/instance
+   
+   4 cores/instance
+   
+   1 socket (32 cores)/instance
+   
+  
+  
+   Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+   
+   1.76X
+   
+   1.80X
+   
+   2.04X
+   
+   1.34X
+   
+  
+
+
+By default, users on x86 platforms will utilize the x86 quantization backend and their PyTorch programs will remain unchanged when using the default backend. Alternatively, users have the option to specify “X86” as the quantization backend explicitly. Example code is shown below:
+
+import torch
+from torch.ao.quantization import get_default_qconfig_mappingfrom torch.quantization.quantize_fx
+import prepare_fx, convert_fx
+ 
+# get default configuration
+qconfig_mapping = get_default_qconfig_mapping()
+ 
+# or explicitly specify the backend
+# qengine = 'x86'
+# torch.backends.quantized.engine = qengine
+# qconfig_mapping = get_default_qconfig_mapping(qengine)
+ 
+# construct fp32 model
+model_fp32 = ...
+ 
+# prepare
+prepared_model = prepare_fx(model_fp32, qconfig_mapping, example_inputs=x)
+ 
+# calibrate
+...
+ 
+# convert
+quantized_model = convert_fx(prepared_model)
+
+
+Find more information: https://github.com/pytorch/pytorch/issues/83888 and https://www.intel.com/content/www/us/en/developer/articles/technical/accelerate-pytorch-int8-inf-with-new-x86-backend.html.
+
+[Beta] GNN inference and training optimization on CPU
+
+PyTorch 2.0 includes several critical optimizations to improve GNN inference and training performance on CPU. Before 2.0, GNN models of PyG suffers from low efficiency on CPU due to lack of performance tuning for several critical kernels (scatter/gather, etc) and the lack of GNN-related sparse matrix multiplication ops. To be specific, optimizations include:
+
+  scatter_reduce: performance hotspot in Message Passing when the edge index is stored in Coordinate format (COO).
+  gather: backward of scatter_reduce, specially tuned for the GNN compute when the index is an expanded tensor.
+  torch.sparse.mm with reduce flag: performance hotspot in Message Passing when the edge index is stored in Compressed Sparse Row (CSR). Supported reduce flag of: sum, mean, amax, amin.
+
+
+On PyG benchmarks/examples, OGB benchmarks, a 1.12x - 4.07x performance speedup is measured (1.13.1 compared with 2.0) for single node inference and training.
+
+
+  
+  
+   Model-Dataset
+   
+   Option
+   
+   Speedup Ratio
+   
+  
+  
+  
+   GCN-Reddit (inference)
+   
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.25x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.31x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.68x
+   
+  
+  
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+    
+GraphSage-ogbn-products (inference)
+   
+   1024-3-128-dense
+   
+   1.15x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.20x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.33x
+   
+  
+  
+   full-batch-sparse
+   
+   4.07x
+   
+  
+  
+   GCN-PROTEINS (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-REDDIT-BINARY (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-Reddit (training)
+   
+   512-2-64-dense
+   
+   1.20x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.12x
+   
+  
+
+
+Learn more: PyG CPU Performance Optimization.
+
+[Beta] Accelerating inference on CPU with PyTorch by leveraging oneDNN Graph
+
+oneDNN Graph API extends oneDNN with a flexible graph API to maximize the optimization opportunity for generating efficient code on AI hardware.
+
+  It automatically identifies the graph partitions to be accelerated via fusion.
+  The fusion patterns focus on fusing compute-intensive operations such as convolution, matmul and their neighbor operations for both inference and training use cases.
+  Although work is ongoing to integrate oneDNN Graph with TorchDynamo as well, its integration with the PyTorch JIT Fuser attained beta status in PyTorch 2.0 for Float32 &amp; BFloat16 inference (on machines that support AVX512_BF16 ISA).
+
+
+From a developer’s/researcher’s perspective, the usage is quite simple &amp; intuitive, with the only change in code being an API invocation:
+
+  Leverage oneDNN Graph, with JIT-tracing, a model is profiled with an example input.
+  The context manager with torch.jit.fuser(“fuser3”): can also be used instead of invoking torch.jit.enable_onednn_fusion(True).
+  For accelerating BFloat16 inference, we rely on eager-mode AMP (Automatic Mixed Precision) support in PyTorch &amp; disable JIT mode’s AMP, as both of them are currently divergent:
+
+
+# Assuming we have a model of the name 'model'
+ 
+example_input = torch.rand(1, 3, 224, 224)
+ 
+# enable oneDNN Graph
+torch.jit.enable_onednn_fusion(True)
+# Disable AMP for JIT
+torch._C._jit_set_autocast_mode(False)
+with torch.no_grad(), torch.cpu.amp.autocast():
+	model = torch.jit.trace(model, (example_input))
+	model = torch.jit.freeze(model)
+ 	# 2 warm-ups (2 for tracing/scripting with an example, 3 without an example)
+	model(example_input)
+	model(example_input)
+ 
+	# speedup would be observed in subsequent runs.
+	model(example_input)
+
+
+Learn more here.
+
+Prototype Features
+
+Distributed API
+
+[Prototype] DTensor
+
+PyTorch DistributedTensor (DTensor) is a prototyping effort with distributed tensor primitives to allow easier distributed computation authoring in the SPMD (Single Program Multiple Devices) paradigm. The primitives are simple but powerful when used to express tensor distributions with both sharded and replicated parallelism strategies. PyTorch DTensor empowered PyTorch Tensor Parallelism along with other advanced parallelism explorations. In addition, it also offers a uniform way to save/load state_dict for distributed checkpointing purposes, even when there’re complex tensor distribution strategies such as combining tensor parallelism with parameter sharding in FSDP. More details can be found in this RFC and the DTensor examples notebook.
+
+[Prototype] TensorParallel
+
+We now support DTensor based Tensor Parallel which users can distribute their model parameters across different GPU devices. We also support Pairwise Parallel which shards two concatenated linear layers in a col-wise and row-wise style separately so that only one collective(all-reduce/reduce-scatter) is needed in the end.
+
+[Prototype] 2D Parallel
+
+We implemented the integration of the aforementioned TP with FullyShardedDataParallel(FSDP) as 2D parallel to further scale large model training. More details can be found in this slide.
+
+[Prototype] torch.compile(dynamic=True)
+
+Experimental support for PT2 compilation with dynamic shapes is available in this release. Inference compilation with inductor for simple models is supported, but there are a lot of limitations:
+
+
+  Training available in a future release (This is partially fixed in nightlies!)
+  Minifier available in a future release.
+  It is easy to end up in a situation where the dimension you wanted to be dynamic gets specialized anyway. Some of these issues are fixed in nightlies, others are not.
+  We do not appropriately propagate Inductor guards to the top-level, this is tracked at #96296.
+  Data-dependent operations like nonzero still require a graph break.
+  Dynamic does not work with non-standard modes like reduce-overhead or max-autotune.
+  There are many bugs in Inductor compilation. To track known bugs, check the dynamic shapes label on the PyTorch issue tracker.
+
+
+For the latest and greatest news about dynamic shapes support on master, check out our status reports.
+
+Highlights/Performance Improvements
+
+Deprecation of Cuda 11.6 and Python 3.7 support for PyTorch 2.0
+
+If you are still using or depending on CUDA 11.6 or Python 3.7 builds, we strongly recommend moving to at least CUDA 11.7 and Python 3.8, as it would be the minimum versions required for PyTorch 2.0. For more detail, please refer to the Release Compatibility Matrix for PyTorch releases.
+
+Python 3.11 support on Anaconda Platform
+
+Due to lack of Python 3.11 support for packages that PyTorch depends on, including NumPy, SciPy, SymPy, Pillow and others on the Anaconda platform. We will not be releasing Conda binaries compiled with Python 3.11 for PyTorch Release 2.0. The Pip packages with Python 3.11 support will be released, hence if you intend to use PyTorch 2.0 with Python 3.11 please use our Pip packages. Please note: Conda packages with Python 3.11 support will be made available on our nightly channel. Also we are planning on releasing Conda Python 3.11 binaries as part of future release once Anaconda provides these key dependencies. More information and instructions on how to download the Pip packages can be found here.
+
+Optimized PyTorch Inference with AWS Graviton processors
+
+The optimizations focused on three key areas: GEMM kernels, bfloat16 support, primitive caching and the memory allocator. For aarch64 platforms, PyTorch supports Arm Compute Library (ACL) GEMM kernels via Mkldnn(OneDNN) backend. The ACL library provides Neon/SVE GEMM kernels for fp32 and bfloat16 formats. The bfloat16 support on c7g allows efficient deployment of bfloat16 trained, AMP (Automatic Mixed Precision) trained, or even the standard fp32 trained models. The standard fp32 models leverage bfloat16 kernels via OneDNN fast math mode, without any model quantization. Next we implemented primitive caching for conv, matmul and inner product operators. More information on the updated PyTorch user guide with the upcoming 2.0 release improvements and TorchBench benchmark details can be found here.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch 2.0: Our next generation release that is faster, more Pythonic and Dynamic as ever">
+<meta name="twitter:description" content="We are excited to announce the release of PyTorch® 2.0 which we highlighted during the PyTorch Conference on 12/2/22! PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood with faster performance and support for Dynamic Shapes and Distributed.
+
+This next-generation release includes a Stable version of Accelerated Transformers (formerly called Better Transformers); Beta includes torch.compile as the main API for PyTorch 2.0,  the scaled_dot_product_attention function as part of torch.nn.functional, the MPS backend, functorch APIs in the torch.func module; and other Beta/Prototype improvements across various inferences, performance and training optimization features on GPUs and CPUs. For a comprehensive introduction and technical overview of torch.compile, please visit the 2.0 Get Started page.
+
+Along with 2.0, we are also releasing a series of beta updates to the PyTorch domain libraries, including those that are in-tree, and separate libraries including TorchAudio, TorchVision, and TorchText. An update for TorchX is also being released as it moves to community supported mode. More details can be found in this library blog.
+
+This release is composed of over 4,541 commits and 428 contributors since 1.13.1. We want to sincerely thank our dedicated community for your contributions. As always, we encourage you to try these out and report any issues as we improve 2.0 and the overall 2-series this year.
+
+Summary:
+
+  torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+  As an underpinning technology of torch.compile, TorchInductor with Nvidia and AMD GPUs will rely on OpenAI Triton deep learning compiler to generate performant code and hide low level hardware details. OpenAI Triton-generated kernels achieve performance that’s on par with hand-written kernels and specialized cuda libraries such as cublas.
+  Accelerated Transformers introduce high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA). The API is integrated with torch.compile() and model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator.
+  Metal Performance Shaders (MPS) backend provides GPU accelerated PyTorch training on Mac platforms with added support for Top 60 most used ops, bringing coverage to over 300 operators.
+  Amazon AWS optimizes the PyTorch CPU inference on AWS Graviton3 based C7g instances. PyTorch 2.0 improves inference performance on Graviton compared to the previous releases, including improvements for Resnet50 and Bert.
+  New prototype features and technologies across TensorParallel, DTensor, 2D parallel, TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+
+
+  
+   
+Stable
+   
+   Beta
+   
+   Prototype
+   
+   Performance Improvements
+   
+  
+  
+  
+   
+
+Accelerated PT 2 Transformers
+   
+   
+
+torch.compile
+   
+   
+
+DTensor
+   
+   
+
+CUDA support for 11.7 &amp; 11.8 (deprecating CUDA 11.6) 
+   
+  
+  
+   
+   
+   
+
+PyTorch MPS Backend
+   
+   
+
+TensorParallel
+   
+    
+
+Python 3.8 (deprecating Python 3.7)
+   
+  
+  
+   
+   
+   
+
+Scaled dot product attention
+   
+   
+
+2D Parallel
+   
+   
+
+AWS Graviton3
+   
+  
+  
+   
+   
+   
+
+functorch
+   
+   
+
+Torch.compile (dynamic=True)
+   
+   
+   
+  
+  
+   
+   
+   Dispatchable Collectives
+   
+   
+   
+  
+  
+   
+   
+   Torch.set_default &amp; torch.device
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+X86 quantization backend
+   
+   
+   
+   
+   
+  
+  
+   
+   
+   
+
+GNN inference and training performance
+   
+   
+   
+   
+   
+  
+
+
+*To see a full list of public 2.0, 1.13 and 1.12 feature submissions click here.
+
+Stable Features
+
+[Stable] Accelerated PyTorch 2 Transformers
+
+The PyTorch 2.0 release includes a new high-performance implementation of the PyTorch Transformer API. In releasing Accelerated PT2 Transformers, our goal is to make training and deployment of state-of-the-art Transformer models affordable across the industry. This release introduces high-performance support for training and inference using a custom kernel architecture for scaled dot product attention (SPDA), extending the inference “fastpath” architecture, previously known as “Better Transformer.”
+
+Similar to the “fastpath” architecture, custom kernels are fully integrated into the PyTorch Transformer API – thus, using the native Transformer and MultiHeadAttention API will enable users to:
+
+
+  transparently see significant speed improvements;
+  support many more use cases including models using Cross-Attention, Transformer Decoders, and for training models; and
+  continue to use fastpath inference for fixed and variable sequence length Transformer Encoder and Self Attention use cases.
+
+
+To take full advantage of different hardware models and Transformer use cases, multiple SDPA custom kernels are supported (see below), with custom kernel selection logic that will pick the highest-performance kernel for a given model and hardware type. In addition to the existing Transformer API, model developers may also use the scaled dot product attention kernels directly by calling the new scaled_dot_product_attention() operator. Accelerated PyTorch 2 Transformers are integrated with torch.compile() .  To use your model while benefiting from the additional acceleration of PT2-compilation (for inference or training), pre-process the model with model = torch.compile(model).
+
+We have achieved major speedups for training transformer models and in particular large language models with Accelerated PyTorch 2 Transformers using a combination of custom kernels and torch.compile().
+
+
+Figure: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Beta Features
+
+[Beta] torch.compile
+
+torch.compile is the main API for PyTorch 2.0, which wraps your model and returns a compiled model. It is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor:
+
+  TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture.
+  AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block. For intel CPUs, we generate C++ code using multithreading, vectorized instructions and offloading appropriate operations to mkldnn when possible.
+
+
+With all the new technologies, torch.compile is able to work 93% of time across 165 open-source models and runs 20% faster on average at float32 precision and 36% faster on average at AMP precision.
+
+For more information, please refer to https://pytorch.org/get-started/pytorch-2.0/ and for TorchInductor CPU with Intel here.
+
+[Beta] PyTorch MPS Backend
+
+MPS backend provides GPU-accelerated PyTorch training on Mac platforms. This release brings improved correctness, stability, and operator coverage.
+
+MPS backend now includes support for the Top 60 most used ops, along with the most frequently requested operations by the community, bringing coverage to over 300 operators. The major focus of the release was to enable full OpInfo-based forward and gradient mode testing to address silent correctness issues. These changes have resulted in wider adoption of MPS backend by 3rd party networks such as Stable Diffusion, YoloV5, WhisperAI, along with increased coverage for Torchbench networks and Basic tutorials. We encourage developers to update to the latest macOS release to see the best performance and stability on the MPS backend.
+
+Links
+
+
+  MPS Backend
+  Developer information
+  Accelerated PyTorch training on Mac
+  Metal, Metal Performance Shaders &amp; Metal Performance Shaders Graph
+
+
+[Beta] Scaled dot product attention 2.0
+
+We are thrilled to announce the release of PyTorch 2.0, which introduces a powerful scaled dot product attention function as part of torch.nn.functional. This function includes multiple implementations that can be seamlessly applied depending on the input and hardware in use.
+
+In previous versions of PyTorch, you had to rely on third-party implementations and install separate packages to take advantage of memory-optimized algorithms like FlashAttention. With PyTorch 2.0, all these implementations are readily available by default.
+
+These implementations include FlashAttention from HazyResearch, Memory-Efficient Attention from the xFormers project, and a native C++ implementation that is ideal for non-CUDA devices or when high-precision is required.
+
+PyTorch 2.0 will automatically select the optimal implementation for your use case, but you can also toggle them individually for finer-grained control. Additionally, the scaled dot product attention function can be used to build common transformer architecture components.
+
+Learn more with the documentation and this tutorial.
+
+[Beta] functorch -> torch.func
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples include:
+
+  model ensembling
+  efficiently computing jacobians and hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce that, as the final step of upstreaming and integrating functorch into PyTorch, the functorch APIs are now available in the torch.func module. Our function transform APIs are identical to before, but we have changed how the interaction with NN modules work. Please see the docs and the migration guide for more details.
+
+Furthermore, we have added support for torch.autograd.Function: one is now able to apply function transformations (e.g. vmap, grad, jvp) over torch.autograd.Function.
+
+[Beta] Dispatchable Collectives
+
+Dispatchable collectives is an improvement to the existing init_process_group() API which changes backend to an optional argument. For users, the main advantage of this feature is that it will allow them to write code that can run on both GPU and CPU machines without having to change the backend specification. The dispatchability feature will also make it easier for users to support both GPU and CPU collectives, as they will no longer need to specify the backend manually (e.g. “NCCL” or “GLOO”). Existing backend specifications by users will be honored and will not require change.
+
+Usage example:
+import torch.distributed.dist
+…
+# old
+dist.init_process_group(backend=”nccl”, ...)
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors does not work
+
+# new
+dist.init_process_group(...) # backend is optional
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors works
+
+
+Learn more here.
+
+[Beta] torch.set_default_device and torch.device as context manager
+
+torch.set_default_device allows users to change the default device that factory functions in PyTorch allocate on. For example, if you torch.set_default_device(‘cuda’), a call to torch.empty(2) will allocate on CUDA (rather than on CPU). You can also use torch.device as a context manager to change the default device on a local basis. This resolves a long standing feature request from PyTorch’s initial release for a way to do this.
+
+Learn more here.
+
+[Beta] “X86” as the new default quantization backend for x86 CPU
+
+The new X86 quantization backend, which utilizes FBGEMM and oneDNN kernel libraries, replaces FBGEMM as the default quantization backend for x86 CPU platforms and offers improved int8 inference performance compared to the original FBGEMM backend, leveraging the strengths of both libraries, with 1.3X – 2X inference performance speedup measured on 40+ deep learning models. The new backend is functionally compatible with the original FBGEMM backend.
+
+Table: Geomean Speedup of X86 Quantization Backend vs. FBGEMM Backend
+
+
+  
+    
+   
+   1 core/instance
+   
+   2 cores/instance
+   
+   4 cores/instance
+   
+   1 socket (32 cores)/instance
+   
+  
+  
+   Intel(R) Xeon(R) Platinum 8358 CPU @ 2.60GHz
+   
+   1.76X
+   
+   1.80X
+   
+   2.04X
+   
+   1.34X
+   
+  
+
+
+By default, users on x86 platforms will utilize the x86 quantization backend and their PyTorch programs will remain unchanged when using the default backend. Alternatively, users have the option to specify “X86” as the quantization backend explicitly. Example code is shown below:
+
+import torch
+from torch.ao.quantization import get_default_qconfig_mappingfrom torch.quantization.quantize_fx
+import prepare_fx, convert_fx
+ 
+# get default configuration
+qconfig_mapping = get_default_qconfig_mapping()
+ 
+# or explicitly specify the backend
+# qengine = 'x86'
+# torch.backends.quantized.engine = qengine
+# qconfig_mapping = get_default_qconfig_mapping(qengine)
+ 
+# construct fp32 model
+model_fp32 = ...
+ 
+# prepare
+prepared_model = prepare_fx(model_fp32, qconfig_mapping, example_inputs=x)
+ 
+# calibrate
+...
+ 
+# convert
+quantized_model = convert_fx(prepared_model)
+
+
+Find more information: https://github.com/pytorch/pytorch/issues/83888 and https://www.intel.com/content/www/us/en/developer/articles/technical/accelerate-pytorch-int8-inf-with-new-x86-backend.html.
+
+[Beta] GNN inference and training optimization on CPU
+
+PyTorch 2.0 includes several critical optimizations to improve GNN inference and training performance on CPU. Before 2.0, GNN models of PyG suffers from low efficiency on CPU due to lack of performance tuning for several critical kernels (scatter/gather, etc) and the lack of GNN-related sparse matrix multiplication ops. To be specific, optimizations include:
+
+  scatter_reduce: performance hotspot in Message Passing when the edge index is stored in Coordinate format (COO).
+  gather: backward of scatter_reduce, specially tuned for the GNN compute when the index is an expanded tensor.
+  torch.sparse.mm with reduce flag: performance hotspot in Message Passing when the edge index is stored in Compressed Sparse Row (CSR). Supported reduce flag of: sum, mean, amax, amin.
+
+
+On PyG benchmarks/examples, OGB benchmarks, a 1.12x - 4.07x performance speedup is measured (1.13.1 compared with 2.0) for single node inference and training.
+
+
+  
+  
+   Model-Dataset
+   
+   Option
+   
+   Speedup Ratio
+   
+  
+  
+  
+   GCN-Reddit (inference)
+   
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.25x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.31x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.68x
+   
+  
+  
+   512-2-64-dense
+   
+   1.22x
+   
+  
+  
+    
+GraphSage-ogbn-products (inference)
+   
+   1024-3-128-dense
+   
+   1.15x
+   
+  
+  
+   512-2-64-sparse
+   
+   1.20x
+   
+  
+  
+   1024-3-128-sparse
+   
+   1.33x
+   
+  
+  
+   full-batch-sparse
+   
+   4.07x
+   
+  
+  
+   GCN-PROTEINS (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-REDDIT-BINARY (training)
+   
+   3-32
+   
+   1.67x
+   
+  
+  
+   GCN-Reddit (training)
+   
+   512-2-64-dense
+   
+   1.20x
+   
+  
+  
+   1024-3-128-dense
+   
+   1.12x
+   
+  
+
+
+Learn more: PyG CPU Performance Optimization.
+
+[Beta] Accelerating inference on CPU with PyTorch by leveraging oneDNN Graph
+
+oneDNN Graph API extends oneDNN with a flexible graph API to maximize the optimization opportunity for generating efficient code on AI hardware.
+
+  It automatically identifies the graph partitions to be accelerated via fusion.
+  The fusion patterns focus on fusing compute-intensive operations such as convolution, matmul and their neighbor operations for both inference and training use cases.
+  Although work is ongoing to integrate oneDNN Graph with TorchDynamo as well, its integration with the PyTorch JIT Fuser attained beta status in PyTorch 2.0 for Float32 &amp; BFloat16 inference (on machines that support AVX512_BF16 ISA).
+
+
+From a developer’s/researcher’s perspective, the usage is quite simple &amp; intuitive, with the only change in code being an API invocation:
+
+  Leverage oneDNN Graph, with JIT-tracing, a model is profiled with an example input.
+  The context manager with torch.jit.fuser(“fuser3”): can also be used instead of invoking torch.jit.enable_onednn_fusion(True).
+  For accelerating BFloat16 inference, we rely on eager-mode AMP (Automatic Mixed Precision) support in PyTorch &amp; disable JIT mode’s AMP, as both of them are currently divergent:
+
+
+# Assuming we have a model of the name 'model'
+ 
+example_input = torch.rand(1, 3, 224, 224)
+ 
+# enable oneDNN Graph
+torch.jit.enable_onednn_fusion(True)
+# Disable AMP for JIT
+torch._C._jit_set_autocast_mode(False)
+with torch.no_grad(), torch.cpu.amp.autocast():
+	model = torch.jit.trace(model, (example_input))
+	model = torch.jit.freeze(model)
+ 	# 2 warm-ups (2 for tracing/scripting with an example, 3 without an example)
+	model(example_input)
+	model(example_input)
+ 
+	# speedup would be observed in subsequent runs.
+	model(example_input)
+
+
+Learn more here.
+
+Prototype Features
+
+Distributed API
+
+[Prototype] DTensor
+
+PyTorch DistributedTensor (DTensor) is a prototyping effort with distributed tensor primitives to allow easier distributed computation authoring in the SPMD (Single Program Multiple Devices) paradigm. The primitives are simple but powerful when used to express tensor distributions with both sharded and replicated parallelism strategies. PyTorch DTensor empowered PyTorch Tensor Parallelism along with other advanced parallelism explorations. In addition, it also offers a uniform way to save/load state_dict for distributed checkpointing purposes, even when there’re complex tensor distribution strategies such as combining tensor parallelism with parameter sharding in FSDP. More details can be found in this RFC and the DTensor examples notebook.
+
+[Prototype] TensorParallel
+
+We now support DTensor based Tensor Parallel which users can distribute their model parameters across different GPU devices. We also support Pairwise Parallel which shards two concatenated linear layers in a col-wise and row-wise style separately so that only one collective(all-reduce/reduce-scatter) is needed in the end.
+
+[Prototype] 2D Parallel
+
+We implemented the integration of the aforementioned TP with FullyShardedDataParallel(FSDP) as 2D parallel to further scale large model training. More details can be found in this slide.
+
+[Prototype] torch.compile(dynamic=True)
+
+Experimental support for PT2 compilation with dynamic shapes is available in this release. Inference compilation with inductor for simple models is supported, but there are a lot of limitations:
+
+
+  Training available in a future release (This is partially fixed in nightlies!)
+  Minifier available in a future release.
+  It is easy to end up in a situation where the dimension you wanted to be dynamic gets specialized anyway. Some of these issues are fixed in nightlies, others are not.
+  We do not appropriately propagate Inductor guards to the top-level, this is tracked at #96296.
+  Data-dependent operations like nonzero still require a graph break.
+  Dynamic does not work with non-standard modes like reduce-overhead or max-autotune.
+  There are many bugs in Inductor compilation. To track known bugs, check the dynamic shapes label on the PyTorch issue tracker.
+
+
+For the latest and greatest news about dynamic shapes support on master, check out our status reports.
+
+Highlights/Performance Improvements
+
+Deprecation of Cuda 11.6 and Python 3.7 support for PyTorch 2.0
+
+If you are still using or depending on CUDA 11.6 or Python 3.7 builds, we strongly recommend moving to at least CUDA 11.7 and Python 3.8, as it would be the minimum versions required for PyTorch 2.0. For more detail, please refer to the Release Compatibility Matrix for PyTorch releases.
+
+Python 3.11 support on Anaconda Platform
+
+Due to lack of Python 3.11 support for packages that PyTorch depends on, including NumPy, SciPy, SymPy, Pillow and others on the Anaconda platform. We will not be releasing Conda binaries compiled with Python 3.11 for PyTorch Release 2.0. The Pip packages with Python 3.11 support will be released, hence if you intend to use PyTorch 2.0 with Python 3.11 please use our Pip packages. Please note: Conda packages with Python 3.11 support will be made available on our nightly channel. Also we are planning on releasing Conda Python 3.11 binaries as part of future release once Anaconda provides these key dependencies. More information and instructions on how to download the Pip packages can be found here.
+
+Optimized PyTorch Inference with AWS Graviton processors
+
+The optimizations focused on three key areas: GEMM kernels, bfloat16 support, primitive caching and the memory allocator. For aarch64 platforms, PyTorch supports Arm Compute Library (ACL) GEMM kernels via Mkldnn(OneDNN) backend. The ACL library provides Neon/SVE GEMM kernels for fp32 and bfloat16 formats. The bfloat16 support on c7g allows efficient deployment of bfloat16 trained, AMP (Automatic Mixed Precision) trained, or even the standard fp32 trained models. The standard fp32 models leverage bfloat16 kernels via OneDNN fast math mode, without any model quantization. Next we implemented primitive caching for conv, matmul and inner product operators. More information on the updated PyTorch user guide with the upcoming 2.0 release improvements and TorchBench benchmark details can be found here.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年3月15日</p>
+            <h1>
+                <a class="blog-title">PyTorch 2.0：我们下一代更快、更 Pythonic 和更动态的发布</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队编写</p>
+                    <p>我们非常高兴地宣布，在 12/2/22 的 <a href="https://www.youtube.com/@PyTorch/playlists?view=50&amp;sort=dd&amp;shelf_id=2">PyTorch Conference</a> 上，我们重点介绍了 <a href="https://github.com/pytorch/pytorch/releases/tag/v2.0.0">PyTorch® 2.0</a> 的发布！PyTorch 2.0 提供了相同的 eager-mode 开发和用户体验，同时在底层编译器级别对 PyTorch 进行了根本性的改变和增强，实现了更快的性能，并支持动态形状和分布式。</p>
+
+<p>这一代的发布包括了一个稳定的加速 Transformer 版本（之前称为 Better Transformers）；Beta 版本包括 torch.compile 作为 PyTorch 2.0 的主要 API，torch.nn.functional 中的 scaled_dot_product_attention 函数，torch.func 模块中的 functorch API；以及跨各种推理、性能和训练优化功能在 GPU 和 CPU 上的其他 Beta/Prototype 改进。有关 torch.compile 的全面介绍和技术概述，请访问 2.0 <a href="/get-started/pytorch-2.0"> 入门页面 </a>。</p>
+
+<p>随着 2.0 版本的发布，我们还推出了一系列 PyTorch 领域库的 beta 更新，包括树内的库以及独立的库，如 TorchAudio、TorchVision 和 TorchText。TorchX 的更新也在发布中，因为它将转向社区支持模式。更多详情请参阅此<a href="/blog/new-library-updates-in-pytorch-2.0/">库博客 </a>。</p>
+
+<p>本次发布自1.13.1以来共有超过4,541个提交和428位贡献者。我们衷心感谢我们忠诚的社区成员的贡献。一如既往，我们鼓励大家尝试使用这些更新，并在我们改进2.0版本和今年整个2系列的过程中报告任何问题。</p>
+
+<p>摘要：</p>
+<ul>
+  <li>torch.compile 是 PyTorch 2.0 的主要 API，它包装您的模型并返回一个编译后的模型。这是一个完全可添加的（且可选的）功能，因此 2.0 按定义 100%向后兼容。</li>
+  <li>作为 torch.compile 的基础技术，TorchInductor 与 Nvidia 和 AMD GPU 将依赖于 OpenAI Triton 深度学习编译器来生成高性能代码并隐藏底层硬件细节。OpenAI Triton 生成的内核在性能上与手动编写的内核和专门的 cuda 库（如 cublas）相当。</li>
+  <li>加速 Transformer 引入了对缩放点积注意力（SPDA）的自定义内核架构的高性能训练和推理支持。API 已集成 torch.compile()，模型开发者还可以通过调用新的 scaled_dot_product_attention()运算符直接使用<a href="#beta-scaled-dot-product-attention-20">缩放点积注意力</a>内核。</li>
+  <li>金属性能着色器（MPS）后端为 Mac 平台上的 GPU 加速 PyTorch 训练提供支持，并增加了对 Top 60 个最常用操作的支持，覆盖范围超过 300 个操作符。</li>
+  <li>亚马逊 AWS 优化了基于 AWS Graviton3 的 C7g 实例上的 PyTorch CPU 推理。PyTorch 2.0 相较于之前的版本，在 Graviton 上的推理性能有所提升，包括 Resnet50 和 Bert 的改进。</li>
+  <li>涵盖 TensorParallel、DTensor、2D 并行、TorchDynamo、AOTAutograd、PrimTorch 和 TorchInductor 等新原型功能和技术的更新。</li>
+</ul>
+
+<table class="table table-bordered">
+<thead>
+  <tr>
+   <td scope="col">
+<strong>稳定版</strong>
+   </td>
+   <td scope="col"><strong>测试版</strong>
+   </td>
+   <td scope="col"><strong>原型</strong>
+   </td>
+   <td scope="col"><strong>性能提升</strong>
+   </td>
+  </tr>
+  </thead>
+  <tbody><tr>
+   <td>
+
+<a href="#stable-features">加速 PT 2 Transformer</a>
+   </td>
+   <td>
+
+<a href="#beta-features">torch.compile</a>
+   </td>
+   <td>
+
+<a href="#prototype-features">DTensor</a>
+   </td>
+   <td>
+
+<a href="#deprecation-of-cuda-116-and-python-37-support-for-pytorch-20">支持 11.7 &amp; 11.8 版本的 CUDA（弃用 CUDA 11.6）</a>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td>
+
+<a href="#beta-pytorch-mps-backend">PyTorch MPS 后端</a>
+   </td>
+   <td>
+
+<a href="#prototype-tensorparallel">张量并行</a>
+   </td>
+   <td> 
+
+<a href="#deprecation-of-cuda-116-and-python-37-support-for-pytorch-20">Python 3.8（弃用 Python 3.7）</a>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td>
+
+<a href="#beta-scaled-dot-product-attention-20">缩放点积注意力</a>
+   </td>
+   <td>
+
+<a href="#prototype-2d-parallel">2D 并行</a>
+   </td>
+   <td>
+
+<a href="#optimized-pytorch-inference-with-aws-graviton-processors">AWS Graviton3</a>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td>
+
+<a href="#beta-functorch---torchfunc">functorch</a>
+   </td>
+   <td rowspan="2">
+
+<a href="#beta-torchcompile">Torch.compile (动态=True)</a>
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td><a href="#beta-dispatchable-collectives">可调度集体</a>
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td><a href="#beta-torchset_default_device-and-torchdevice-as-context-manager">Torch.set_default &amp; torch.device</a>
+   </td>
+   <td>
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td>
+
+<a href="#beta-x86-as-the-new-default-quantization-backend-for-x86-cpu">X86 量化和后端</a>
+   </td>
+   <td>
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td>
+   </td>
+   <td>
+
+<a href="#beta-gnn-inference-and-training-optimization-on-cpu">GNN 推理和训练性能</a>
+   </td>
+   <td>
+   </td>
+   <td>
+   </td>
+  </tr>
+</tbody></table>
+
+<p>*点击<a href="https://docs.google.com/spreadsheets/d/1H3jazwO8BBCwK8JwLNYspLiHfUrzshEtyqjL-X93I9g/edit#gid=790902532">这里</a>查看 2.0、1.13 和 1.12 版本的全部公共功能提交列表。</p>
+
+<h2 id="stable-features">稳定功能</h2>
+
+<h3 id="stable-accelerated-pytorch-2-transformers">[稳定] 加速 PyTorch 2 Transformers</h3>
+
+<p>PyTorch 2.0 版本发布了一个新的高性能 PyTorch Transformer API 实现。在发布加速 PT2 Transformer 的同时，我们的目标是使行业内的最先进 Transformer 模型的训练和部署变得经济实惠。本版本引入了对使用自定义内核架构进行缩放点积注意力（SPDA）训练和推理的高性能支持，扩展了之前被称为“Better Transformer”的推理“fastpath”架构。</p>
+
+<p>与“fastpath”架构类似，自定义内核已完全集成到 PyTorch Transformer API 中，因此使用本地的 Transformer 和 MultiHeadAttention API 将使用户能够：</p>
+
+<ul>
+  <li>透明地看到显著的性能提升；</li>
+  <li>支持更多用例，包括使用交叉注意力、Transformer 解码器和训练模型等。</li>
+  <li>继续为固定和可变序列长度的 Transformer 编码器和自注意力用例使用 fastpath 推理。</li>
+</ul>
+
+<p>为了充分利用不同的硬件模型和 Transformer 用例，支持多个 SDPA 自定义内核（见下文），并具有自定义内核选择逻辑，该逻辑将选择给定模型和硬件类型的最高性能内核。除了现有的 Transformer API 之外，模型开发者还可以通过调用新的 scaled_dot_product_attention()运算符直接使用<a href="#beta-scaled-dot-product-attention-20">缩放点积注意力</a>内核。加速 PyTorch 2.0 Transformer 与 torch.compile()集成。要使用您的模型并从 PT2 编译（推理或训练）的额外加速中受益，请使用 <code class="language-plaintext highlighter-rouge">model = torch.compile(model)</code> 对模型进行预处理。</p>
+
+<p>使用自定义内核和 torch.compile() 的组合，加速 PyTorch 2 Transformer 在训练 Transformer 模型，特别是大型语言模型方面取得了显著的加速效果。</p>
+
+<p><img src="/assets/images/pytorch20post.png" alt="alt_text" title="Accelerated PyTorch 2 speed" width="100%">
+<small style="line-height: 1.1"><em>图：使用具有自定义核的缩放点积注意力机制以及 torch.compile 在训练大型语言模型（如此处所示的 nanoGPT）时，可以显著提高训练速度。</em></small></p>
+
+<h2 id="beta-features">测试功能</h2>
+
+<h3 id="beta-torchcompile">[Beta] torch.compile</h3>
+
+<p>torch.compile 是 PyTorch 2.0 的主要 API，它包装您的模型并返回一个编译后的模型。这是一个完全可添加的（且可选的）功能，因此 2.0 按定义 100%向后兼容。</p>
+
+<p>火炬编译器（torch.compile）基于新技术——TorchDynamo、AOTAutograd、PrimTorch 和 TorchInductor：</p>
+<ul>
+  <li>TorchDynamo 通过 Python 框架评估钩子安全地捕获 PyTorch 程序，这是我们在安全图捕获方面 5 年研发成果的显著创新。</li>
+  <li>AOTAutograd 对 PyTorch 的 autograd 引擎进行重载，作为跟踪自动微分以生成提前时间反向跟踪。</li>
+  <li>PrimTorch 将 ~2000+ 个 PyTorch 运算符规范化为 ~250 个基本运算符的封闭集合，开发者可以针对这些运算符构建完整的 PyTorch 后端。这大大降低了编写 PyTorch 功能或后端的门槛。</li>
+  <li>TorchInductor 是一个深度学习编译器，可以为多个加速器和后端生成快速代码。对于 NVIDIA 和 AMD GPU，它使用 OpenAI Triton 作为关键构建块。对于英特尔 CPU，我们使用多线程、向量化指令，并在可能的情况下将适当操作卸载到 mkldnn 生成 C++ 代码。</li>
+</ul>
+
+<p>在所有新技术支持下，torch.compile 能够在 165 个开源模型上 93% 的时间内工作，平均在 float32 精度下运行速度快 20%，在 AMP 精度下平均快 36%。</p>
+
+<p>如需更多信息，请参阅 <a href="https://pytorch.org/get-started/pytorch-2.0/">https://pytorch.org/get-started/pytorch-2.0/</a> 以及 TorchInductor CPU 与英特尔相关的 <a href="https://dev-discuss.pytorch.org/t/torchinductor-update-5-cpu-backend-backend-performance-update-and-deep-dive-on-key-optimizations/1117"> 此处 </a>。</p>
+
+<h3 id="beta-pytorch-mps-backend">[Beta] PyTorch MPS 后端</h3>
+
+<p>MPS 后端为 Mac 平台提供 GPU 加速的 PyTorch 训练。本版本带来了改进的正确性、稳定性和算子覆盖。</p>
+
+<p>MPS 后端现在包括对 Top 60 个最常用算子的支持，以及社区最常请求的操作，覆盖超过 300 个算子。本版本的重点是启用基于 OpInfo 的全前向和梯度模式测试，以解决静默正确性问题。这些更改导致 MPS 后端被第三方网络（如 Stable Diffusion、YoloV5、WhisperAI）更广泛采用，并为 Torchbench 网络和基本教程提供了更全面的覆盖。我们鼓励开发者更新到最新的 macOS 版本，以在 MPS 后端上获得最佳性能和稳定性。</p>
+
+<p>链接</p>
+
+<ol>
+  <li><a href="https://pytorch.org/docs/stable/notes/mps.html">MPS 后端</a></li>
+  <li><a href="https://github.com/pytorch/pytorch/wiki/MPS-Backend">开发者信息</a></li>
+  <li><a href="https://developer.apple.com/metal/pytorch/">在 Mac 上加速 PyTorch 训练</a></li>
+  <li><a href="https://developer.apple.com/documentation/metal?language=objc">金属 </a>，<a href="https://developer.apple.com/documentation/metalperformanceshaders?language=objc"> 金属性能着色器 </a> &amp; <a href="https://developer.apple.com/documentation/metalperformanceshadersgraph?language=objc"> 金属性能着色器图</a></li>
+</ol>
+
+<h3 id="beta-scaled-dot-product-attention-20">[Beta] 扩放点积注意力 2.0</h3>
+
+<p>我们非常高兴地宣布 PyTorch 2.0 的发布，它引入了一个强大的扩放点积注意力函数，作为 torch.nn.functional 的一部分。此函数包含多个实现，可以根据输入和使用的硬件无缝应用。</p>
+
+<p>在 PyTorch 的早期版本中，您必须依赖第三方实现并安装单独的包才能利用像 <a href="https://github.com/HazyResearch/flash-attention">FlashAttention</a> 这样的内存优化算法。在 PyTorch 2.0 中，所有这些实现都默认可用。</p>
+
+<p>这些实现包括来自 HazyResearch 的 <a href="https://arxiv.org/abs/2205.14135">FlashAttention</a>、来自 xFormers 项目的内存高效注意力以及适用于非 CUDA 设备或需要高精度的本地 C++实现。</p>
+
+<p>PyTorch 2.0 将自动为您选择最佳实现，但您也可以单独切换它们以获得更精细的控制。此外，缩放点积注意力函数可用于构建常见的 transformer 架构组件。</p>
+
+<p>通过<a href="https://pytorch.org/docs/master/generated/torch.nn.functional.scaled_dot_product_attention.html?highlight=scaled_dot_product#torch.nn.functional.scaled_dot_product_attention">文档</a>和这个<a href="https://maskerprc.github.io/tutorials/intermediate/scaled_dot_product_attention_tutorial.html">教程</a>了解更多信息。</p>
+
+<h3 id="beta-functorch---torchfunc">[Beta] functorch -&gt; torch.func</h3>
+
+<p>受 <a href="https://github.com/google/jax">Google JAX</a> 启发，functorch 是一个提供可组合的 vmap（向量化）和自动微分转换的库。它使得在 PyTorch 中难以表达的高级自动微分用例成为可能。例如包括：</p>
+<ul>
+  <li><a href="https://maskerprc.github.io/tutorials/intermediate/ensembling.html">模型集成</a></li>
+  <li><a href="https://maskerprc.github.io/tutorials/intermediate/jacobians_hessians.html">高效计算雅可比矩阵和海森矩阵</a></li>
+  <li><a href="https://maskerprc.github.io/tutorials/intermediate/per_sample_grads.html">计算每个样本的梯度（或其他每个样本的量）</a></li>
+</ul>
+
+<p>我们很高兴地宣布，作为将 functorch 上游化和集成到 PyTorch 的最后一步，functorch API 现在已在 torch.func 模块中可用。我们的函数转换 API 与之前相同，但我们已经改变了与 NN 模块的交互方式。请参阅<a href="https://pytorch.org/docs/master/func.html">文档</a>和<a href="https://pytorch.org/docs/master/func.migrating.html">迁移指南</a>以获取更多详细信息。</p>
+
+<p>此外，我们<a href="https://pytorch.org/docs/master/notes/extending.func.html">增加了对 torch.autograd.Function 的支持 </a>：现在可以应用函数转换（例如 vmap、grad、jvp）到 torch.autograd.Function。</p>
+
+<h3 id="beta-dispatchable-collectives">[Beta] 可调度集体</h3>
+
+<p>可调度集体是对现有 init_process_group() API 的改进，将后端改为可选参数。对于用户来说，这个特性的主要优势是它将允许他们编写可以在 GPU 和 CPU 机器上运行的代码，而无需更改后端指定。调度特性也将使用户更容易支持 GPU 和 CPU 集体，因为他们将不再需要手动指定后端（例如，“NCCL”或“GLOO”）。现有的后端指定将由用户保留，无需更改。</p>
+
+<p>使用示例：</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch.distributed.dist
+…
+# old
+dist.init_process_group(backend=”nccl”, ...)
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors does not work
+
+# new
+dist.init_process_group(...) # backend is optional
+dist.all_reduce(...) # with CUDA tensors works
+dist.all_reduce(...) # with CPU tensors works
+</code></pre></div></div>
+
+<p>更多信息 <a href="https://pytorch.org/docs/master/distributed.html#torch.distributed.init_process_group"> 请点击此处 </a>。</p>
+
+<h3 id="beta-torchset_default_device-and-torchdevice-as-context-manager">[Beta] torch.set_default_device 和 torch.device 作为上下文管理器</h3>
+
+<p>torch.set_default_device 允许用户更改 PyTorch 工厂函数默认分配到的设备。例如，如果调用 torch.set_default_device('cuda')，则 torch.empty(2) 的调用将在 CUDA 上分配（而不是在 CPU 上）。您还可以使用 torch.device 作为上下文管理器在本地更改默认设备。这解决了 PyTorch 初始发布以来长期存在的功能请求，即提供一种进行此操作的方法。</p>
+
+<p>更多信息 <a href="https://maskerprc.github.io/tutorials/recipes/recipes/changing_default_device.html"> 请点击此处 </a>。</p>
+
+<h3 id="beta-x86-as-the-new-default-quantization-backend-for-x86-cpu">[Beta] “X86”作为新的默认量化后端，适用于 x86 CPU</h3>
+
+<p>新的 X86 量化后端，利用 FBGEMM 和 oneDNN 内核库，取代了 FBGEMM 成为 x86 CPU 平台的默认量化后端，与原始 FBGEMM 后端相比，在 40 多个深度学习模型上实现了 1.3 倍至 2 倍的推理性能提升，利用了两个库的优点。新的后端在功能上与原始 FBGEMM 后端兼容。</p>
+
+<p><strong>表格：X86 量化后端与 FBGEMM 后端几何平均加速比</strong></p>
+
+<table>
+  <tbody><tr>
+   <td> 
+   </td>
+   <td>1 核心实例</td>
+   <td>2 核心实例</td>
+   <td>4 核心实例</td>
+   <td>1 插槽（32 核）/实例</td>
+  </tr>
+  <tr>
+   <td>英特尔®至强®铂金 8358 CPU @ 2.60GHz</td>
+   <td>1.76X
+   </td>
+   <td>1.80X
+   </td>
+   <td>2.04X
+   </td>
+   <td>1.34X
+   </td>
+  </tr>
+</tbody></table>
+
+<p>默认情况下，x86 平台上的用户将使用 x86 量化后端，并且在使用默认后端时，他们的 PyTorch 程序将保持不变。或者，用户可以选择明确指定“X86”作为量化后端。以下是一个示例代码：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
+from torch.ao.quantization import get_default_qconfig_mappingfrom torch.quantization.quantize_fx
+import prepare_fx, convert_fx
+ 
+# get default configuration
+qconfig_mapping = get_default_qconfig_mapping()
+ 
+# or explicitly specify the backend
+# qengine = 'x86'
+# torch.backends.quantized.engine = qengine
+# qconfig_mapping = get_default_qconfig_mapping(qengine)
+ 
+# construct fp32 model
+model_fp32 = ...
+ 
+# prepare
+prepared_model = prepare_fx(model_fp32, qconfig_mapping, example_inputs=x)
+ 
+# calibrate
+...
+ 
+# convert
+quantized_model = convert_fx(prepared_model)
+</code></pre></div></div>
+
+<p>查找更多信息：[0](https://github.com/pytorch/pytorch/issues/83888) 和 [1](https://www.intel.com/content/www/us/en/developer/articles/technical/accelerate-pytorch-int8-inf-with-new-x86-backend.html)。</p>
+
+<h3 id="beta-gnn-inference-and-training-optimization-on-cpu">[Beta] CPU 上的 GNN 推理和训练优化</h3>
+
+<p>PyTorch 2.0 包含了多个关键优化，以提升 GNN 在 CPU 上的推理和训练性能。在 2.0 之前，PyG 的 GNN 模型在 CPU 上由于缺乏对多个关键内核（scatter/gather 等）的性能调优以及缺乏 GNN 相关的稀疏矩阵乘法操作，导致效率低下。具体来说，优化包括：</p>
+<ul>
+  <li>scatter_reduce：当边索引以坐标格式（COO）存储时，消息传递中的性能热点。</li>
+  <li>gather：scatter_reduce 的反向操作，特别针对 GNN 计算时索引为展开张量的场景进行了优化。</li>
+  <li>torch.sparse.mm 带有 reduce 标志：当边索引以压缩稀疏行（CSR）格式存储时，消息传递中的性能热点。支持的 reduce 标志为：sum、mean、amax、amin。</li>
+</ul>
+
+<p>在 PyG 基准测试/示例、OGB 基准测试中，单节点推理和训练性能提升了 1.12 倍至 4.07 倍（与 2.0 版本相比为 1.13.1）。</p>
+
+<table class="table table-bordered">
+  <thead>
+  <tr>
+   <td scope="col"><strong>模型-数据集</strong>
+   </td>
+   <td scope="col"><strong>选项</strong>
+   </td>
+   <td scope="col"><strong>性能提升比率</strong>
+   </td>
+  </tr>
+  </thead>
+  <tbody><tr>
+   <td rowspan="5">GCN-Reddit (推理)</td>
+   <td>512-2-64-密集</td>
+   <td>1.22倍</td>
+  </tr>
+  <tr>
+   <td>1024-3-128-密集</td>
+   <td>1.25倍</td>
+  </tr>
+  <tr>
+   <td>512-2-64-稀疏</td>
+   <td>1.31倍</td>
+  </tr>
+  <tr>
+   <td>1024-3-128-稀疏</td>
+   <td>1.68倍</td>
+  </tr>
+  <tr>
+   <td>512-2-64-密集</td>
+   <td>1.22倍</td>
+  </tr>
+  <tr>
+   <td rowspan="4">GraphSage-ogbn-products（推理）</td>
+   <td>1024-3-128-密集</td>
+   <td>1.15倍</td>
+  </tr>
+  <tr>
+   <td>512-2-64-稀疏</td>
+   <td>1.20倍</td>
+  </tr>
+  <tr>
+   <td>1024-3-128-稀疏</td>
+   <td>1.33倍</td>
+  </tr>
+  <tr>
+   <td>全批稀疏</td>
+   <td>4.07倍</td>
+  </tr>
+  <tr>
+   <td>GCN-蛋白质（训练）</td>
+   <td>3-32
+   </td>
+   <td>1.67倍</td>
+  </tr>
+  <tr>
+   <td>GCN-REDDIT-BINARY (训练)</td>
+   <td>3-32
+   </td>
+   <td>1.67倍</td>
+  </tr>
+  <tr>
+   <td rowspan="2">GCN-Reddit (训练)</td>
+   <td>512-2-64-密集</td>
+   <td>1.20倍</td>
+  </tr>
+  <tr>
+   <td>1024-3-128-密集</td>
+   <td>1.12倍</td>
+  </tr>
+</tbody></table>
+
+<p>了解更多：[PyG CPU 性能优化](#)</p>
+
+<h3 id="beta-accelerating-inference-on-cpu-with-pytorch-by-leveraging-onednn-graph">[Beta] 利用 oneDNN Graph 加速 CPU 上的推理</h3>
+
+<p><a href="https://spec.oneapi.io/onednn-graph/latest/introduction.html">oneDNN Graph API</a> 扩展 <a href="https://spec.oneapi.io/versions/latest/elements/oneDNN/source/index.html">oneDNN</a>，通过灵活的图 API 最大化优化机会，以在 AI 硬件上生成高效的代码。</p>
+<ul>
+  <li>它自动识别要加速融合的图分区。</li>
+  <li><a href="https://github.com/oneapi-src/oneDNN/blob/dev-graph/doc/programming_model/ops_and_patterns.md#fusion-patterns">融合模式</a>专注于融合计算密集型操作，如卷积、矩阵乘法及其相邻操作，适用于推理和训练用例。</li>
+  <li>尽管正在进行将 oneDNN Graph 与 TorchDynamo 集成的相关工作，但其与 PyTorch JIT Fuser 的集成已在 PyTorch 2.0 中达到 Beta 版本状态，支持 <a href="https://github.com/pytorch/pytorch/tree/master/torch/csrc/jit/codegen/onednn#example-with-float">Float32</a> &amp; <a href="https://github.com/pytorch/pytorch/tree/master/torch/csrc/jit/codegen/onednn#example-with-bfloat16">BFloat16</a> 推理（在支持 AVX512_BF16 ISA 的机器上）。</li>
+</ul>
+
+<p>从开发者/研究人员的角度来看，使用非常简单直观，代码中唯一的变化是 API 调用：</p>
+<ul>
+  <li>利用 oneDNN Graph，通过 <a href="https://pytorch.org/docs/stable/generated/torch.jit.trace.html">JIT-tracing</a>，可以使用示例输入对模型进行性能分析。</li>
+  <li>可以使用上下文管理器 <em>with torch.jit.fuser(“fuser3”):</em> 来代替调用 <em>torch.jit.enable_onednn_fusion(True)</em>。</li>
+  <li>为了加速 <a href="https://github.com/pytorch/pytorch/tree/master/torch/csrc/jit/codegen/onednn#example-with-bfloat16">BFloat16 推理 </a>，我们依赖 PyTorch 的 eager-mode AMP（自动混合精度）支持并禁用 JIT 模式的 AMP，因为它们目前存在分歧：</li>
+</ul>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Assuming we have a model of the name 'model'
+ 
+example_input = torch.rand(1, 3, 224, 224)
+ 
+# enable oneDNN Graph
+torch.jit.enable_onednn_fusion(True)
+# Disable AMP for JIT
+torch._C._jit_set_autocast_mode(False)
+with torch.no_grad(), torch.cpu.amp.autocast():
+	model = torch.jit.trace(model, (example_input))
+	model = torch.jit.freeze(model)
+ 	# 2 warm-ups (2 for tracing/scripting with an example, 3 without an example)
+	model(example_input)
+	model(example_input)
+ 
+	# speedup would be observed in subsequent runs.
+	model(example_input)
+</code></pre></div></div>
+
+<p>更多信息 <a href="https://maskerprc.github.io/tutorials/recipes/recipes/tuning_guide.html#use-onednn-graph-with-torchscript-for-inference"> 请点击此处 </a>。</p>
+
+<h2 id="prototype-features">原型功能</h2>
+
+<h3 id="distributed-api">分布式 API</h3>
+
+<h4 id="prototype-dtensor">[原型] DTensor</h4>
+
+<p>PyTorch <a href="https://github.com/pytorch/pytorch/blob/master/torch/distributed/_tensor/README.md">DistributedTensor</a>（DTensor）是一个用于分布式张量原语的原型设计，旨在简化在 SPMD（单程序多设备）范式中的分布式计算编写。这些原语简单但强大，当用于表达具有分片和复制并行策略的张量分布时。PyTorch DTensor 使 PyTorch <a href="https://pytorch.org/docs/master/distributed.tensor.parallel.html">Tensor Parallelism</a> 以及其他高级并行探索成为可能。此外，它还提供了一种统一的方式来保存/加载 state_dict，以便进行分布式检查点，即使存在复杂的张量分布策略，例如在 FSDP 中将张量并行与参数分片相结合。更多详细信息请参阅此 <a href="https://github.com/pytorch/pytorch/issues/88838">RFC</a> 和 <a href="https://colab.research.google.com/drive/12Pl5fvh0eLPUrcVO7s6yY4n2_RZo8pLR#scrollTo=stYPKb9Beq4e">DTensor 示例笔记本 </a>。</p>
+
+<h4 id="prototype-tensorparallel">[原型] TensorParallel</h4>
+
+<p>现已支持基于 DTensor 的 Tensor Parallel，用户可以将模型参数分布到不同的 GPU 设备上。我们还支持成对并行，将两个连接的线性层分别以列向和行向的方式分片，最终只需要一个集体操作（all-reduce/reduce-scatter）。</p>
+
+<h4 id="prototype-2d-parallel">[原型] 2D Parallel</h4>
+
+<p>我们实现了上述 TP 与 FullyShardedDataParallel（FSDP）的集成，作为 2D 并行以进一步扩展大型模型训练。更多详情请参阅此<a href="https://docs.google.com/presentation/d/17g6WqrO00rP3MsxbRENsPpjrlSkwiA_QB4r93_eB5is/edit?usp=sharing">幻灯片 </a>。</p>
+
+<h4 id="prototype-torchcompiledynamictrue">[原型] torch.compile(dynamic=True)</h4>
+
+<p>本版本支持 PT2 编译的动态形状实验性支持。对于简单模型，支持使用 inductor 进行推理编译，但存在许多限制：</p>
+
+<ul>
+  <li>训练功能将在未来版本中提供（nightlies 中部分修复！）</li>
+  <li>压缩器将在未来版本中提供。</li>
+  <li>很容易陷入一个情况，你想要的动态维度却无论如何都变得专业化。其中一些问题在夜间版本中已得到修复，而另一些则没有。</li>
+  <li>我们没有适当地将电感器保护传播到顶层，这个问题在 <a href="https://github.com/pytorch/pytorch/issues/96296">#96296</a> 处有跟踪。</li>
+  <li>类似于非零这样的数据相关操作仍然需要断开图。</li>
+  <li>动态模式与非标准模式（如 reduce-overhead 或 max-autotune）不兼容。</li>
+  <li>Inductor 编译中存在许多错误。要跟踪已知错误，请检查 PyTorch 问题跟踪器上的 <a href="https://github.com/pytorch/pytorch/issues?q=is%3Aopen+is%3Aissue+label%3A%22module%3A+dynamic+shapes%22"> 动态形状 </a> 标签。</li>
+</ul>
+
+<p>想了解关于 master 上动态形状支持的最新和最伟大新闻，请查看 <a href="https://dev-discuss.pytorch.org/t/state-of-symbolic-shapes-branch/777/43"> 我们的状态报告 </a>。</p>
+
+<h2 id="highlightsperformance-improvements">突出/性能改进</h2>
+
+<h3 id="deprecation-of-cuda-116-and-python-37-support-for-pytorch-20">PyTorch 2.0 对 <a href="https://pytorch.org/blog/deprecation-cuda-python-support/">Cuda 11.6 和 Python 3.7 支持 </a> 的弃用</h3>
+
+<p>如果您仍在使用或依赖于 CUDA 11.6 或 Python 3.7 构建，我们强烈建议升级到至少 CUDA 11.7 和 Python 3.8，因为这将是最小版本要求以支持 PyTorch 2.0。更多详细信息，请参阅 <a href="https://github.com/pytorch/pytorch/blob/master/RELEASE.md#release-compatibility-matrix">PyTorch 版本发布兼容性矩阵 </a>。</p>
+
+<h3 id="python-311-support-on-anaconda-platform">Anaconda 平台对 Python 3.11 的支持</h3>
+
+<p>由于 PyTorch 依赖的包（包括 NumPy、SciPy、SymPy、Pillow 等）在 Anaconda 平台对 Python 3.11 不支持，我们将不会发布为 PyTorch 2.0 编译的 Python 3.11 Conda 二进制文件。将发布支持 Python 3.11 的 Pip 包，因此如果您打算使用 Python 3.11 与 PyTorch 2.0 一起使用，请使用我们的 Pip 包。请注意：支持 Python 3.11 的 Conda 包将作为我们的夜间频道提供。我们还计划在 Anaconda 提供这些关键依赖项后，作为未来版本的发布部分发布 Conda Python 3.11 二进制文件。有关如何下载 Pip 包的更多信息及说明，请<a href="https://dev-discuss.pytorch.org/t/pytorch-2-0-message-concerning-python-3-11-support-on-anaconda-platform/1087">在此处</a>查看。</p>
+
+<h3 id="optimized-pytorch-inference-with-aws-graviton-processors">使用 AWS Graviton 处理器优化 PyTorch 推理</h3>
+
+<p>优化主要集中在三个关键领域：GEMM 内核、bfloat16 支持、原语缓存和内存分配器。对于 aarch64 平台，PyTorch 通过 Mkldnn(OneDNN)后端支持 Arm Compute Library (ACL) GEMM 内核。ACL 库为 fp32 和 bfloat16 格式提供 Neon/SVE GEMM 内核。在 c7g 上对 bfloat16 的支持允许高效部署 bfloat16 训练的、AMP（自动混合精度）训练的，甚至是标准 fp32 训练的模型。标准 fp32 模型通过 OneDNN 快速数学模式利用 bfloat16 内核，无需任何模型量化。接下来，我们实现了 conv、matmul 和内积运算符的原语缓存。有关即将发布的 2.0 版本改进和 TorchBench 基准测试细节的更多信息，请在此处<a href="https://github.com/aws/aws-graviton-getting-started">查看 </a>。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

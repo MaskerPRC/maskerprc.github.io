@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch 2.x | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Overview
+
+Introducing PyTorch 2.0, our first steps toward the next generation 2-series release of PyTorch. Over the last few years we have innovated and iterated from PyTorch 1.0 to the most recent 1.13 and moved to the newly formed PyTorch Foundation, part of the Linux Foundation.
+
+PyTorch’s biggest strength beyond our amazing community is that we continue as a first-class Python integration, imperative style, simplicity of the API and options. PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood. We are able to provide faster performance and support for Dynamic Shapes and Distributed.
+
+Below you will find all the information you need to better understand what PyTorch 2.0 is, where it’s going and more importantly how to get started today (e.g., tutorial, requirements, models, common FAQs). There is still a lot to learn and develop but we are looking forward to community feedback and contributions to make the 2-series better and thank you all who have made the 1-series so successful.
+
+PyTorch 2.x: faster, more pythonic and as dynamic as ever
+
+Today, we announce torch.compile, a feature that pushes PyTorch performance to new heights and starts the move for parts of PyTorch from C++ back into Python. We believe that this is a substantial new direction for PyTorch – hence we call it 2.0. torch.compile is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+  
+    TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture
+  
+  
+    AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block.
+
+
+TorchDynamo, AOTAutograd, PrimTorch and TorchInductor are written in Python and support dynamic shapes (i.e. the ability to send in Tensors of different sizes without inducing a recompilation), making them flexible, easily hackable and lowering the barrier of entry for developers and vendors.
+
+To validate these technologies, we used a diverse set of 163 open-source models across various machine learning domains. We built this benchmark carefully to include tasks such as Image Classification, Object Detection, Image Generation, various NLP tasks such as Language Modeling, Q&amp;A, Sequence Classification, Recommender Systems and Reinforcement Learning. We separate the benchmarks into three categories:
+
+
+  46 models from HuggingFace Transformers
+  61 models from TIMM: a collection of state-of-the-art PyTorch image models by Ross Wightman
+  56 models from TorchBench: a curated set of popular code-bases from across github
+
+
+
+
+We don’t modify these open-source models except to add a torch.compile call wrapping them.
+
+We then measure speedups and validate accuracy across these models. Since speedups can be dependent on data-type, we measure speedups on both float32 and Automatic Mixed Precision (AMP). We report an uneven weighted average speedup of 0.75 * AMP + 0.25 * float32 since we find AMP is more common in practice.
+
+Across these 163 open-source models torch.compile works 93% of time, and the model runs 43% faster in training on an NVIDIA A100 GPU. At Float32 precision, it runs 21% faster on average and at AMP Precision it runs 51% faster on average.
+
+Caveats: On a desktop-class GPU such as a NVIDIA 3090, we’ve measured that speedups are lower than on server-class GPUs such as A100. As of today, our default backend TorchInductor supports CPUs and NVIDIA Volta and Ampere GPUs. It does not (yet) support other GPUs, xPUs or older NVIDIA GPUs.
+
+
+
+  Speedups for torch.compile against eager mode on an NVIDIA A100 GPU  
+
+
+Try it: torch.compile is in the early stages of development. Starting today, you can try out torch.compile in the nightly binaries. We expect to ship the first stable 2.0 release in early March 2023.
+
+In the roadmap of PyTorch 2.x we hope to push the compiled mode further and further in terms of performance and scalability. Some of this work is in-flight, as we talked about at the Conference today. Some of this work has not started yet. Some of this work is what we hope to see, but don’t have the bandwidth to do ourselves. If you are interested in contributing, come chat with us at the Ask the Engineers: 2.0 Live Q&amp;A Series starting this month (details at the end of this post) and/or via Github / Forums.
+
+
+
+
+
+Testimonials
+
+Here is what some of PyTorch’s users have to say about our new direction:
+
+Sylvain Gugger the primary maintainer of HuggingFace transformers:
+
+“With just one line of code to add, PyTorch 2.0 gives a speedup between 1.5x and 2.x in training Transformers models. This is the most exciting thing since mixed precision training was introduced!”
+
+Ross Wightman the primary maintainer of TIMM (one of the largest vision model hubs within the PyTorch ecosystem):
+
+“It just works out of the box with majority of TIMM models for inference and train workloads with no code changes”
+
+Luca Antiga the CTO of Lightning AI and one of the primary maintainers of PyTorch Lightning
+
+“PyTorch 2.0 embodies the future of deep learning frameworks. The possibility to capture a PyTorch program with effectively no user intervention and get massive on-device speedups and program manipulation out of the box unlocks a whole new dimension for AI developers.”
+
+Motivation
+
+Our philosophy on PyTorch has always been to keep flexibility and hackability our top priority, and performance as a close second. We strived for:
+
+
+  High-Performance eager execution
+  Pythonic internals
+  Good abstractions for Distributed, Autodiff, Data loading, Accelerators, etc.
+
+
+Since we launched PyTorch in 2017, hardware accelerators (such as GPUs) have become ~15x faster in compute and about ~2x faster in the speed of memory access. So, to keep eager execution at high-performance, we’ve had to move substantial parts of PyTorch internals into C++. Moving internals into C++ makes them less hackable and increases the barrier of entry for code contributions.
+
+From day one, we knew the performance limits of eager execution. In July 2017, we started our first research project into developing a Compiler for PyTorch. The compiler needed to make a PyTorch program fast, but not at the cost of the PyTorch experience. Our key criteria was to preserve certain kinds of flexibility – support for dynamic shapes and dynamic programs which researchers use in various stages of exploration.
+
+
+
+
+
+Technology Overview
+
+Over the years, we’ve built several compiler projects within PyTorch. Let us break down the compiler into three parts:
+
+
+  graph acquisition
+  graph lowering
+  graph compilation
+
+
+Graph acquisition was the harder challenge when building a PyTorch compiler.
+
+In the past 5 years, we built torch.jit.trace, TorchScript, FX tracing, Lazy Tensors. But none of them felt like they gave us everything we wanted. Some were flexible but not fast, some were fast but not flexible and some were neither fast nor flexible. Some had bad user-experience (like being silently wrong). While TorchScript was promising, it needed substantial changes to your code and the code that your code depended on. This need for substantial change in code made it a non-starter for a lot of PyTorch users.
+
+
+
+The PyTorch compilation process
+
+
+TorchDynamo: Acquiring Graphs reliably and fast
+
+Earlier this year, we started working on TorchDynamo, an approach that uses a CPython feature introduced in PEP-0523 called the Frame Evaluation API. We took a data-driven approach to validate its effectiveness on Graph Capture. We used 7,000+ Github projects written in PyTorch as our validation set. While TorchScript and others struggled to even acquire the graph 50% of the time, often with a big overhead, TorchDynamo acquired the graph 99% of the time, correctly, safely and with negligible overhead – without needing any changes to the original code. This is when we knew that we finally broke through the barrier that we were struggling with for many years in terms of flexibility and speed.
+
+TorchInductor: fast codegen using a define-by-run IR
+
+For a new compiler backend for PyTorch 2.0, we took inspiration from how our users were writing high performance custom kernels: increasingly using the Triton language. We also wanted a compiler backend that used similar abstractions to PyTorch eager, and was general purpose enough to support the wide breadth of features in PyTorch. TorchInductor uses a pythonic define-by-run loop level IR to automatically map PyTorch models into generated Triton code on GPUs and C++/OpenMP on CPUs. TorchInductor’s core loop level IR contains only ~50 operators, and it is implemented in Python, making it easily hackable and extensible.
+
+AOTAutograd: reusing Autograd for ahead-of-time graphs
+
+For PyTorch 2.0, we knew that we wanted to accelerate training. Thus, it was critical that we not only captured user-level code, but also that we captured backpropagation. Moreover, we knew that we wanted to reuse the existing battle-tested PyTorch autograd system. AOTAutograd leverages PyTorch’s torch_dispatch extensibility mechanism to trace through our Autograd engine, allowing us to capture the backwards pass “ahead-of-time”. This allows us to accelerate both our forwards and backwards pass using TorchInductor.
+
+PrimTorch: Stable Primitive operators
+
+Writing a backend for PyTorch is challenging. PyTorch has 1200+ operators, and 2000+ if you consider various overloads for each operator.
+
+
+
+   A breakdown of the 2000+ PyTorch operators  
+
+
+Hence, writing a backend or a cross-cutting feature becomes a draining endeavor. Within the PrimTorch project, we are working on defining smaller and stable operator sets. PyTorch programs can consistently be lowered to these operator sets. We aim to define two operator sets:
+
+
+  Prim ops with about ~250 operators, which are fairly low-level. These are suited for compilers because they are low-level enough that you need to fuse them back together to get good performance.
+  ATen ops with about ~750 canonical operators and suited for exporting as-is. These are suited for backends that already integrate at the ATen level or backends that won’t have compilation to recover performance from a lower-level operator set like Prim ops.
+
+
+We discuss more about this topic below in the Developer/Vendor Experience section
+
+User Experience
+
+We introduce a simple function torch.compile that wraps your model and returns a compiled model.
+
+compiled_model = torch.compile(model)
+
+
+This compiled_model holds a reference to your model and compiles the forward function to a more optimized version. When compiling the model, we give a few knobs to adjust it:
+
+def torch.compile(model: Callable,
+  *,
+  mode: Optional[str] = " default",="" dynamic:="" bool="False," fullgraph:bool="False," backend:="" union[str,="" callable]="inductor" ,="" #="" advanced="" backend="" options="" go="" here="" as="" kwargs="" **kwargs="" )="" -&gt;="" torch._dynamo.nnoptimizedmodule="" mode="" specifies="" what="" the="" compiler="" should="" be="" optimizing="" while="" compiling.="" default="" is="" a="" preset="" that="" tries="" to="" compile="" efficiently="" without="" taking="" too="" long="" or="" using="" extra="" memory.="" other="" modes="" such="" reduce-overhead="" reduce="" framework="" overhead="" by="" lot="" more,="" but="" cost="" small="" amount="" of="" max-autotune="" compiles="" for="" time,="" trying="" give="" you="" fastest="" code="" it="" can="" generate.="" dynamic="" whether="" enable="" path="" shapes.="" certain="" optimizations="" cannot="" applied="" shaped="" programs.="" making="" explicit="" want="" compiled="" program="" with="" shapes="" static="" will="" help="" better="" optimized="" code.="" fullgraph="" similar="" numba’s="" nopython.="" entire="" into="" single="" graph="" gives="" an="" error="" explaining="" why="" could="" not="" do="" so.="" most="" users="" don’t="" need="" use="" this="" mode.="" if="" are="" very="" performance="" conscious,="" then="" try="" it.="" which="" use.="" default,="" torchinductor="" used,="" there="" few="" others="" available.="" experience="" intends="" deliver="" benefits="" and="" flexibility="" in="" mental="" model="" get="" each="" now,="" let="" us="" look="" at="" full="" example="" compiling="" real="" running="" (with="" random="" data)="" import="" torch="" torchvision.models="" models="" optimizer="torch.optim.SGD(model.parameters()," lr="0.01)" compiled_model="torch.compile(model)" x="torch.randn(16," 3,="" 224,="" 224).cuda()="" optimizer.zero_grad()="" out="compiled_model(x)" out.sum().backward()="" optimizer.step()="" first="" time="" run="" compiled_model(x),="" model.="" hence,="" takes="" longer="" run.="" subsequent="" runs="" fast.="" has="" presets="" tune="" different="" ways.="" might="" slow="" because="" overhead.="" or,="" large="" barely="" fits="" depending="" on="" your="" need,="" api="" final="" default:="" optimizes="" models,="" low="" compile-time="" no="" memory="" usage="" torch.compile(model)="" reduce-overhead:="" uses="" some="" helps="" speed="" up="" torch.compile(model,="" max-autotune:="" produce="" model,="" reading="" updating="" attributes="" accessing="" work="" they="" would="" eager="" access="" modify="" (such="" model.conv1.weight)="" generally="" would.="" completely="" safe="" sound="" terms="" correction.="" torchdynamo="" inserts="" guards="" check="" its="" assumptions="" hold="" true.="" change="" ways,="" knows="" recompile="" automatically="" needed.="" optimized_model="" works="" feel="" free="" them="" optimized_model.conv1.weight.fill_(0.01)="" reflected="" hooks="" module="" tensor="" fully="" moment,="" eventually="" we="" finish="" development.="" serialization="" serialize="" state-dict="" point="" same="" parameters="" state="" hence="" equivalent.="" torch.save(optimized_model.state_dict(),="" "foo.pt")="" both="" these="" lines="" thing="" torch.save(model.state_dict(),="" currently.="" wish="" save="" object="" directly,="" instead.="" torch.save(optimized_model,="" torch.save(model,="" inference="" export="" inference,="" after="" generating="" torch.compile,="" warm-up="" steps="" before="" actual="" serving.="" mitigate="" latency="" spikes="" during="" initial="" addition,="" introducing="" called="" torch.export="" carefully="" exports="" guard="" infrastructure="" environments="" guaranteed="" predictable="" latency.="" changes="" program,="" especially="" have="" data="" dependent="" control-flow.="" exported_model="torch._dynamo.export(model," input)="" torch.save(exported_model,="" early="" stages="" catch="" talk="" pytorch="" conference="" more="" details.="" also="" engage="" topic="" our="" “ask="" engineers:="" 2.0="" live="" q&amp;a="" series”="" starting="" month="" (more="" details="" end="" post).="" debugging="" issues="" opaque="" hard="" debug.="" questions="" as:="" my="" crashing="" mode?="" accurate="" am="" i="" seeing="" speedups?="" produces="" crash="" diverging="" results="" from="" (beyond="" machine="" precision="" limits),="" unlikely="" code’s="" fault.="" however,="" understanding="" piece="" reason="" bug="" useful.="" aid="" reproducibility,="" created="" several="" tools="" logging="" capabilities="" one="" stands="" out:="" minifier.="" minifier="" reduces="" issue="" snippet="" reproduces="" original="" file="" github="" minified="" team="" fix="" easily="" quickly.="" speedups="" expect,="" torch._dynamo.explain="" tool="" explains="" parts="" induced="" call="" “graph="" breaks”.="" breaks="" hinder="" speeding="" code,="" reducing="" number="" likely="" (up="" limit="" diminishing="" returns).="" read="" about="" troubleshooting="" guide.="" when="" looking="" was="" necessary="" support="" generality="" key="" requirement="" supporting="" shapes,="" allowing="" take="" tensors="" sizes="" inducing="" recompilation="" every="" shape="" changes.="" today,="" limited="" rapid="" progress.="" featured="" stable="" release.="" gated="" behind="" argument,="" progress="" feature="" branch="" (symbolic-shapes),="" successfully="" bert_pytorch="" training="" symbolic="" torchinductor.="" coverage.="" example,="" let’s="" common="" setting="" where="" helpful="" -="" text="" generation="" language="" models.="" see="" even="" dynamically="" 4="" all="" way="" 256,="" able="" consistently="" outperform="" 40%.="" workaround="" pad="" nearest="" power="" two.="" charts="" below,="" incurs="" significant="" overhead,="" significantly="" compilation="" time.="" moreover,="" padding="" sometimes="" non-trivial="" correctly.="" 2.0’s="" mode,="" best="" ease="" current="" evolving="" rapidly="" may="" temporarily="" regress="" land="" fundamental="" improvements="" infrastructure.="" latest="" updates="" found="" here.="" distributed="" summary,="" torch.distributed’s="" two="" main="" wrappers="" well="" distributeddataparallel="" (ddp)="" fullyshardeddataparallel="" (fsdp)="" provide="" improved="" utilization="" relative="" caveats="" limitations.="" amp="" left:="" fsdp="" over="" (amp="" precision).="" right:="" substantially="" lesser="" than="" ddp="" relies="" overlapping="" allreduce="" communications="" backwards="" computation,="" grouping="" smaller="" per-layer="" operations="" ‘buckets’="" greater="" efficiency.="" aotautograd="" functions="" prevent="" communication="" overlap,="" combined="" naively="" ddp,="" recovered="" separate="" subgraphs="" ‘bucket’="" ops="" happen="" outside="" in-between="" subgraphs.="" currently="" requires="" static_graph="False." post="" approach="" +="" torchdynamo.="" itself="" “beta”="" higher="" level="" system="" complexity="" due="" ability="" submodules="" wrapped="" configuration="" options.="" variety="" popular="" configured="" use_original_params="True" flag.="" compatibility="" particular="" configurations="" expected="" actively="" improved,="" prioritized="" filed.="" specify="" auto_wrap_policy="" argument="" indicate="" their="" wrap="" together="" instance="" used="" sharding,="" manually="" instances.="" many="" transformer="" ‘transformer="" block’="" thus="" only="" block="" needs="" materialized="" dynamo="" insert="" boundary="" instance,="" allow="" forward="" (and="" backward)="" graphs="" parallel="" computation.="" wrapping="" instances,="" falls="" back="" operating="" similarly="" bucketing.="" gradients="" reduced="" operation,="" compute="" overlap="" eager.="" been="" tested="" functionality="" performance.="" developer="" vendor="" 2.0,="" simplify="" (compiler)="" integration="" experience.="" this,="" focused="" operators="" simplifying="" semantics="" operator="" set="" bring="" backend.="" graphical="" form,="" pt2="" stack="" looks="" like:="" middle="" diagram,="" captures="" autograd="" logic="" ahead-of-time="" fashion,="" producing="" fx="" format.="" hardened="" decompositions="" (i.e.="" implementations="" written="" operators)="" leveraged="" required="" implement.="" selectively="" rewriting="" complicated="" including="" mutations="" views="" via="" process="" functionalization,="" guaranteeing="" metadata="" information="" propagation="" formulas.="" progress;="" goal="" primitive="" ~250="" simplified="" semantics,="" primtorch,="" vendors="" leverage="" opt-in="" to)="" order="" integrations.="" set,="" backends="" choose="" integrate="" layer,="" immediately="" aotautograd)="" inductor="" (the="" lower="" layer).="" describe="" considerations="" choice="" future="" around="" mixtures="" backends.="" existing="" stacks="" find="" easiest="" backend,="" receiving="" aten="" prims="" ir.="" note="" aotautograd,="" since="" apply="" part="" merely="" skip="" backward-specific="" targeting="" inference.="" directly="" inductor.="" produced="" consists="" prim="" operations,="" further="" lowers="" down="" loop="" provides="" lowerings="" loop-level="" ir="" pointwise,="" reduction,="" scatter="" gather="" window="" operations.="" creates="" fusion="" groups,="" does="" indexing="" simplification,="" dimension="" collapsing,="" tunes="" iteration="" efficient="" generation.="" providing="" mapping="" hardware-specific="" currently,="" backends:="" (1)="" c++="" generates="" multithreaded="" cpu="" (2)="" triton="" performant="" gpu="" inspiration="" alternate="" mixture="" interface="" (coming="" soon)="" built="" utilities="" partitioning="" contain="" supported="" executing="" remainder="" eagerly.="" extended="" “mixture="" backends,”="" configuring="" portions="" yet="" contract="" expose="" support,="" preferences="" patterns="" operators,="" etc.="" remains="" ongoing="" work,="" welcome="" feedback="" adopters.="" thoughts="" super="" excited="" direction="" we’ve="" taken="" beyond.="" road="" release="" going="" rough,="" come="" join="" journey="" early-on.="" interested="" deep-diving="" contributing="" compiler,="" please="" continue="" below="" includes="" how="" started="" (e.g.,="" tutorials,="" benchmarks,="" faqs)="" ask="" series="" month.="" additional="" resources="" include:="" getting="" tutorials="" documentation="" discussions="" accelerating="" hugging="" face="" timm="" author:="" mark="" saroufim="" torch.compile()="" makes="" easy="" experiment="" make="" faster="" line="" decorator="" torch.compile().="" either="" nn.module="" drop-in="" replacement="" torch.jit.script()="" requiring="" any="" source="" expect="" between="" 30%-2x="" vast="" majority="" you’re="" already="" running.="" opt_module="torch.compile(module)" torch.compile="" supports="" arbitrary="" control="" flow,="" mutation="" comes="" experimental="" we’re="" so="" development="" 2.0.="" announcement="" benchmarked="" open="" gotten="" substantial="" ranging="" 30%="" 2x="" https:="" github.com="" 681.="" tricks="" here,="" pip="" installed="" libraries="" like="" huggingface="" transformers,="" accelerate="" rwightman="" pytorch-image-models="" ran="" that’s="" it’s="" rare="" convenience,="" core="" finds="" exciting.="" requirements="" (newer="" gpus="" drastically="" performance)="" pip3="" install="" numpy="" --pre="" --force-reinstall="" --index-url="" download.pytorch.org="" whl="" nightly="" cu117="" optional:="" verify="" installation="" git="" clone="" cd="" python="" verify_dynamo.py="" docker="" dependencies="" binaries="" download="" pull="" ghcr.io="" pytorch-nightly="" ad="" hoc="" experiments="" just="" sure="" container="" --gpus="" -it="" pytorch-nightly:latest="" bin="" bash="" saroufim’s="" blog="" he="" walks="" through="" tutorial="" today.="" build="" breadth-first="" people="" source.="" hub="" ended="" being="" extremely="" valuable="" benchmarking="" us,="" ensuring="" optimization="" actually="" show="" exactly="" replicate="" those="" are.="" enjoy="" perf="" all,="" can’t="" claim="" unless="" faster.="" faqs="" pt="" 2.0?="" version.="" offers="" eager-mode="" experience,="" adding="" torch.compile.="" potential="" speedup="" instead="" 1.14?="" 1.14="" been.="" were="" releasing="" new="" features="" believe="" meaningfully="" pytorch,="" calling="" requirements?="" nightlies:="" cuda="" 11.8="" torchvision="" torchaudio="" cu118="" 11.7="" backwards-compatible="" 1.x?="" yes,="" require="" workflows.="" optimize="" stack,="" smoothly="" rest="" opt-in,="" compiler.="" enabled="" default?="" released="" explicitly="" migrate="" pt1.x="" pt2.0?="" working="" as-is="" migrations.="" introduced="" start="" line:="" primarily="" observed="" training,="" def="" train(model,="" dataloader):="" batch="" dataloader:="" run_epoch(model,="" batch)="" infer(model,="" input):="" return="" model(\*\*input)="" pt2.0="" answer="" question="" (2).="" doing="" differently="" box,="" 1.x,="" i.e.="" executed="" other.="" goes="" 3="" execution:="" acquisition:="" rewritten="" blocks="" “flattened”="" (which="" control-flow="" unsupported="" constructs)="" fall="" eager-mode.="" lowering:="" decomposed="" constituent="" kernels="" specific="" chosen="" compilation,="" corresponding="" low-level="" device-specific="" components="" add="" pt?="" bytecode.="" maintains="" ensure="" generated="" valid="" (read="" more)="" generate="" backward="" captured="" more).="" primtorch="" decompose="" simpler="" elementary="" [backend]="" accelerators.="" execution="" openmp="" support?="" complete="" torchinductor,="" growing="" list="" torchdynamo.list_backends().="" 15%="" fp32="" 80%="" precision.="" ddp’s="" communication-computation="" dynamo’s="" partial="" creation.="" learn="" developments?="" developers="" forum="" place="" who="" them.="" slower="" mode!="" hits="" breaks.="" something="" innocuous="" print="" statement="" model’s="" triggers="" break.="" ways="" diagnose="" previously-running="" debug="" it?="" techniques="" triage="" failing,="" printing="" logs:="" pytorch.org="" docs="" torch.compiler_faq.html#why-is-my-code-crashing.="" hosting="" sessions="" community="" deeper="" dialogue="" experts.="" calendar="" topics="" throughout="" year.="" unable="" attend:="" 1)="" recorded="" viewing="" 2)="" attend="" dev="" infra="" office="" hours="" friday="" 10="" pst="" @="" wiki="" dev-infra-office-hours.="" click="" dates,="" times,="" descriptions="" links.="" disclaimer:="" share="" personal="" information,="" last="" name,="" company="" joining="" submitting="" questions.="" host="" (install,="" setup,="" 2.0)="" suraj="" subramanian="" linkedin="" |="" twitter="" profiling="" bert="" maher="" deep="" dive="" natalia="" gimelshein,="" bao="" sherlock="" huang="" gimelshein="" extend="" functorch:="" jax-like="" composable="" function="" transforms="" anjali="" chourdia="" samantha="" andow="" michael="" voznesensky="" rethinking="" loading="" torchdata:datapipes="" dataloader2="" kevin="" tse="" (+="" torcheval,="" torchsnapshot)="" ananth="" subramaniam="" contribute="" zain="" rizvi,="" svetlana="" karslioglu="" carl="" parker="" rizvi="" calculating="" maximum="" size="" edward="" yang="" elias="" ellison="" export:="" whole="" capture="" suo="" yanan="" cao="" 2-d="" parallelism="" distributedtensor="" wanchao="" liang="" alisson="" gusatti="" azzolini="" torchrec="" production="" dennis="" van="" der="" staay,="" andrew="" gu="" rohan="" varma="" staay="" on-device="" raziel="" alvarez="" guevara="" torchmultimodal="" intro="" scaling="" kartikay="" khandelwal="" bettertransformers="" face),="" serving="" 1="" hamid="" shojanazeri="" constable="" watch="" talks="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/featured-img-pytorch-2.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/featured-img-pytorch-2.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch 2.x">
+<meta property="og:description" content="Overview
+
+Introducing PyTorch 2.0, our first steps toward the next generation 2-series release of PyTorch. Over the last few years we have innovated and iterated from PyTorch 1.0 to the most recent 1.13 and moved to the newly formed PyTorch Foundation, part of the Linux Foundation.
+
+PyTorch’s biggest strength beyond our amazing community is that we continue as a first-class Python integration, imperative style, simplicity of the API and options. PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood. We are able to provide faster performance and support for Dynamic Shapes and Distributed.
+
+Below you will find all the information you need to better understand what PyTorch 2.0 is, where it’s going and more importantly how to get started today (e.g., tutorial, requirements, models, common FAQs). There is still a lot to learn and develop but we are looking forward to community feedback and contributions to make the 2-series better and thank you all who have made the 1-series so successful.
+
+PyTorch 2.x: faster, more pythonic and as dynamic as ever
+
+Today, we announce torch.compile, a feature that pushes PyTorch performance to new heights and starts the move for parts of PyTorch from C++ back into Python. We believe that this is a substantial new direction for PyTorch – hence we call it 2.0. torch.compile is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+  
+    TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture
+  
+  
+    AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block.
+
+
+TorchDynamo, AOTAutograd, PrimTorch and TorchInductor are written in Python and support dynamic shapes (i.e. the ability to send in Tensors of different sizes without inducing a recompilation), making them flexible, easily hackable and lowering the barrier of entry for developers and vendors.
+
+To validate these technologies, we used a diverse set of 163 open-source models across various machine learning domains. We built this benchmark carefully to include tasks such as Image Classification, Object Detection, Image Generation, various NLP tasks such as Language Modeling, Q&amp;A, Sequence Classification, Recommender Systems and Reinforcement Learning. We separate the benchmarks into three categories:
+
+
+  46 models from HuggingFace Transformers
+  61 models from TIMM: a collection of state-of-the-art PyTorch image models by Ross Wightman
+  56 models from TorchBench: a curated set of popular code-bases from across github
+
+
+
+
+We don’t modify these open-source models except to add a torch.compile call wrapping them.
+
+We then measure speedups and validate accuracy across these models. Since speedups can be dependent on data-type, we measure speedups on both float32 and Automatic Mixed Precision (AMP). We report an uneven weighted average speedup of 0.75 * AMP + 0.25 * float32 since we find AMP is more common in practice.
+
+Across these 163 open-source models torch.compile works 93% of time, and the model runs 43% faster in training on an NVIDIA A100 GPU. At Float32 precision, it runs 21% faster on average and at AMP Precision it runs 51% faster on average.
+
+Caveats: On a desktop-class GPU such as a NVIDIA 3090, we’ve measured that speedups are lower than on server-class GPUs such as A100. As of today, our default backend TorchInductor supports CPUs and NVIDIA Volta and Ampere GPUs. It does not (yet) support other GPUs, xPUs or older NVIDIA GPUs.
+
+
+
+  Speedups for torch.compile against eager mode on an NVIDIA A100 GPU  
+
+
+Try it: torch.compile is in the early stages of development. Starting today, you can try out torch.compile in the nightly binaries. We expect to ship the first stable 2.0 release in early March 2023.
+
+In the roadmap of PyTorch 2.x we hope to push the compiled mode further and further in terms of performance and scalability. Some of this work is in-flight, as we talked about at the Conference today. Some of this work has not started yet. Some of this work is what we hope to see, but don’t have the bandwidth to do ourselves. If you are interested in contributing, come chat with us at the Ask the Engineers: 2.0 Live Q&amp;A Series starting this month (details at the end of this post) and/or via Github / Forums.
+
+
+
+
+
+Testimonials
+
+Here is what some of PyTorch’s users have to say about our new direction:
+
+Sylvain Gugger the primary maintainer of HuggingFace transformers:
+
+“With just one line of code to add, PyTorch 2.0 gives a speedup between 1.5x and 2.x in training Transformers models. This is the most exciting thing since mixed precision training was introduced!”
+
+Ross Wightman the primary maintainer of TIMM (one of the largest vision model hubs within the PyTorch ecosystem):
+
+“It just works out of the box with majority of TIMM models for inference and train workloads with no code changes”
+
+Luca Antiga the CTO of Lightning AI and one of the primary maintainers of PyTorch Lightning
+
+“PyTorch 2.0 embodies the future of deep learning frameworks. The possibility to capture a PyTorch program with effectively no user intervention and get massive on-device speedups and program manipulation out of the box unlocks a whole new dimension for AI developers.”
+
+Motivation
+
+Our philosophy on PyTorch has always been to keep flexibility and hackability our top priority, and performance as a close second. We strived for:
+
+
+  High-Performance eager execution
+  Pythonic internals
+  Good abstractions for Distributed, Autodiff, Data loading, Accelerators, etc.
+
+
+Since we launched PyTorch in 2017, hardware accelerators (such as GPUs) have become ~15x faster in compute and about ~2x faster in the speed of memory access. So, to keep eager execution at high-performance, we’ve had to move substantial parts of PyTorch internals into C++. Moving internals into C++ makes them less hackable and increases the barrier of entry for code contributions.
+
+From day one, we knew the performance limits of eager execution. In July 2017, we started our first research project into developing a Compiler for PyTorch. The compiler needed to make a PyTorch program fast, but not at the cost of the PyTorch experience. Our key criteria was to preserve certain kinds of flexibility – support for dynamic shapes and dynamic programs which researchers use in various stages of exploration.
+
+
+
+
+
+Technology Overview
+
+Over the years, we’ve built several compiler projects within PyTorch. Let us break down the compiler into three parts:
+
+
+  graph acquisition
+  graph lowering
+  graph compilation
+
+
+Graph acquisition was the harder challenge when building a PyTorch compiler.
+
+In the past 5 years, we built torch.jit.trace, TorchScript, FX tracing, Lazy Tensors. But none of them felt like they gave us everything we wanted. Some were flexible but not fast, some were fast but not flexible and some were neither fast nor flexible. Some had bad user-experience (like being silently wrong). While TorchScript was promising, it needed substantial changes to your code and the code that your code depended on. This need for substantial change in code made it a non-starter for a lot of PyTorch users.
+
+
+
+The PyTorch compilation process
+
+
+TorchDynamo: Acquiring Graphs reliably and fast
+
+Earlier this year, we started working on TorchDynamo, an approach that uses a CPython feature introduced in PEP-0523 called the Frame Evaluation API. We took a data-driven approach to validate its effectiveness on Graph Capture. We used 7,000+ Github projects written in PyTorch as our validation set. While TorchScript and others struggled to even acquire the graph 50% of the time, often with a big overhead, TorchDynamo acquired the graph 99% of the time, correctly, safely and with negligible overhead – without needing any changes to the original code. This is when we knew that we finally broke through the barrier that we were struggling with for many years in terms of flexibility and speed.
+
+TorchInductor: fast codegen using a define-by-run IR
+
+For a new compiler backend for PyTorch 2.0, we took inspiration from how our users were writing high performance custom kernels: increasingly using the Triton language. We also wanted a compiler backend that used similar abstractions to PyTorch eager, and was general purpose enough to support the wide breadth of features in PyTorch. TorchInductor uses a pythonic define-by-run loop level IR to automatically map PyTorch models into generated Triton code on GPUs and C++/OpenMP on CPUs. TorchInductor’s core loop level IR contains only ~50 operators, and it is implemented in Python, making it easily hackable and extensible.
+
+AOTAutograd: reusing Autograd for ahead-of-time graphs
+
+For PyTorch 2.0, we knew that we wanted to accelerate training. Thus, it was critical that we not only captured user-level code, but also that we captured backpropagation. Moreover, we knew that we wanted to reuse the existing battle-tested PyTorch autograd system. AOTAutograd leverages PyTorch’s torch_dispatch extensibility mechanism to trace through our Autograd engine, allowing us to capture the backwards pass “ahead-of-time”. This allows us to accelerate both our forwards and backwards pass using TorchInductor.
+
+PrimTorch: Stable Primitive operators
+
+Writing a backend for PyTorch is challenging. PyTorch has 1200+ operators, and 2000+ if you consider various overloads for each operator.
+
+
+
+   A breakdown of the 2000+ PyTorch operators  
+
+
+Hence, writing a backend or a cross-cutting feature becomes a draining endeavor. Within the PrimTorch project, we are working on defining smaller and stable operator sets. PyTorch programs can consistently be lowered to these operator sets. We aim to define two operator sets:
+
+
+  Prim ops with about ~250 operators, which are fairly low-level. These are suited for compilers because they are low-level enough that you need to fuse them back together to get good performance.
+  ATen ops with about ~750 canonical operators and suited for exporting as-is. These are suited for backends that already integrate at the ATen level or backends that won’t have compilation to recover performance from a lower-level operator set like Prim ops.
+
+
+We discuss more about this topic below in the Developer/Vendor Experience section
+
+User Experience
+
+We introduce a simple function torch.compile that wraps your model and returns a compiled model.
+
+compiled_model = torch.compile(model)
+
+
+This compiled_model holds a reference to your model and compiles the forward function to a more optimized version. When compiling the model, we give a few knobs to adjust it:
+
+def torch.compile(model: Callable,
+  *,
+  mode: Optional[str] = " default",="" dynamic:="" bool="False," fullgraph:bool="False," backend:="" union[str,="" callable]="inductor" ,="" #="" advanced="" backend="" options="" go="" here="" as="" kwargs="" **kwargs="" )="" -&gt;="" torch._dynamo.nnoptimizedmodule="" mode="" specifies="" what="" the="" compiler="" should="" be="" optimizing="" while="" compiling.="" default="" is="" a="" preset="" that="" tries="" to="" compile="" efficiently="" without="" taking="" too="" long="" or="" using="" extra="" memory.="" other="" modes="" such="" reduce-overhead="" reduce="" framework="" overhead="" by="" lot="" more,="" but="" cost="" small="" amount="" of="" max-autotune="" compiles="" for="" time,="" trying="" give="" you="" fastest="" code="" it="" can="" generate.="" dynamic="" whether="" enable="" path="" shapes.="" certain="" optimizations="" cannot="" applied="" shaped="" programs.="" making="" explicit="" want="" compiled="" program="" with="" shapes="" static="" will="" help="" better="" optimized="" code.="" fullgraph="" similar="" numba’s="" nopython.="" entire="" into="" single="" graph="" gives="" an="" error="" explaining="" why="" could="" not="" do="" so.="" most="" users="" don’t="" need="" use="" this="" mode.="" if="" are="" very="" performance="" conscious,="" then="" try="" it.="" which="" use.="" default,="" torchinductor="" used,="" there="" few="" others="" available.="" experience="" intends="" deliver="" benefits="" and="" flexibility="" in="" mental="" model="" get="" each="" now,="" let="" us="" look="" at="" full="" example="" compiling="" real="" running="" (with="" random="" data)="" import="" torch="" torchvision.models="" models="" optimizer="torch.optim.SGD(model.parameters()," lr="0.01)" compiled_model="torch.compile(model)" x="torch.randn(16," 3,="" 224,="" 224).cuda()="" optimizer.zero_grad()="" out="compiled_model(x)" out.sum().backward()="" optimizer.step()="" first="" time="" run="" compiled_model(x),="" model.="" hence,="" takes="" longer="" run.="" subsequent="" runs="" fast.="" has="" presets="" tune="" different="" ways.="" might="" slow="" because="" overhead.="" or,="" large="" barely="" fits="" depending="" on="" your="" need,="" api="" final="" default:="" optimizes="" models,="" low="" compile-time="" no="" memory="" usage="" torch.compile(model)="" reduce-overhead:="" uses="" some="" helps="" speed="" up="" torch.compile(model,="" max-autotune:="" produce="" model,="" reading="" updating="" attributes="" accessing="" work="" they="" would="" eager="" access="" modify="" (such="" model.conv1.weight)="" generally="" would.="" completely="" safe="" sound="" terms="" correction.="" torchdynamo="" inserts="" guards="" check="" its="" assumptions="" hold="" true.="" change="" ways,="" knows="" recompile="" automatically="" needed.="" optimized_model="" works="" feel="" free="" them="" optimized_model.conv1.weight.fill_(0.01)="" reflected="" hooks="" module="" tensor="" fully="" moment,="" eventually="" we="" finish="" development.="" serialization="" serialize="" state-dict="" point="" same="" parameters="" state="" hence="" equivalent.="" torch.save(optimized_model.state_dict(),="" "foo.pt")="" both="" these="" lines="" thing="" torch.save(model.state_dict(),="" currently.="" wish="" save="" object="" directly,="" instead.="" torch.save(optimized_model,="" torch.save(model,="" inference="" export="" inference,="" after="" generating="" torch.compile,="" warm-up="" steps="" before="" actual="" serving.="" mitigate="" latency="" spikes="" during="" initial="" addition,="" introducing="" called="" torch.export="" carefully="" exports="" guard="" infrastructure="" environments="" guaranteed="" predictable="" latency.="" changes="" program,="" especially="" have="" data="" dependent="" control-flow.="" exported_model="torch._dynamo.export(model," input)="" torch.save(exported_model,="" early="" stages="" catch="" talk="" pytorch="" conference="" more="" details.="" also="" engage="" topic="" our="" “ask="" engineers:="" 2.0="" live="" q&amp;a="" series”="" starting="" month="" (more="" details="" end="" post).="" debugging="" issues="" opaque="" hard="" debug.="" questions="" as:="" my="" crashing="" mode?="" accurate="" am="" i="" seeing="" speedups?="" produces="" crash="" diverging="" results="" from="" (beyond="" machine="" precision="" limits),="" unlikely="" code’s="" fault.="" however,="" understanding="" piece="" reason="" bug="" useful.="" aid="" reproducibility,="" created="" several="" tools="" logging="" capabilities="" one="" stands="" out:="" minifier.="" minifier="" reduces="" issue="" snippet="" reproduces="" original="" file="" github="" minified="" team="" fix="" easily="" quickly.="" speedups="" expect,="" torch._dynamo.explain="" tool="" explains="" parts="" induced="" call="" “graph="" breaks”.="" breaks="" hinder="" speeding="" code,="" reducing="" number="" likely="" (up="" limit="" diminishing="" returns).="" read="" about="" troubleshooting="" guide.="" when="" looking="" was="" necessary="" support="" generality="" key="" requirement="" supporting="" shapes,="" allowing="" take="" tensors="" sizes="" inducing="" recompilation="" every="" shape="" changes.="" today,="" limited="" rapid="" progress.="" featured="" stable="" release.="" gated="" behind="" argument,="" progress="" feature="" branch="" (symbolic-shapes),="" successfully="" bert_pytorch="" training="" symbolic="" torchinductor.="" coverage.="" example,="" let’s="" common="" setting="" where="" helpful="" -="" text="" generation="" language="" models.="" see="" even="" dynamically="" 4="" all="" way="" 256,="" able="" consistently="" outperform="" 40%.="" workaround="" pad="" nearest="" power="" two.="" charts="" below,="" incurs="" significant="" overhead,="" significantly="" compilation="" time.="" moreover,="" padding="" sometimes="" non-trivial="" correctly.="" 2.0’s="" mode,="" best="" ease="" current="" evolving="" rapidly="" may="" temporarily="" regress="" land="" fundamental="" improvements="" infrastructure.="" latest="" updates="" found="" here.="" distributed="" summary,="" torch.distributed’s="" two="" main="" wrappers="" well="" distributeddataparallel="" (ddp)="" fullyshardeddataparallel="" (fsdp)="" provide="" improved="" utilization="" relative="" caveats="" limitations.="" amp="" left:="" fsdp="" over="" (amp="" precision).="" right:="" substantially="" lesser="" than="" ddp="" relies="" overlapping="" allreduce="" communications="" backwards="" computation,="" grouping="" smaller="" per-layer="" operations="" ‘buckets’="" greater="" efficiency.="" aotautograd="" functions="" prevent="" communication="" overlap,="" combined="" naively="" ddp,="" recovered="" separate="" subgraphs="" ‘bucket’="" ops="" happen="" outside="" in-between="" subgraphs.="" currently="" requires="" static_graph="False." post="" approach="" +="" torchdynamo.="" itself="" “beta”="" higher="" level="" system="" complexity="" due="" ability="" submodules="" wrapped="" configuration="" options.="" variety="" popular="" configured="" use_original_params="True" flag.="" compatibility="" particular="" configurations="" expected="" actively="" improved,="" prioritized="" filed.="" specify="" auto_wrap_policy="" argument="" indicate="" their="" wrap="" together="" instance="" used="" sharding,="" manually="" instances.="" many="" transformer="" ‘transformer="" block’="" thus="" only="" block="" needs="" materialized="" dynamo="" insert="" boundary="" instance,="" allow="" forward="" (and="" backward)="" graphs="" parallel="" computation.="" wrapping="" instances,="" falls="" back="" operating="" similarly="" bucketing.="" gradients="" reduced="" operation,="" compute="" overlap="" eager.="" been="" tested="" functionality="" performance.="" developer="" vendor="" 2.0,="" simplify="" (compiler)="" integration="" experience.="" this,="" focused="" operators="" simplifying="" semantics="" operator="" set="" bring="" backend.="" graphical="" form,="" pt2="" stack="" looks="" like:="" middle="" diagram,="" captures="" autograd="" logic="" ahead-of-time="" fashion,="" producing="" fx="" format.="" hardened="" decompositions="" (i.e.="" implementations="" written="" operators)="" leveraged="" required="" implement.="" selectively="" rewriting="" complicated="" including="" mutations="" views="" via="" process="" functionalization,="" guaranteeing="" metadata="" information="" propagation="" formulas.="" progress;="" goal="" primitive="" ~250="" simplified="" semantics,="" primtorch,="" vendors="" leverage="" opt-in="" to)="" order="" integrations.="" set,="" backends="" choose="" integrate="" layer,="" immediately="" aotautograd)="" inductor="" (the="" lower="" layer).="" describe="" considerations="" choice="" future="" around="" mixtures="" backends.="" existing="" stacks="" find="" easiest="" backend,="" receiving="" aten="" prims="" ir.="" note="" aotautograd,="" since="" apply="" part="" merely="" skip="" backward-specific="" targeting="" inference.="" directly="" inductor.="" produced="" consists="" prim="" operations,="" further="" lowers="" down="" loop="" provides="" lowerings="" loop-level="" ir="" pointwise,="" reduction,="" scatter="" gather="" window="" operations.="" creates="" fusion="" groups,="" does="" indexing="" simplification,="" dimension="" collapsing,="" tunes="" iteration="" efficient="" generation.="" providing="" mapping="" hardware-specific="" currently,="" backends:="" (1)="" c++="" generates="" multithreaded="" cpu="" (2)="" triton="" performant="" gpu="" inspiration="" alternate="" mixture="" interface="" (coming="" soon)="" built="" utilities="" partitioning="" contain="" supported="" executing="" remainder="" eagerly.="" extended="" “mixture="" backends,”="" configuring="" portions="" yet="" contract="" expose="" support,="" preferences="" patterns="" operators,="" etc.="" remains="" ongoing="" work,="" welcome="" feedback="" adopters.="" thoughts="" super="" excited="" direction="" we’ve="" taken="" beyond.="" road="" release="" going="" rough,="" come="" join="" journey="" early-on.="" interested="" deep-diving="" contributing="" compiler,="" please="" continue="" below="" includes="" how="" started="" (e.g.,="" tutorials,="" benchmarks,="" faqs)="" ask="" series="" month.="" additional="" resources="" include:="" getting="" tutorials="" documentation="" discussions="" accelerating="" hugging="" face="" timm="" author:="" mark="" saroufim="" torch.compile()="" makes="" easy="" experiment="" make="" faster="" line="" decorator="" torch.compile().="" either="" nn.module="" drop-in="" replacement="" torch.jit.script()="" requiring="" any="" source="" expect="" between="" 30%-2x="" vast="" majority="" you’re="" already="" running.="" opt_module="torch.compile(module)" torch.compile="" supports="" arbitrary="" control="" flow,="" mutation="" comes="" experimental="" we’re="" so="" development="" 2.0.="" announcement="" benchmarked="" open="" gotten="" substantial="" ranging="" 30%="" 2x="" https:="" github.com="" 681.="" tricks="" here,="" pip="" installed="" libraries="" like="" huggingface="" transformers,="" accelerate="" rwightman="" pytorch-image-models="" ran="" that’s="" it’s="" rare="" convenience,="" core="" finds="" exciting.="" requirements="" (newer="" gpus="" drastically="" performance)="" pip3="" install="" numpy="" --pre="" --force-reinstall="" --index-url="" download.pytorch.org="" whl="" nightly="" cu117="" optional:="" verify="" installation="" git="" clone="" cd="" python="" verify_dynamo.py="" docker="" dependencies="" binaries="" download="" pull="" ghcr.io="" pytorch-nightly="" ad="" hoc="" experiments="" just="" sure="" container="" --gpus="" -it="" pytorch-nightly:latest="" bin="" bash="" saroufim’s="" blog="" he="" walks="" through="" tutorial="" today.="" build="" breadth-first="" people="" source.="" hub="" ended="" being="" extremely="" valuable="" benchmarking="" us,="" ensuring="" optimization="" actually="" show="" exactly="" replicate="" those="" are.="" enjoy="" perf="" all,="" can’t="" claim="" unless="" faster.="" faqs="" pt="" 2.0?="" version.="" offers="" eager-mode="" experience,="" adding="" torch.compile.="" potential="" speedup="" instead="" 1.14?="" 1.14="" been.="" were="" releasing="" new="" features="" believe="" meaningfully="" pytorch,="" calling="" requirements?="" nightlies:="" cuda="" 11.8="" torchvision="" torchaudio="" cu118="" 11.7="" backwards-compatible="" 1.x?="" yes,="" require="" workflows.="" optimize="" stack,="" smoothly="" rest="" opt-in,="" compiler.="" enabled="" default?="" name="" released="" explicitly="" migrate="" pt1.x="" pt2.0?="" working="" as-is="" migrations.="" introduced="" start="" line:="" primarily="" observed="" training,="" def="" train(model,="" dataloader):="" batch="" dataloader:="" run_epoch(model,="" batch)="" infer(model,="" input):="" return="" model(\*\*input)="" pt2.0="" answer="" question="" (2).="" doing="" differently="" box,="" 1.x,="" i.e.="" executed="" other.="" goes="" 3="" execution:="" acquisition:="" rewritten="" blocks="" “flattened”="" (which="" control-flow="" unsupported="" constructs)="" fall="" eager-mode.="" lowering:="" decomposed="" constituent="" kernels="" specific="" chosen="" compilation,="" corresponding="" low-level="" device-specific="" components="" add="" pt?="" bytecode.="" maintains="" ensure="" generated="" valid="" (read="" more)="" generate="" backward="" captured="" more).="" primtorch="" decompose="" simpler="" elementary="" [backend]="" accelerators.="" execution="" openmp="" support?="" complete="" torchinductor,="" growing="" list="" torchdynamo.list_backends().="" 15%="" fp32="" 80%="" precision.="" ddp’s="" communication-computation="" dynamo’s="" partial="" creation.="" learn="" developments?="" developers="" forum="" place="" who="" them.="" slower="" mode!="" hits="" breaks.="" something="" innocuous="" print="" statement="" model’s="" triggers="" break.="" ways="" diagnose="" previously-running="" debug="" it?="" techniques="" triage="" failing,="" printing="" logs:="" pytorch.org="" docs="" torch.compiler_faq.html#why-is-my-code-crashing.="" hosting="" sessions="" community="" deeper="" dialogue="" experts.="" calendar="" topics="" throughout="" year.="" unable="" attend:="" 1)="" recorded="" viewing="" 2)="" attend="" dev="" infra="" office="" hours="" friday="" 10="" pst="" @="" wiki="" dev-infra-office-hours.="" click="" dates,="" times,="" descriptions="" links.="" disclaimer:="" share="" personal="" information,="" last="" name,="" company="" joining="" submitting="" questions.="" host="" (install,="" setup,="" 2.0)="" suraj="" subramanian="" linkedin="" |="" twitter="" profiling="" bert="" maher="" deep="" dive="" natalia="" gimelshein,="" bao="" sherlock="" huang="" gimelshein="" extend="" functorch:="" jax-like="" composable="" function="" transforms="" anjali="" chourdia="" samantha="" andow="" michael="" voznesensky="" rethinking="" loading="" torchdata:datapipes="" dataloader2="" kevin="" tse="" (+="" torcheval,="" torchsnapshot)="" ananth="" subramaniam="" contribute="" zain="" rizvi,="" svetlana="" karslioglu="" carl="" parker="" rizvi="" calculating="" maximum="" size="" edward="" yang="" elias="" ellison="" export:="" whole="" capture="" suo="" yanan="" cao="" 2-d="" parallelism="" distributedtensor="" wanchao="" liang="" alisson="" gusatti="" azzolini="" torchrec="" production="" dennis="" van="" der="" staay,="" andrew="" gu="" rohan="" varma="" staay="" on-device="" raziel="" alvarez="" guevara="" torchmultimodal="" intro="" scaling="" kartikay="" khandelwal="" bettertransformers="" face),="" serving="" 1="" hamid="" shojanazeri="" constable="" watch="" talks="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch 2.x">
+<meta name="twitter:description" content="Overview
+
+Introducing PyTorch 2.0, our first steps toward the next generation 2-series release of PyTorch. Over the last few years we have innovated and iterated from PyTorch 1.0 to the most recent 1.13 and moved to the newly formed PyTorch Foundation, part of the Linux Foundation.
+
+PyTorch’s biggest strength beyond our amazing community is that we continue as a first-class Python integration, imperative style, simplicity of the API and options. PyTorch 2.0 offers the same eager-mode development and user experience, while fundamentally changing and supercharging how PyTorch operates at compiler level under the hood. We are able to provide faster performance and support for Dynamic Shapes and Distributed.
+
+Below you will find all the information you need to better understand what PyTorch 2.0 is, where it’s going and more importantly how to get started today (e.g., tutorial, requirements, models, common FAQs). There is still a lot to learn and develop but we are looking forward to community feedback and contributions to make the 2-series better and thank you all who have made the 1-series so successful.
+
+PyTorch 2.x: faster, more pythonic and as dynamic as ever
+
+Today, we announce torch.compile, a feature that pushes PyTorch performance to new heights and starts the move for parts of PyTorch from C++ back into Python. We believe that this is a substantial new direction for PyTorch – hence we call it 2.0. torch.compile is a fully additive (and optional) feature and hence 2.0 is 100% backward compatible by definition.
+
+Underpinning torch.compile are new technologies – TorchDynamo, AOTAutograd, PrimTorch and TorchInductor.
+
+
+  
+    TorchDynamo captures PyTorch programs safely using Python Frame Evaluation Hooks and is a significant innovation that was a result of 5 years of our R&amp;D into safe graph capture
+  
+  
+    AOTAutograd overloads PyTorch’s autograd engine as a tracing autodiff for generating ahead-of-time backward traces.
+  
+  PrimTorch canonicalizes ~2000+ PyTorch operators down to a closed set of ~250 primitive operators that developers can target to build a complete PyTorch backend. This substantially lowers the barrier of writing a PyTorch feature or backend.
+  TorchInductor is a deep learning compiler that generates fast code for multiple accelerators and backends. For NVIDIA and AMD GPUs, it uses OpenAI Triton as a key building block.
+
+
+TorchDynamo, AOTAutograd, PrimTorch and TorchInductor are written in Python and support dynamic shapes (i.e. the ability to send in Tensors of different sizes without inducing a recompilation), making them flexible, easily hackable and lowering the barrier of entry for developers and vendors.
+
+To validate these technologies, we used a diverse set of 163 open-source models across various machine learning domains. We built this benchmark carefully to include tasks such as Image Classification, Object Detection, Image Generation, various NLP tasks such as Language Modeling, Q&amp;A, Sequence Classification, Recommender Systems and Reinforcement Learning. We separate the benchmarks into three categories:
+
+
+  46 models from HuggingFace Transformers
+  61 models from TIMM: a collection of state-of-the-art PyTorch image models by Ross Wightman
+  56 models from TorchBench: a curated set of popular code-bases from across github
+
+
+
+
+We don’t modify these open-source models except to add a torch.compile call wrapping them.
+
+We then measure speedups and validate accuracy across these models. Since speedups can be dependent on data-type, we measure speedups on both float32 and Automatic Mixed Precision (AMP). We report an uneven weighted average speedup of 0.75 * AMP + 0.25 * float32 since we find AMP is more common in practice.
+
+Across these 163 open-source models torch.compile works 93% of time, and the model runs 43% faster in training on an NVIDIA A100 GPU. At Float32 precision, it runs 21% faster on average and at AMP Precision it runs 51% faster on average.
+
+Caveats: On a desktop-class GPU such as a NVIDIA 3090, we’ve measured that speedups are lower than on server-class GPUs such as A100. As of today, our default backend TorchInductor supports CPUs and NVIDIA Volta and Ampere GPUs. It does not (yet) support other GPUs, xPUs or older NVIDIA GPUs.
+
+
+
+  Speedups for torch.compile against eager mode on an NVIDIA A100 GPU  
+
+
+Try it: torch.compile is in the early stages of development. Starting today, you can try out torch.compile in the nightly binaries. We expect to ship the first stable 2.0 release in early March 2023.
+
+In the roadmap of PyTorch 2.x we hope to push the compiled mode further and further in terms of performance and scalability. Some of this work is in-flight, as we talked about at the Conference today. Some of this work has not started yet. Some of this work is what we hope to see, but don’t have the bandwidth to do ourselves. If you are interested in contributing, come chat with us at the Ask the Engineers: 2.0 Live Q&amp;A Series starting this month (details at the end of this post) and/or via Github / Forums.
+
+
+
+
+
+Testimonials
+
+Here is what some of PyTorch’s users have to say about our new direction:
+
+Sylvain Gugger the primary maintainer of HuggingFace transformers:
+
+“With just one line of code to add, PyTorch 2.0 gives a speedup between 1.5x and 2.x in training Transformers models. This is the most exciting thing since mixed precision training was introduced!”
+
+Ross Wightman the primary maintainer of TIMM (one of the largest vision model hubs within the PyTorch ecosystem):
+
+“It just works out of the box with majority of TIMM models for inference and train workloads with no code changes”
+
+Luca Antiga the CTO of Lightning AI and one of the primary maintainers of PyTorch Lightning
+
+“PyTorch 2.0 embodies the future of deep learning frameworks. The possibility to capture a PyTorch program with effectively no user intervention and get massive on-device speedups and program manipulation out of the box unlocks a whole new dimension for AI developers.”
+
+Motivation
+
+Our philosophy on PyTorch has always been to keep flexibility and hackability our top priority, and performance as a close second. We strived for:
+
+
+  High-Performance eager execution
+  Pythonic internals
+  Good abstractions for Distributed, Autodiff, Data loading, Accelerators, etc.
+
+
+Since we launched PyTorch in 2017, hardware accelerators (such as GPUs) have become ~15x faster in compute and about ~2x faster in the speed of memory access. So, to keep eager execution at high-performance, we’ve had to move substantial parts of PyTorch internals into C++. Moving internals into C++ makes them less hackable and increases the barrier of entry for code contributions.
+
+From day one, we knew the performance limits of eager execution. In July 2017, we started our first research project into developing a Compiler for PyTorch. The compiler needed to make a PyTorch program fast, but not at the cost of the PyTorch experience. Our key criteria was to preserve certain kinds of flexibility – support for dynamic shapes and dynamic programs which researchers use in various stages of exploration.
+
+
+
+
+
+Technology Overview
+
+Over the years, we’ve built several compiler projects within PyTorch. Let us break down the compiler into three parts:
+
+
+  graph acquisition
+  graph lowering
+  graph compilation
+
+
+Graph acquisition was the harder challenge when building a PyTorch compiler.
+
+In the past 5 years, we built torch.jit.trace, TorchScript, FX tracing, Lazy Tensors. But none of them felt like they gave us everything we wanted. Some were flexible but not fast, some were fast but not flexible and some were neither fast nor flexible. Some had bad user-experience (like being silently wrong). While TorchScript was promising, it needed substantial changes to your code and the code that your code depended on. This need for substantial change in code made it a non-starter for a lot of PyTorch users.
+
+
+
+The PyTorch compilation process
+
+
+TorchDynamo: Acquiring Graphs reliably and fast
+
+Earlier this year, we started working on TorchDynamo, an approach that uses a CPython feature introduced in PEP-0523 called the Frame Evaluation API. We took a data-driven approach to validate its effectiveness on Graph Capture. We used 7,000+ Github projects written in PyTorch as our validation set. While TorchScript and others struggled to even acquire the graph 50% of the time, often with a big overhead, TorchDynamo acquired the graph 99% of the time, correctly, safely and with negligible overhead – without needing any changes to the original code. This is when we knew that we finally broke through the barrier that we were struggling with for many years in terms of flexibility and speed.
+
+TorchInductor: fast codegen using a define-by-run IR
+
+For a new compiler backend for PyTorch 2.0, we took inspiration from how our users were writing high performance custom kernels: increasingly using the Triton language. We also wanted a compiler backend that used similar abstractions to PyTorch eager, and was general purpose enough to support the wide breadth of features in PyTorch. TorchInductor uses a pythonic define-by-run loop level IR to automatically map PyTorch models into generated Triton code on GPUs and C++/OpenMP on CPUs. TorchInductor’s core loop level IR contains only ~50 operators, and it is implemented in Python, making it easily hackable and extensible.
+
+AOTAutograd: reusing Autograd for ahead-of-time graphs
+
+For PyTorch 2.0, we knew that we wanted to accelerate training. Thus, it was critical that we not only captured user-level code, but also that we captured backpropagation. Moreover, we knew that we wanted to reuse the existing battle-tested PyTorch autograd system. AOTAutograd leverages PyTorch’s torch_dispatch extensibility mechanism to trace through our Autograd engine, allowing us to capture the backwards pass “ahead-of-time”. This allows us to accelerate both our forwards and backwards pass using TorchInductor.
+
+PrimTorch: Stable Primitive operators
+
+Writing a backend for PyTorch is challenging. PyTorch has 1200+ operators, and 2000+ if you consider various overloads for each operator.
+
+
+
+   A breakdown of the 2000+ PyTorch operators  
+
+
+Hence, writing a backend or a cross-cutting feature becomes a draining endeavor. Within the PrimTorch project, we are working on defining smaller and stable operator sets. PyTorch programs can consistently be lowered to these operator sets. We aim to define two operator sets:
+
+
+  Prim ops with about ~250 operators, which are fairly low-level. These are suited for compilers because they are low-level enough that you need to fuse them back together to get good performance.
+  ATen ops with about ~750 canonical operators and suited for exporting as-is. These are suited for backends that already integrate at the ATen level or backends that won’t have compilation to recover performance from a lower-level operator set like Prim ops.
+
+
+We discuss more about this topic below in the Developer/Vendor Experience section
+
+User Experience
+
+We introduce a simple function torch.compile that wraps your model and returns a compiled model.
+
+compiled_model = torch.compile(model)
+
+
+This compiled_model holds a reference to your model and compiles the forward function to a more optimized version. When compiling the model, we give a few knobs to adjust it:
+
+def torch.compile(model: Callable,
+  *,
+  mode: Optional[str] = " default",="" dynamic:="" bool="False," fullgraph:bool="False," backend:="" union[str,="" callable]="inductor" ,="" #="" advanced="" backend="" options="" go="" here="" as="" kwargs="" **kwargs="" )="" -&gt;="" torch._dynamo.nnoptimizedmodule="" mode="" specifies="" what="" the="" compiler="" should="" be="" optimizing="" while="" compiling.="" default="" is="" a="" preset="" that="" tries="" to="" compile="" efficiently="" without="" taking="" too="" long="" or="" using="" extra="" memory.="" other="" modes="" such="" reduce-overhead="" reduce="" framework="" overhead="" by="" lot="" more,="" but="" cost="" small="" amount="" of="" max-autotune="" compiles="" for="" time,="" trying="" give="" you="" fastest="" code="" it="" can="" generate.="" dynamic="" whether="" enable="" path="" shapes.="" certain="" optimizations="" cannot="" applied="" shaped="" programs.="" making="" explicit="" want="" compiled="" program="" with="" shapes="" static="" will="" help="" better="" optimized="" code.="" fullgraph="" similar="" numba’s="" nopython.="" entire="" into="" single="" graph="" gives="" an="" error="" explaining="" why="" could="" not="" do="" so.="" most="" users="" don’t="" need="" use="" this="" mode.="" if="" are="" very="" performance="" conscious,="" then="" try="" it.="" which="" use.="" default,="" torchinductor="" used,="" there="" few="" others="" available.="" experience="" intends="" deliver="" benefits="" and="" flexibility="" in="" mental="" model="" get="" each="" now,="" let="" us="" look="" at="" full="" example="" compiling="" real="" running="" (with="" random="" data)="" import="" torch="" torchvision.models="" models="" optimizer="torch.optim.SGD(model.parameters()," lr="0.01)" compiled_model="torch.compile(model)" x="torch.randn(16," 3,="" 224,="" 224).cuda()="" optimizer.zero_grad()="" out="compiled_model(x)" out.sum().backward()="" optimizer.step()="" first="" time="" run="" compiled_model(x),="" model.="" hence,="" takes="" longer="" run.="" subsequent="" runs="" fast.="" has="" presets="" tune="" different="" ways.="" might="" slow="" because="" overhead.="" or,="" large="" barely="" fits="" depending="" on="" your="" need,="" api="" final="" default:="" optimizes="" models,="" low="" compile-time="" no="" memory="" usage="" torch.compile(model)="" reduce-overhead:="" uses="" some="" helps="" speed="" up="" torch.compile(model,="" max-autotune:="" produce="" model,="" reading="" updating="" attributes="" accessing="" work="" they="" would="" eager="" access="" modify="" (such="" model.conv1.weight)="" generally="" would.="" completely="" safe="" sound="" terms="" correction.="" torchdynamo="" inserts="" guards="" check="" its="" assumptions="" hold="" true.="" change="" ways,="" knows="" recompile="" automatically="" needed.="" optimized_model="" works="" feel="" free="" them="" optimized_model.conv1.weight.fill_(0.01)="" reflected="" hooks="" module="" tensor="" fully="" moment,="" eventually="" we="" finish="" development.="" serialization="" serialize="" state-dict="" point="" same="" parameters="" state="" hence="" equivalent.="" torch.save(optimized_model.state_dict(),="" "foo.pt")="" both="" these="" lines="" thing="" torch.save(model.state_dict(),="" currently.="" wish="" save="" object="" directly,="" instead.="" torch.save(optimized_model,="" torch.save(model,="" inference="" export="" inference,="" after="" generating="" torch.compile,="" warm-up="" steps="" before="" actual="" serving.="" mitigate="" latency="" spikes="" during="" initial="" addition,="" introducing="" called="" torch.export="" carefully="" exports="" guard="" infrastructure="" environments="" guaranteed="" predictable="" latency.="" changes="" program,="" especially="" have="" data="" dependent="" control-flow.="" exported_model="torch._dynamo.export(model," input)="" torch.save(exported_model,="" early="" stages="" catch="" talk="" pytorch="" conference="" more="" details.="" also="" engage="" topic="" our="" “ask="" engineers:="" 2.0="" live="" q&amp;a="" series”="" starting="" month="" (more="" details="" end="" post).="" debugging="" issues="" opaque="" hard="" debug.="" questions="" as:="" my="" crashing="" mode?="" accurate="" am="" i="" seeing="" speedups?="" produces="" crash="" diverging="" results="" from="" (beyond="" machine="" precision="" limits),="" unlikely="" code’s="" fault.="" however,="" understanding="" piece="" reason="" bug="" useful.="" aid="" reproducibility,="" created="" several="" tools="" logging="" capabilities="" one="" stands="" out:="" minifier.="" minifier="" reduces="" issue="" snippet="" reproduces="" original="" file="" github="" minified="" team="" fix="" easily="" quickly.="" speedups="" expect,="" torch._dynamo.explain="" tool="" explains="" parts="" induced="" call="" “graph="" breaks”.="" breaks="" hinder="" speeding="" code,="" reducing="" number="" likely="" (up="" limit="" diminishing="" returns).="" read="" about="" troubleshooting="" guide.="" when="" looking="" was="" necessary="" support="" generality="" key="" requirement="" supporting="" shapes,="" allowing="" take="" tensors="" sizes="" inducing="" recompilation="" every="" shape="" changes.="" today,="" limited="" rapid="" progress.="" featured="" stable="" release.="" gated="" behind="" argument,="" progress="" feature="" branch="" (symbolic-shapes),="" successfully="" bert_pytorch="" training="" symbolic="" torchinductor.="" coverage.="" example,="" let’s="" common="" setting="" where="" helpful="" -="" text="" generation="" language="" models.="" see="" even="" dynamically="" 4="" all="" way="" 256,="" able="" consistently="" outperform="" 40%.="" workaround="" pad="" nearest="" power="" two.="" charts="" below,="" incurs="" significant="" overhead,="" significantly="" compilation="" time.="" moreover,="" padding="" sometimes="" non-trivial="" correctly.="" 2.0’s="" mode,="" best="" ease="" current="" evolving="" rapidly="" may="" temporarily="" regress="" land="" fundamental="" improvements="" infrastructure.="" latest="" updates="" found="" here.="" distributed="" summary,="" torch.distributed’s="" two="" main="" wrappers="" well="" distributeddataparallel="" (ddp)="" fullyshardeddataparallel="" (fsdp)="" provide="" improved="" utilization="" relative="" caveats="" limitations.="" amp="" left:="" fsdp="" over="" (amp="" precision).="" right:="" substantially="" lesser="" than="" ddp="" relies="" overlapping="" allreduce="" communications="" backwards="" computation,="" grouping="" smaller="" per-layer="" operations="" ‘buckets’="" greater="" efficiency.="" aotautograd="" functions="" prevent="" communication="" overlap,="" combined="" naively="" ddp,="" recovered="" separate="" subgraphs="" ‘bucket’="" ops="" happen="" outside="" in-between="" subgraphs.="" currently="" requires="" static_graph="False." post="" approach="" +="" torchdynamo.="" itself="" “beta”="" higher="" level="" system="" complexity="" due="" ability="" submodules="" wrapped="" configuration="" options.="" variety="" popular="" configured="" use_original_params="True" flag.="" compatibility="" particular="" configurations="" expected="" actively="" improved,="" prioritized="" filed.="" specify="" auto_wrap_policy="" argument="" indicate="" their="" wrap="" together="" instance="" used="" sharding,="" manually="" instances.="" many="" transformer="" ‘transformer="" block’="" thus="" only="" block="" needs="" materialized="" dynamo="" insert="" boundary="" instance,="" allow="" forward="" (and="" backward)="" graphs="" parallel="" computation.="" wrapping="" instances,="" falls="" back="" operating="" similarly="" bucketing.="" gradients="" reduced="" operation,="" compute="" overlap="" eager.="" been="" tested="" functionality="" performance.="" developer="" vendor="" 2.0,="" simplify="" (compiler)="" integration="" experience.="" this,="" focused="" operators="" simplifying="" semantics="" operator="" set="" bring="" backend.="" graphical="" form,="" pt2="" stack="" looks="" like:="" middle="" diagram,="" captures="" autograd="" logic="" ahead-of-time="" fashion,="" producing="" fx="" format.="" hardened="" decompositions="" (i.e.="" implementations="" written="" operators)="" leveraged="" required="" implement.="" selectively="" rewriting="" complicated="" including="" mutations="" views="" via="" process="" functionalization,="" guaranteeing="" metadata="" information="" propagation="" formulas.="" progress;="" goal="" primitive="" ~250="" simplified="" semantics,="" primtorch,="" vendors="" leverage="" opt-in="" to)="" order="" integrations.="" set,="" backends="" choose="" integrate="" layer,="" immediately="" aotautograd)="" inductor="" (the="" lower="" layer).="" describe="" considerations="" choice="" future="" around="" mixtures="" backends.="" existing="" stacks="" find="" easiest="" backend,="" receiving="" aten="" prims="" ir.="" note="" aotautograd,="" since="" apply="" part="" merely="" skip="" backward-specific="" targeting="" inference.="" directly="" inductor.="" produced="" consists="" prim="" operations,="" further="" lowers="" down="" loop="" provides="" lowerings="" loop-level="" ir="" pointwise,="" reduction,="" scatter="" gather="" window="" operations.="" creates="" fusion="" groups,="" does="" indexing="" simplification,="" dimension="" collapsing,="" tunes="" iteration="" efficient="" generation.="" providing="" mapping="" hardware-specific="" currently,="" backends:="" (1)="" c++="" generates="" multithreaded="" cpu="" (2)="" triton="" performant="" gpu="" inspiration="" alternate="" mixture="" interface="" (coming="" soon)="" built="" utilities="" partitioning="" contain="" supported="" executing="" remainder="" eagerly.="" extended="" “mixture="" backends,”="" configuring="" portions="" yet="" contract="" expose="" support,="" preferences="" patterns="" operators,="" etc.="" remains="" ongoing="" work,="" welcome="" feedback="" adopters.="" thoughts="" super="" excited="" direction="" we’ve="" taken="" beyond.="" road="" release="" going="" rough,="" come="" join="" journey="" early-on.="" interested="" deep-diving="" contributing="" compiler,="" please="" continue="" below="" includes="" how="" started="" (e.g.,="" tutorials,="" benchmarks,="" faqs)="" ask="" series="" month.="" additional="" resources="" include:="" getting="" tutorials="" documentation="" discussions="" accelerating="" hugging="" face="" timm="" author:="" mark="" saroufim="" torch.compile()="" makes="" easy="" experiment="" make="" faster="" line="" decorator="" torch.compile().="" either="" nn.module="" drop-in="" replacement="" torch.jit.script()="" requiring="" any="" source="" expect="" between="" 30%-2x="" vast="" majority="" you’re="" already="" running.="" opt_module="torch.compile(module)" torch.compile="" supports="" arbitrary="" control="" flow,="" mutation="" comes="" experimental="" we’re="" so="" development="" 2.0.="" announcement="" benchmarked="" open="" gotten="" substantial="" ranging="" 30%="" 2x="" https:="" github.com="" 681.="" tricks="" here,="" pip="" installed="" libraries="" like="" huggingface="" transformers,="" accelerate="" rwightman="" pytorch-image-models="" ran="" that’s="" it’s="" rare="" convenience,="" core="" finds="" exciting.="" requirements="" (newer="" gpus="" drastically="" performance)="" pip3="" install="" numpy="" --pre="" --force-reinstall="" --index-url="" download.pytorch.org="" whl="" nightly="" cu117="" optional:="" verify="" installation="" git="" clone="" cd="" python="" verify_dynamo.py="" docker="" dependencies="" binaries="" download="" pull="" ghcr.io="" pytorch-nightly="" ad="" hoc="" experiments="" just="" sure="" container="" --gpus="" -it="" pytorch-nightly:latest="" bin="" bash="" saroufim’s="" blog="" he="" walks="" through="" tutorial="" today.="" build="" breadth-first="" people="" source.="" hub="" ended="" being="" extremely="" valuable="" benchmarking="" us,="" ensuring="" optimization="" actually="" show="" exactly="" replicate="" those="" are.="" enjoy="" perf="" all,="" can’t="" claim="" unless="" faster.="" faqs="" pt="" 2.0?="" version.="" offers="" eager-mode="" experience,="" adding="" torch.compile.="" potential="" speedup="" instead="" 1.14?="" 1.14="" been.="" were="" releasing="" new="" features="" believe="" meaningfully="" pytorch,="" calling="" requirements?="" nightlies:="" cuda="" 11.8="" torchvision="" torchaudio="" cu118="" 11.7="" backwards-compatible="" 1.x?="" yes,="" require="" workflows.="" optimize="" stack,="" smoothly="" rest="" opt-in,="" compiler.="" enabled="" default?="" released="" explicitly="" migrate="" pt1.x="" pt2.0?="" working="" as-is="" migrations.="" introduced="" start="" line:="" primarily="" observed="" training,="" def="" train(model,="" dataloader):="" batch="" dataloader:="" run_epoch(model,="" batch)="" infer(model,="" input):="" return="" model(\*\*input)="" pt2.0="" answer="" question="" (2).="" doing="" differently="" box,="" 1.x,="" i.e.="" executed="" other.="" goes="" 3="" execution:="" acquisition:="" rewritten="" blocks="" “flattened”="" (which="" control-flow="" unsupported="" constructs)="" fall="" eager-mode.="" lowering:="" decomposed="" constituent="" kernels="" specific="" chosen="" compilation,="" corresponding="" low-level="" device-specific="" components="" add="" pt?="" bytecode.="" maintains="" ensure="" generated="" valid="" (read="" more)="" generate="" backward="" captured="" more).="" primtorch="" decompose="" simpler="" elementary="" [backend]="" accelerators.="" execution="" openmp="" support?="" complete="" torchinductor,="" growing="" list="" torchdynamo.list_backends().="" 15%="" fp32="" 80%="" precision.="" ddp’s="" communication-computation="" dynamo’s="" partial="" creation.="" learn="" developments?="" developers="" forum="" place="" who="" them.="" slower="" mode!="" hits="" breaks.="" something="" innocuous="" print="" statement="" model’s="" triggers="" break.="" ways="" diagnose="" previously-running="" debug="" it?="" techniques="" triage="" failing,="" printing="" logs:="" pytorch.org="" docs="" torch.compiler_faq.html#why-is-my-code-crashing.="" hosting="" sessions="" community="" deeper="" dialogue="" experts.="" calendar="" topics="" throughout="" year.="" unable="" attend:="" 1)="" recorded="" viewing="" 2)="" attend="" dev="" infra="" office="" hours="" friday="" 10="" pst="" @="" wiki="" dev-infra-office-hours.="" click="" dates,="" times,="" descriptions="" links.="" disclaimer:="" share="" personal="" information,="" last="" name,="" company="" joining="" submitting="" questions.="" host="" (install,="" setup,="" 2.0)="" suraj="" subramanian="" linkedin="" |="" twitter="" profiling="" bert="" maher="" deep="" dive="" natalia="" gimelshein,="" bao="" sherlock="" huang="" gimelshein="" extend="" functorch:="" jax-like="" composable="" function="" transforms="" anjali="" chourdia="" samantha="" andow="" michael="" voznesensky="" rethinking="" loading="" torchdata:datapipes="" dataloader2="" kevin="" tse="" (+="" torcheval,="" torchsnapshot)="" ananth="" subramaniam="" contribute="" zain="" rizvi,="" svetlana="" karslioglu="" carl="" parker="" rizvi="" calculating="" maximum="" size="" edward="" yang="" elias="" ellison="" export:="" whole="" capture="" suo="" yanan="" cao="" 2-d="" parallelism="" distributedtensor="" wanchao="" liang="" alisson="" gusatti="" azzolini="" torchrec="" production="" dennis="" van="" der="" staay,="" andrew="" gu="" rohan="" varma="" staay="" on-device="" raziel="" alvarez="" guevara="" torchmultimodal="" intro="" scaling="" kartikay="" khandelwal="" bettertransformers="" face),="" serving="" 1="" hamid="" shojanazeri="" constable="" watch="" talks="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="get-started">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+ <div class="hello-bar">
+  <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+</div>
+<div class="container-fluid header-holder get-started-header">
+  <div class="container">
+    
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中有什么新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+  </div>
+</div>
+
+
+    <div class="main-background get-started-background"></div>
+
+    
+
+    <div class="jumbotron jumbotron-fluid on-dark-background">
+      <div class="container">
+        <h1>开始使用</h1>
+
+        <p class="lead">选择偏好并运行命令以本地安装 PyTorch，或快速使用支持的云平台之一开始。</p>
+      </div>
+    </div>
+
+    <div class="main-content-wrapper">
+      <div class="main-content">
+        <div class="container-fluid nav-menu-wrapper">
+          <div class="container">
+            <nav class="navbar navbar-expand-lg navbar-light main-content-menu">
+              <ul class="navbar-nav">
+                
+                <li class="nav-item nav-select">
+                  <a class="nav-link get-started-nav-link" data-id="get-started-locally" href="/get-started/locally/">本地启动</a>
+                </li>
+                
+                <li class="nav-item nav-select">
+                  <a class="nav-link get-started-nav-link" data-id="pytorch" href="/get-started/pytorch-2.0/">PyTorch 2.x</a>
+                </li>
+                
+                <li class="nav-item nav-select">
+                  <a class="nav-link get-started-nav-link" data-id="get-started-via-cloud-partners" href="/get-started/cloud-partners/">通过云合作伙伴启动</a>
+                </li>
+                
+                <li class="nav-item nav-select">
+                  <a class="nav-link get-started-nav-link" data-id="previous-versions" href="/get-started/previous-versions/">PyTorch 先前版本</a>
+                </li>
+                
+                <li class="nav-item nav-select">
+                  <a class="nav-link get-started-nav-link" data-id="mobile" href="/get-started/executorch/">执行火炬</a>
+                </li>
+                
+              </ul>
+            </nav>
+          </div>
+        </div>
+
+        <div class="container">
+           <div class="row pytorch-2">
+    <div class="col-md-3"><div class="sticky-top get-started-locally-sidebar">
+    <p id="get-started-shortcuts-menu">快捷键</p>
+    <ul id="get-started-locally-sidebar-list">
+      <li>
+        <a href="#overview">概述</a>
+      </li>
+      <li>
+        <a href="#pytorch-2x-faster-more-pythonic-and-as-dynamic-as-ever">PyTorch 2.x：更快、更 Pythonic，一如既往地动态</a>
+      </li>
+      <li>
+        <a href="#testimonials">用户评价</a>
+      </li>
+  
+      <li>
+        <a href="#motivation">动机</a>
+      </li>
+      <li>
+        <a href="#technology-overview">技术概述</a>
+      </li>
+      <li>
+        <a href="#user-experience">用户体验</a>
+      </li>
+  
+      <li>
+        <a href="#distributed">分布式</a>
+      </li>
+  
+      <li>
+        <a href="#developervendor-experience">开发者/供应商体验</a>
+      </li>
+  
+      <li>
+        <a href="#final-thoughts">总结</a>
+      </li>
+      <li>
+        <a href="#accelerating-hugging-face-and-timm-models-with-pytorch-20">使用 Pytorch 2.0 加速 Hugging Face 和 Timm 模型</a>
+      </li>
+      <li>
+        <a href="#requirements">要求</a>
+      </li>
+      <li>
+        <a href="#getting-started">开始使用</a>
+      </li>
+      <li>
+        <a href="#faqs">常见问题</a>
+      </li>
+      <li>
+        <a href="#ask-the-engineers-20-live-qa-series">询问工程师 2.0 直播问答系列</a>
+      </li>
+      <li>
+        <a href="#watch-the-talks-from-pytorch-conference">观看 PyTorch 大会上的演讲</a>
+      </li>
+    </ul>
+  </div>
+  </div>
+    <div class="col-md-8 offset-md-1" style="font-family: Verdana;">
+      <div class="article-wrapper" data-id="">
+        <article class="pytorch-article"><h2 id="overview">概述</h2>
+
+<p>介绍 PyTorch 2.0，这是我们迈向下一代 PyTorch 2 系列发布的初步步骤。在过去的几年里，我们从 PyTorch 1.0 创新迭代到最新的 1.13 版本，并加入了新成立的 PyTorch 基金会，该基金会是 Linux 基金会的一部分。</p>
+
+<p>除了我们惊人的社区之外，PyTorch 最大的优势在于我们继续作为一流的 Python 集成，命令式风格，API 简单性和选项。PyTorch 2.0 提供了相同的急切模式开发和用户体验，同时在底层编译器级别对 PyTorch 的运行方式进行了根本性的改变和增强。我们能够提供更快的性能和对动态形状和分布式支持。</p>
+
+<p>下面您将找到所有您需要了解 PyTorch 2.0 是什么，它将走向何方以及更重要的是如何今天开始（例如，教程、要求、模型、常见问题解答）的信息。还有很多东西要学习和开发，但我们期待社区的反馈和贡献，以使 2 系列更好，并感谢所有使 1 系列如此成功的人。</p>
+
+<h2 id="pytorch-2x-faster-more-pythonic-and-as-dynamic-as-ever">PyTorch 2.x：更快、更 Pythonic，一如既往地动态</h2>
+
+<p>今天，我们宣布 <code class="language-plaintext highlighter-rouge">torch.compile</code>，这是一个将 PyTorch 性能提升到新高度并开始将 PyTorch 的部分从 C++重新带回 Python 的功能。我们相信这是 PyTorch 的一个重大新方向——因此我们称之为 2.0。 <code class="language-plaintext highlighter-rouge">torch.compile</code> 是一个完全可添加（且可选）的功能，因此 2.0 在定义上 100%向后兼容。</p>
+
+<p>支撑 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的是新技术——TorchDynamo、AOTAutograd、PrimTorch 和 TorchInductor。</p>
+
+<ul>
+  <li>
+    <p><strong>TorchDynamo</strong> 使用 Python 帧评估钩子安全地捕获 PyTorch 程序，这是我们 5 年研发成果的一个重大创新，该创新实现了安全图捕获。</p>
+  </li>
+  <li>
+    <p><strong>AOTAutograd</strong> 覆盖了 PyTorch 的 autograd 引擎，作为生成提前时间反向跟踪的跟踪自动微分。</p>
+  </li>
+  <li><strong>PrimTorch</strong> 将超过 2000 个 PyTorch 算子归约到约 250 个基本算子的封闭集合中，开发者可以针对这些算子构建完整的 PyTorch 后端。这大大降低了编写 PyTorch 功能或后端的门槛。</li>
+  <li><strong>TorchInductor</strong> 是一个深度学习编译器，为多个加速器和后端生成快速代码。对于 NVIDIA 和 AMD GPU，它使用 OpenAI Triton 作为关键构建块。</li>
+</ul>
+
+<p>TorchDynamo、AOTAutograd、PrimTorch 和 TorchInductor 是用 Python 编写的，并支持动态形状（即发送不同大小的张量而无需重新编译的能力），这使得它们灵活、易于修改，降低了开发者和供应商的入门门槛。</p>
+
+<p>为了验证这些技术，我们使用了涵盖各种机器学习领域的163个开源模型。我们精心构建了这个基准，包括图像分类、目标检测、图像生成、各种自然语言处理任务，如语言模型、问答、序列分类、推荐系统和强化学习。我们将基准分为三个类别：</p>
+
+<ul style="margin: 1.5rem 0 1.5rem 0;">
+  <li>46 个来自 <a href="https://github.com/huggingface/transformers" target="_blank">HuggingFace Transformers</a> 的模型</li>
+  <li>61 个来自 <a href="https://github.com/rwightman/pytorch-image-models" target="_blank">TIMM</a> 的模型：由 Ross Wightman 收集的顶级 PyTorch 图像模型集合</li>
+  <li>56 个来自 <a href="https://github.com/pytorch/benchmark/" target="_blank">TorchBench</a> 的模型：来自 GitHub 各处的热门代码库精选集</li>
+</ul>
+
+<!--
+- 46 models from [HuggingFace Transformers](https://github.com/huggingface/transformers)
+- 61 models from [TIMM](https://github.com/rwightman/pytorch-image-models): a collection of state-of-the-art PyTorch image models by Ross Wightman
+- 56 models from [TorchBench](https://github.com/pytorch/benchmark/): a curated set of popular code-bases from across github -->
+
+<p>我们不会修改这些开源模型，除了添加一个包裹它们的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 调用。</p>
+
+<p>我们随后测量这些模型的加速效果并验证其准确性。由于加速效果可能依赖于数据类型，我们在 float32 和自动混合精度（AMP）上测量加速效果。我们报告了一个不均匀加权平均加速效果为 <em>0.75 * AMP + 0.25 * float32</em>，因为我们发现 AMP 在实践中更为常见。</p>
+
+<p>在这 163 个开源模型中，<code class="language-plaintext highlighter-rouge">torch.compile</code> 有 93% 的时间可以工作，模型在 NVIDIA A100 GPU 上的训练速度提高了 43%。在 Float32 精度下，平均快 21%，在 AMP 精度下平均快 51%。</p>
+
+<p><strong>注意事项：</strong> 在桌面级 GPU（如 NVIDIA 3090）上，我们测量到的加速效果低于服务器级 GPU（如 A100）。截至今天，我们的默认后端 TorchInductor 支持 CPU 和 NVIDIA Volta 及 Ampere GPU。它（目前）不支持其他 GPU、xPUs 或较老的 NVIDIA GPU。</p>
+
+<p>
+<img src="/assets/images/Caveats.jpg" width="90%">
+</p><center> <u>在 NVIDIA A100 GPU 上 torch.compile 相对于 eager 模式的加速效果</u> </center>
+<p></p>
+
+<p><strong>试试看：</strong><code class="language-plaintext highlighter-rouge">torch.compile</code> 目前处于开发初期。从今天开始，您可以在 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的 <code class="language-plaintext highlighter-rouge">nightly</code> 版本中尝试使用。我们预计将在 2023 年 3 月初发布第一个稳定的 2.0 版本。</p>
+
+<p>在 PyTorch 2.x 的路线图中，我们希望将编译模式在性能和可扩展性方面不断推进。其中一些工作正在进行中，正如我们在今天的会议上所讨论的那样。还有一些工作尚未开始。还有一些工作是我们希望看到的，但我们自己没有足够的时间和资源来完成。如果您有兴趣参与，请在这个月参加我们的 <strong> 工程师问答：2.0 直播问答系列 </strong>（详情见文章末尾）以及通过 Github / 论坛与我们交流。</p>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img2.png" width="90%">
+</p>
+
+<h3 id="testimonials">用户评价</h3>
+
+<p>下面是 PyTorch 用户对我们新方向的看法：</p>
+
+<p><strong> Sylvain Gugger</strong> 是 <strong> HuggingFace transformers 的主要维护者 </strong>：</p>
+
+<p><em>“只需添加一行代码，PyTorch 2.0 就能在训练 Transformers 模型时将速度提升 1.5 倍到 2 倍。这是自混合精度训练引入以来最令人兴奋的事情！”</em></p>
+
+<p><strong> Ross Wightman</strong> 是 <strong id="1"> TIMM 的主要维护者 </strong>（PyTorch 生态系统中最大的视觉模型中心之一）：</p>
+
+<p><em>“它可以直接使用，无需修改代码，对 TIMM 的大多数模型进行推理和训练工作负载”</em></p>
+
+<p><strong>Luca Antiga</strong> 是 <strong>Lightning AI 的 CTO，也是 <strong>PyTorch Lightning 的主要维护者</strong></strong></p>
+
+<p><em>“PyTorch 2.0 体现了深度学习框架的未来。无需用户干预即可捕获 PyTorch 程序，并实现开箱即用的设备端速度提升和程序操作，为 AI 开发者开辟了一个全新的维度。”</em></p>
+
+<h2 id="motivation">动机</h2>
+
+<p>我们对 PyTorch 的哲学一直是将灵活性和可修改性作为首要任务，性能紧随其后。我们努力实现：</p>
+
+<ol>
+  <li>高性能的即时执行</li>
+  <li>Pythonic 内部机制</li>
+  <li>分布式、自动微分、数据加载、加速器等良好的抽象</li>
+</ol>
+
+<p>自从 2017 年我们推出 PyTorch 以来，硬件加速器（如 GPU）在计算速度上提高了约 15 倍，在内存访问速度上提高了约 2 倍。为了保持急切执行的高性能，我们不得不将 PyTorch 内部的大量部分移入 C++。将内部结构移入 C++使得它们更难以修改，并增加了代码贡献的门槛。</p>
+
+<p>从一开始，我们就知道急切执行的性能限制。2017 年 7 月，我们开始了第一个针对 PyTorch 编译器的研究项目。这个编译器需要使 PyTorch 程序运行得更快，但不能以牺牲 PyTorch 体验为代价。我们的关键标准是保留某些类型的灵活性——支持动态形状和动态程序，研究人员在探索的各个阶段都会使用这些。</p>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img3.gif" width="90%">
+</p>
+
+<h2 id="technology-overview">技术概述</h2>
+
+<p>多年来，我们在 PyTorch 内部构建了多个编译器项目。让我们将编译器分解为三个部分：</p>
+
+<ul>
+  <li>图获取</li>
+  <li>图降低</li>
+  <li>图编译</li>
+</ul>
+
+<p>在构建 PyTorch 编译器时，图获取是更具挑战性的难题。</p>
+
+<p>在过去 5 年里，我们构建了 <code class="language-plaintext highlighter-rouge">torch.jit.trace</code>、TorchScript、FX 跟踪、Lazy Tensors。但它们都没有给我们带来我们想要的一切。有些是灵活的但不够快，有些是快的但不够灵活，有些则既不快也不灵活。有些用户体验不佳（比如静默错误）。虽然 TorchScript 有前景，但它需要对您的代码以及依赖的代码进行大量修改。这种对代码的大量修改使得它对许多 PyTorch 用户来说难以接受。</p>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img4.jpg" width="90%">
+</p><center><u>PyTorch 编译过程</u></center>
+<p></p>
+
+<h3 id="torchdynamo-acquiring-graphs-reliably-and-fast">TorchDynamo：可靠且快速地获取图</h3>
+
+<p>今年早些时候，我们开始着手开发 TorchDynamo，这是一种利用 CPython 中引入的 <a href="https://peps.python.org/pep-0523/">PEP-0523</a> 特性——帧评估 API 的方法。我们采用数据驱动的方法来验证其在图捕获方面的有效性。我们使用了超过 7,000 个用 PyTorch 编写的 GitHub 项目作为我们的验证集。当 TorchScript 和其他方法连获取图都只有 50%的成功率，并且通常伴随着很大的开销时，TorchDynamo 则能够以 99%的准确率、安全性和可忽略不计的开销获取图——而且无需对原始代码进行任何修改。这时，我们就知道我们终于突破了多年来在灵活性和速度方面所面临的障碍。</p>
+
+<h3 id="torchinductor-fast-codegen-using-a-define-by-run-ir">TorchInductor：使用定义-by-运行 IR 进行快速代码生成</h3>
+
+<p>为 PyTorch 2.0 开发的新编译器后端，我们受到了用户编写高性能自定义内核方式的启发：越来越多地使用 <a href="https://github.com/openai/triton">Triton</a> 语言。我们还希望编译器后端能够使用与 PyTorch eager 类似的抽象，并且足够通用，以支持 PyTorch 中的广泛功能。TorchInductor 使用 Pythonic 的 define-by-run 循环级 IR，自动将 PyTorch 模型映射到在 GPU 上生成的 Triton 代码以及在 CPU 上的 C++/OpenMP。TorchInductor 的核心循环级 IR 仅包含约 50 个运算符，并且是用 Python 实现的，这使得它易于修改和扩展。</p>
+
+<h3 id="aotautograd-reusing-autograd-for-ahead-of-time-graphs">AOTAutograd：重用 Autograd 进行编译时图</h3>
+
+<p>对于 PyTorch 2.0，我们知道我们想要加速训练。因此，我们不仅要捕获用户级别的代码，还要捕获反向传播。此外，我们知道我们想要重用现有的经过实战考验的 PyTorch autograd 系统。AOTAutograd 利用 PyTorch 的`<strong>torch_dispatch</strong>`可扩展机制来追踪我们的 Autograd 引擎，使我们能够“提前”捕获反向传递。这使我们能够使用 TorchInductor 加速我们的正向和反向传递。</p>
+
+<h3 id="primtorch-stable-primitive-operators">PrimTorch：稳定的原始运算符</h3>
+
+<p>为 PyTorch 编写后端具有挑战性。PyTorch 有 1200 多个运算符，如果考虑每个运算符的各种重载，则有 2000 多个。</p>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img5.png" width="90%">
+</p><center> <i> <u>2000 多个 PyTorch 运算符的分解</u></i> </center>
+<p></p>
+
+<p>因此，编写后端或跨切面功能变成了一项耗时的任务。在 PrimTorch 项目中，我们正在努力定义更小、更稳定的操作符集。PyTorch 程序可以持续地降低到这些操作符集。我们的目标是定义两个操作符集：</p>
+
+<ul>
+  <li>Prim ops 包含大约 ~250 个操作符，属于较低级别。这些操作符适合编译器，因为它们足够低级，需要将它们重新融合在一起才能获得良好的性能。</li>
+  <li>ATen ops 包含大约 ~750 个规范操作符，适合直接导出。这些操作符适合已经集成在 ATen 层或不会通过编译从较低级别的操作符集（如 Prim ops）中恢复性能的后端。</li>
+</ul>
+
+<p>我们将在下面的开发者/供应商体验部分进一步讨论这个话题。</p>
+
+<h2 id="user-experience">用户体验</h2>
+
+<p>我们引入了一个简单的函数 <code class="language-plaintext highlighter-rouge">torch.compile</code>，它包装您的模型并返回一个编译后的模型。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">compiled_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>此 <code class="language-plaintext highlighter-rouge">compiled_model</code> 持有对您的模型的引用，并将 <code class="language-plaintext highlighter-rouge">forward</code> 函数编译为更优化的版本。在编译模型时，我们提供了一些旋钮来调整它：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span>
+  <span class="o">*</span><span class="p">,</span>
+  <span class="n">mode</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s">"default"</span><span class="p">,</span>
+  <span class="n">dynamic</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="bp">False</span><span class="p">,</span>
+  <span class="n">fullgraph</span><span class="p">:</span><span class="nb">bool</span> <span class="o">=</span> <span class="bp">False</span><span class="p">,</span>
+  <span class="n">backend</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Callable</span><span class="p">]</span> <span class="o">=</span> <span class="s">"inductor"</span><span class="p">,</span>
+  <span class="c1"># advanced backend options go here as kwargs
+</span>  <span class="o">**</span><span class="n">kwargs</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">_dynamo</span><span class="p">.</span><span class="n">NNOptimizedModule</span>
+</code></pre></div></div>
+
+<ul>
+  <li>
+    <p><strong>模式 </strong> 指定编译器在编译时应该优化什么。</p>
+
+    <ul>
+      <li>默认模式是一个预设，它试图高效编译，同时不会花费太多时间编译或使用额外内存。</li>
+      <li>其他模式，如 <code class="language-plaintext highlighter-rouge">reduce-overhead</code>，可以大幅度减少框架开销，但会消耗少量额外内存。<code class="language-plaintext highlighter-rouge">max-autotune</code> 会长时间编译，试图生成尽可能快的代码。</li>
+    </ul>
+  </li>
+  <li><strong>dynamic</strong> 指定是否启用动态形状的代码路径。某些编译器优化无法应用于动态形状的程序。明确是否希望编译程序具有动态形状或静态形状将有助于编译器为您生成更好的优化代码。</li>
+  <li><strong>fullgraph</strong> 类似于 Numba 的 <code class="language-plaintext highlighter-rouge">nopython</code>。它将整个程序编译成一个单独的图或给出错误解释为什么无法这样做。大多数用户不需要使用此模式。如果您非常关注性能，那么您可以尝试使用它。</li>
+  <li><strong>后端</strong>指定要使用哪个编译器后端。默认情况下使用 TorchInductor，但还有其他几个可供选择。</li>
+</ul>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img6.png" width="90%">
+</p>
+
+<p>编译体验旨在在默认模式下提供最大化的好处和灵活性。以下是每个模式下的心理模型。</p>
+
+<p>现在，让我们来看一个编译真实模型并运行它的完整示例（使用随机数据）</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torchvision.models</span> <span class="k">as</span> <span class="n">models</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">models</span><span class="p">.</span><span class="n">resnet18</span><span class="p">().</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">optimizer</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">SGD</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+<span class="n">compiled_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">).</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">optimizer</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">()</span>
+<span class="n">out</span> <span class="o">=</span> <span class="n">compiled_model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="n">out</span><span class="p">.</span><span class="nb">sum</span><span class="p">().</span><span class="n">backward</span><span class="p">()</span>
+<span class="n">optimizer</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>第一次运行 <code class="language-plaintext highlighter-rouge">compiled_model(x)</code> 时，会编译模型。因此，运行时间较长。后续运行则很快。</p>
+
+<h3 id="modes">模式</h3>
+
+<p>编译器有一些预设，可以以不同的方式调整编译后的模型。你可能正在运行一个由于框架开销而运行缓慢的小型模型。或者，你可能正在运行一个几乎无法装入内存的大型模型。根据你的需求，你可能想使用不同的模式。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># API NOT FINAL
+# default: optimizes for large models, low compile-time
+#          and no extra memory usage
+</span><span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+
+<span class="c1"># reduce-overhead: optimizes to reduce the framework overhead
+#                and uses some extra memory. Helps speed up small models
+</span><span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s">"reduce-overhead"</span><span class="p">)</span>
+
+<span class="c1"># max-autotune: optimizes to produce the fastest model,
+#               but takes a very long time to compile
+</span><span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s">"max-autotune"</span><span class="p">)</span>
+
+</code></pre></div></div>
+
+<h3 id="reading-and-updating-attributes">读取和更新属性</h3>
+
+<p>访问模型属性的方式与急切模式相同。你可以像通常那样访问或修改模型的属性（如 <code class="language-plaintext highlighter-rouge">model.conv1.weight</code>）。这在代码修正方面是完全安全可靠的。TorchDynamo 会在代码中插入守卫来检查其假设是否成立。如果属性以某种方式发生变化，那么 TorchDynamo 就会知道需要自动重新编译。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># optimized_model works similar to model, feel free to access its attributes and modify them
+</span><span class="n">optimized_model</span><span class="p">.</span><span class="n">conv1</span><span class="p">.</span><span class="n">weight</span><span class="p">.</span><span class="n">fill_</span><span class="p">(</span><span class="mf">0.01</span><span class="p">)</span>
+
+<span class="c1"># this change is reflected in model
+</span></code></pre></div></div>
+
+<h3 id="hooks">钩子</h3>
+
+<p>模块和<a href="https://pytorch.org/docs/stable/notes/modules.html#module-hooks">钩子</a>目前还不能完全工作，但随着我们完成开发，它们最终会工作。</p>
+
+<h3 id="serialization">序列化</h3>
+
+<p>您可以序列化<code class="language-plaintext highlighter-rouge">优化模型的状态字典或<code class="language-plaintext highlighter-rouge">模型 。它们指向相同的参数和状态，因此是等效的。</code></code></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">torch</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">optimized_model</span><span class="p">.</span><span class="n">state_dict</span><span class="p">(),</span> <span class="s">"foo.pt"</span><span class="p">)</span>
+<span class="c1"># both these lines of code do the same thing
+</span><span class="n">torch</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">state_dict</span><span class="p">(),</span> <span class="s">"foo.pt"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>目前您不能序列化<code class="language-plaintext highlighter-rouge">优化模型 。如果您想直接保存对象，请保存<code class="language-plaintext highlighter-rouge">模型 。</code></code></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">torch</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">optimized_model</span><span class="p">,</span> <span class="s">"foo.pt"</span><span class="p">)</span> <span class="c1"># Error
+</span><span class="n">torch</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="s">"foo.pt"</span><span class="p">)</span>           <span class="c1"># Works
+</span></code></pre></div></div>
+
+<h3 id="inference-and-export">推理与导出</h3>
+
+<p>对于模型推理，在通过 torch.compile 生成编译后的模型后，在正式模型服务前运行一些预热步骤。这有助于减轻初始服务期间的延迟峰值。</p>
+
+<p>此外，我们将引入一个名为 <code class="language-plaintext highlighter-rouge">torch.export</code> 的模式，该模式会仔细导出整个模型和保障基础设施，以满足需要保证和可预测延迟的环境。使用 <code class="language-plaintext highlighter-rouge">torch.export</code> 可能需要对您的程序进行修改，尤其是如果您有数据相关的控制流。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># API Not Final
+</span><span class="n">exported_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">_dynamo</span><span class="p">.</span><span class="n">export</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="nb">input</span><span class="p">)</span>
+<span class="n">torch</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">exported_model</span><span class="p">,</span> <span class="s">"foo.pt"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>这处于开发初期阶段。更多详情请关注 PyTorch 会议上的“导出路径”演讲。您还可以从本月开始参与我们的“工程师问答：2.0 直播问答系列”讨论此话题（更多详情请见本文末尾）。</p>
+
+<h3 id="debugging-issues">调试问题</h3>
+
+<p>编译模式是透明的，难以调试。你可能会问一些问题，例如：</p>
+
+<ul>
+  <li>为什么我的程序在编译模式下会崩溃？</li>
+  <li>编译模式与即时模式一样准确吗？</li>
+  <li>为什么我没有看到速度提升？</li>
+</ul>
+
+<p>如果编译模式产生错误或崩溃，或者与急切模式的结果（超出机器精度限制）不一致，那么这很可能不是你的代码问题。然而，了解导致错误的代码片段是有用的。</p>
+
+<p>为了帮助调试和可重现性，我们创建了几个工具和日志功能，其中之一脱颖而出：<strong> 代码压缩器。</strong></p>
+
+<p>代码压缩器会自动将您遇到的问题缩减为一个小代码片段。这个小代码片段可以重现原始问题，您可以用压缩后的代码在 github 上提交问题。这将帮助 PyTorch 团队轻松快速地修复问题。</p>
+
+<p>如果您没有看到预期的加速效果，那么我们有一个名为 <strong>torch._dynamo.explain</strong> 的工具，它可以解释您的代码中哪些部分导致了我们所说的“图断开”。图断开通常阻碍编译器加速代码，减少图断开的数量可能会加快您的代码运行速度（直到某些递减回报的极限）。</p>
+
+<p>您可以在我们的 <a href="https://pytorch.org/docs/stable/torch.compiler_troubleshooting.html"> 故障排除指南 </a> 中了解这些内容以及更多。</p>
+
+<h3 id="dynamic-shapes">动态形状</h3>
+
+<p>在考虑支持 PyTorch 代码的通用性时，一个关键要求是支持动态形状，并允许模型接受不同大小的张量，而无需在形状每次更改时重新编译。</p>
+
+<p>截至 today，对 Dynamic Shapes 的支持有限，目前正处于快速开发中。它将在稳定版本中具备全部功能。它受制于一个 <code class="language-plaintext highlighter-rouge">dynamic=True</code> 参数，我们在 symbolic-shapes 特性分支上取得了更多进展，在该分支上我们成功地在训练中使用了带有完整符号形状的 TorchInductor 运行 BERT_pytorch。对于动态形状的推理，我们覆盖面更广。例如，让我们看看一个动态形状非常有帮助的常见设置 - 文本生成与语言模型。</p>
+
+<p>我们可以看到，即使形状从 4 动态变化到 256，编译模式也能持续优于 eager 模式高达 40%。在没有动态形状支持的情况下，一个常见的解决方案是将数据填充到最接近的 2 的幂。然而，正如下面的图表所示，这会带来大量的性能开销，并且也会导致编译时间显著变长。此外，填充有时并不简单。</p>
+
+<p>通过在 PyTorch 2.0 的编译模式下支持动态形状，我们可以获得最佳的性能 <em> 和 </em> 易用性。</p>
+
+<div style="display:flex; flex-direction: row; padding: 10px;">
+<img src="/assets/images/pytorch-2.0-img7.png" width="50%">
+<img src="/assets/images/pytorch-2.0-img8.png" width="50%">
+</div>
+
+<p>当前工作进展非常迅速，我们可能会在基础设施进行根本性改进时暂时让一些模型出现退化。关于我们动态形状最新进展的更新可以在这里找到。</p>
+
+<h2 id="distributed">分布式</h2>
+
+<p>总结来说，torch.distributed 的两个主要分布式包装器在编译模式下运行良好。</p>
+
+<p>无论是<code class="language-plaintext highlighter-rouge">分布式数据并行 </code>（DDP）还是<code class="language-plaintext highlighter-rouge">全分片数据并行 </code>（FSDP），在编译模式下都能运行，与即时模式相比提供了改进的性能和内存利用率，但也存在一些注意事项和限制。</p>
+
+<p>
+</p><center> <u>AMP 精度加速</u></center>
+<img src="/assets/images/pytorch-2.0-img9.png" width="90%">
+<center><u>左：编译模式下的 FSDP 相对于急切模式（AMP 精度）的速度提升。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">右：编译模式下的 FSDP 比急切模式占用内存少得多。</u></center>
+<p></p>
+
+<div style="display:flex; flex-direction: row; padding:10px;">
+<img src="/assets/images/pytorch-2.0-img10.png" width="50%">
+<img src="/assets/images/pytorch-2.0-img11.png" width="50%">
+</div>
+
+<h3 id="distributeddataparallel-ddp">分布式数据并行（DDP）</h3>
+
+<p>DDP 依赖于与反向计算重叠的 AllReduce 通信，并将较小的每层 AllReduce 操作分组到“桶”中以实现更高的效率。TorchDynamo 编译的 AOTAutograd 函数，当与 DDP 天真地结合时，会防止通信重叠，但通过为每个“桶”编译单独的子图并允许通信操作在子图之外和之间发生，可以恢复性能。编译模式下的 DDP 支持目前还要求 <code class="language-plaintext highlighter-rouge">static_graph=False</code>。有关 DDP + TorchDynamo 的方法和结果的更多详细信息，请参阅<a href="https://dev-discuss.pytorch.org/t/torchdynamo-update-9-making-ddp-work-with-torchdynamo/860">这篇帖子 </a>。</p>
+
+<h3 id="fullyshardeddataparallel-fsdp">全局分片数据并行（FSDP）</h3>
+
+<p>FSDP 本身是一个“beta”版本的 PyTorch 功能，由于可以调整要包装的子模块，并且通常有更多的配置选项，因此其系统复杂度比 DDP 高。如果配置了 <code class="language-plaintext highlighter-rouge">use_original_params=True</code> 标志，FSDP 可以与 TorchDynamo 和 TorchInductor 一起用于各种流行的模型。目前可能会出现一些特定模型或配置的兼容性问题，但这些问题将得到积极改进，如果提交了 GitHub 问题，可以优先考虑特定模型。</p>
+
+<p>用户指定一个 <code class="language-plaintext highlighter-rouge">auto_wrap_policy</code> 参数来指示要包装在一起用于状态分片的模型子模块，或者手动在 FSDP 实例中包装子模块。例如，许多 Transformer 模型在将每个“Transformer 块”分别包装在单独的 FSDP 实例中时表现良好，因此只需要一次物化一个 Transformer 块的全状态。Dynamo 将在每个 FSDP 实例的边界插入图断点，以便在正向（和反向）传播中发生通信操作，并在图外并行于计算操作。</p>
+
+<p>如果在没有将子模块封装在单独的实例中时使用 FSDP，它将回退到类似于 DDP 的操作方式，但没有桶化。因此，所有梯度都在一个操作中减少，即使在 Eager 中也无法实现计算/通信重叠。此配置仅针对功能测试了 TorchDynamo，但未针对性能测试。</p>
+
+<h2 id="developervendor-experience">开发者/供应商体验</h2>
+
+<p>在 PyTorch 2.0 中，我们希望简化后端（编译器）集成体验。为此，我们专注于减少需要启动 PyTorch 后端所需的操作数量，并简化操作集的语义。</p>
+
+<p>以图形形式，PT2 堆栈看起来如下：</p>
+
+<p>
+<img src="/assets/images/pytorch-2.0-img12.png" width="90%">
+</p>
+
+<p>从图表中间开始，AOTAutograd 以预编译的方式动态捕获自动微分逻辑，生成 FX 图格式的前向和反向算子图。</p>
+
+<p>我们提供了一套加固的分解（即用其他算子编写的算子实现），可以用来减少后端需要实现的算子数量。我们还通过一种称为<em>函数化</em>的过程，选择性地重写复杂的 PyTorch 逻辑，包括突变和视图，从而简化 PyTorch 算子的语义，并保证算子元数据信息，如形状传播公式。这项工作正在进行中；我们的目标是提供一个<em>原始</em>和<em>稳定</em>的约 250 个算子集合，具有简化的语义，称为 <em>PrimTorch</em>，供厂商利用（即选择加入）以简化他们的集成。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在减少和简化算子集之后，后端可以选择在 Dynamo（即中间层，紧接在 AOTAutograd 之后）或 Inductor（底层）中进行集成。以下我们将描述做出这一选择的一些考虑因素，以及关于混合后端的工作计划。</p>
+
+<p><strong>Dynamo 后端</strong></p>
+
+<p>拥有现有编译器堆栈的供应商可能发现将其作为 TorchDynamo 后端进行集成最为简单，接收到的 FX Graph 是以 ATen/Prims IR 的形式。请注意，对于训练和推理，集成点将紧接在 AOTAutograd 之后，因为我们目前将分解作为 AOTAutograd 的一部分进行应用，如果针对推理则仅跳过特定于反向传播的步骤。</p>
+
+<p><strong>Inductor 后端</strong></p>
+
+<p>供应商还可以直接将他们的后端集成到 Inductor 中。Inductor 接收由 AOTAutograd 生成的图，该图由 ATen/Prim 操作组成，并将其进一步降低到循环级 IR。今天，Inductor 为其循环级 IR 提供了点操作、归约、scatter/gather 和窗口操作的降低。此外，Inductor 创建融合组，进行索引简化、维度折叠，并调整循环迭代顺序以支持高效的代码生成。供应商可以通过提供从循环级 IR 到特定硬件代码的映射来实现集成。目前，Inductor 有两个后端：（1）C++生成多线程 CPU 代码，（2）Triton 生成高性能 GPU 代码。这些 Inductor 后端可以作为替代后端灵感的来源。</p>
+
+<p><strong>后端混合接口（即将推出）</strong></p>
+
+<p>我们为将 FX 图分割成包含后端支持的子图以及执行剩余部分提供了实用工具。这些实用工具可以扩展以支持“混合后端”，配置图中的哪些部分在哪个后端上运行。然而，目前还没有稳定的接口或协议供后端暴露其操作符支持、操作符模式偏好等。这仍然是正在进行的工作，我们欢迎早期用户的反馈。</p>
+
+<h2 id="final-thoughts">总结</h2>
+
+<p>我们对 PyTorch 2.0 及以后的路线图感到非常兴奋。通往最终 2.0 发布的道路将会崎岖，但请尽早加入我们的旅程。如果您有兴趣深入了解或为编译器做出贡献，请继续阅读以下内容，包括如何开始（例如教程、基准测试、模型、常见问题解答）以及本月的《工程师问答：2.0 现场问答系列》<strong>Ask the Engineers: 2.0 Live Q&amp;A Series</strong>。其他资源包括：</p>
+
+<ul>
+  <li><a href="https://pytorch.org/docs/stable/torch.compiler_get_started.html">开始使用</a></li>
+  <li><a href="https://maskerprc.github.io/tutorials/">教程</a></li>
+  <li><a href="https://pytorch.org/docs/stable">文档</a></li>
+  <li><a href="https://dev-discuss.pytorch.org">开发者讨论</a></li>
+</ul>
+
+<script page-id="pytorch" src="/assets/menu-tab-selection.js"></script>
+
+<script src="/assets/quick-start-module.js"></script>
+
+<script src="/assets/show-screencast.js"></script>
+
+<h2 id="accelerating-hugging-face-and-timm-models-with-pytorch-20">加速 PyTorch 2.0 下的 Hugging Face 和 TIMM 模型</h2>
+
+<p>作者：马克·萨拉菲姆</p>
+
+<p><code class="language-plaintext highlighter-rouge">torch.compile()</code> 使得通过单行装饰器 <code class="language-plaintext highlighter-rouge">torch.compile()</code> 轻松尝试不同的编译器后端，从而让 PyTorch 代码更快。它可以直接在 nn.Module 上使用，作为 torch.jit.script() 的替代品，而不需要您修改任何源代码。我们预计这一行代码的更改将为您在大多数已运行的模型上提供 30%-2 倍的训练时间加速。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">opt_module</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">module</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>torch.compile 支持任意 PyTorch 代码、控制流、突变，并附带对动态形状的实验性支持。我们对这一发展感到非常兴奋，因此将其称为 PyTorch 2.0。</p>
+
+<p>对于我们来说，这个公告的不同之处在于，我们已经对一些最受欢迎的开源 PyTorch 模型进行了基准测试，并获得了从 30% 到 2 倍的显著加速。详情请见 <a href="https://github.com/pytorch/torchdynamo/issues/681">https://github.com/pytorch/torchdynamo/issues/681</a>。</p>
+
+<p>这里没有技巧，我们已通过 pip 安装了流行的库，如 <a href="https://github.com/huggingface/transformers">https://github.com/huggingface/transformers</a>、<a href="https://github.com/huggingface/accelerate">https://github.com/huggingface/accelerate</a> 和 <a href="https://github.com/rwightman/pytorch-image-models">https://github.com/rwightman/pytorch-image-models</a>，然后对它们运行 torch.compile()，就这样了。</p>
+
+<p>同时获得性能和便利性是很少见的，这就是为什么核心团队对 PyTorch 2.0 如此兴奋。</p>
+
+<h2 id="requirements">要求</h2>
+
+<p>对于 GPU（新一代 GPU 将看到显著更好的性能）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip3 install numpy --pre torch --force-reinstall --index-url https://download.pytorch.org/whl/nightly/cu117
+</code></pre></div></div>
+
+<p>对于 CPU</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
+</code></pre></div></div>
+
+<p>可选：验证安装</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git clone https://github.com/pytorch/pytorch
+cd tools/dynamo
+python verify_dynamo.py
+</code></pre></div></div>
+
+<p>可选：Docker 安装</p>
+
+<p>我们还在 PyTorch 夜间构建中提供了所有必需的依赖项，您可以通过以下方式下载：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>docker pull ghcr.io/pytorch/pytorch-nightly
+</code></pre></div></div>
+
+<p>对于临时实验，请确保您的容器可以访问所有 GPU</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>docker run --gpus all -it ghcr.io/pytorch/pytorch-nightly:latest /bin/bash
+</code></pre></div></div>
+
+<h2 id="getting-started">开始使用</h2>
+
+<p>请阅读 Mark Saroufim 的 <a href="/blog/Accelerating-Hugging-Face-and-TIMM-models/"> 完整博客文章 </a>，其中他为您介绍了一个教程和真实模型，让您今天就可以尝试 PyTorch 2.0。</p>
+
+<p>我们使用 PyTorch 的目标是构建一个广度优先的编译器，以加快大多数实际模型在开源中的运行速度。Hugging Face Hub 最终成为我们极具价值的基准测试工具，确保我们进行的任何优化实际上有助于加速人们想要运行的模型。</p>
+
+<p>博客教程将向您展示如何精确复制这些加速，让您像我们一样对 PyTorch 2.0 充满期待。所以请尝试使用 PyTorch 2.0，享受免费的性能提升，如果您没有看到效果，请打开一个 issue，我们将确保您的模型得到支持 <a href="https://github.com/pytorch/torchdynamo/issues">https://github.com/pytorch/torchdynamo/issues</a></p>
+
+<p>毕竟，除非 <strong> 您的 </strong> 模型实际上运行得更快，否则我们无法声称我们创建了一个广度优先。</p>
+
+<h2 id="faqs">常见问题</h2>
+
+<ol>
+  <li>
+    <p><strong>PT 2.0 是什么？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">2.0 是 PyTorch 的最新版本。PyTorch 2.0 提供了相同的 eager-mode 开发体验，同时通过 torch.compile 添加了编译模式。这种编译模式有可能在训练和推理过程中加速您的模型。</p>
+  </li>
+  <li>
+    <p><strong>为什么是2.0而不是1.14？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">PyTorch 2.0 就是 1.14 本应成为的样子。我们发布了大量新特性，我们认为这些特性将改变您对 PyTorch 的有意义使用方式，因此我们将其命名为 2.0。</p>
+  </li>
+  <li>
+    <p><strong>我该如何安装2.0？需要额外的要求吗？</strong></p>
+
+    <p>安装最新夜间版本：</p>
+
+    <p>CUDA 11.8<br></p>
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> pip3 install numpy --pre torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/nightly/cu118
+</code></pre></div>    </div>
+    <p>CUDA 11.7</p>
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> pip3 install numpy --pre torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/nightly/cu117
+</code></pre></div>    </div>
+    <p>CPU</p>
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> pip3 install numpy --pre torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/nightly/cpu
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p><strong>2.0 代码与 1.X 版本是否向后兼容？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">是的，使用 2.0 不需要修改您的 PyTorch 工作流程。只需一行代码 <code class="language-plaintext highlighter-rouge">model = torch.compile(model)</code> 即可优化您的模型以使用 2.0 堆栈，并与您的 PyTorch 代码平滑运行。这是完全可选的，您不必使用新的编译器。</p>
+  </li>
+  <li>
+    <p><strong>2.0是否默认启用？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">2.0 是发布版的名称。torch.compile 是 2.0 版本中发布的特性，您需要显式使用 torch.compile。</p>
+  </li>
+  <li><strong>如何将我的 PT1.X 代码迁移到 PT2.0？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">您的代码应该无需迁移即可正常工作。如果您想使用 2.0 版本中引入的新编译模式特性，可以从优化您的模型开始，只需一行代码：<code class="language-plaintext highlighter-rouge">model = torch.compile(model)</code>。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">虽然速度提升主要在训练过程中观察到，但如果您的模型在 eager 模式运行更快，您也可以用于推理。<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="kn">import</span> <span class="nn">torch</span>
+      
+ <span class="k">def</span> <span class="nf">train</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">dataloader</span><span class="p">):</span>
+   <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+   <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">dataloader</span><span class="p">:</span>
+     <span class="n">run_epoch</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
+
+ <span class="k">def</span> <span class="nf">infer</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="nb">input</span><span class="p">):</span>
+   <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+   <span class="k">return</span> <span class="n">model</span><span class="p">(</span>\<span class="o">*</span>\<span class="o">*</span><span class="nb">input</span><span class="p">)</span>
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p><strong>为什么我应该使用 PT2.0 而不是 PT 1.X？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">查看问题（2）的答案。</p>
+  </li>
+  <li><strong>当运行 PyTorch 2.0 时，我的代码与之前有何不同？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">默认情况下，PyTorch 2.0 与 PyTorch 1.x 相同，即您的模型在 eager-mode 模式下运行，即每行 Python 代码依次执行。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在 2.0 版本中，如果您将模型包裹在 <code class="language-plaintext highlighter-rouge">model = torch.compile(model)</code> 中，您的模型在执行前会经过 3 个步骤：<ol>
+      <li>图获取：首先将模型重写为子图块。可以被 TorchDynamo 编译的子图会被“展平”，而包含控制流代码或其他不受支持的 Python 结构的子图将回退到 Eager-Mode。</li>
+      <li>图降低：将所有 PyTorch 操作分解为特定于所选后端的构成内核。</li>
+      <li>图编译，其中内核调用它们对应的低级设备特定操作。</li>
+    </ol>
+  </li>
+  <li><strong>PT2.0 新增了哪些新组件？</strong>
+    <ul>
+      <li><strong>torchdynamo</strong> 从 Python 字节码生成 FX 图。它使用<a href="https://pytorch.org/docs/stable/torch.compiler_guards_overview.html#caching-and-guards-overview">守卫</a>来保持急切模式功能，以确保生成的图是有效的（<a href="https://dev-discuss.pytorch.org/t/torchdynamo-an-experiment-in-dynamic-python-bytecode-transformation/361"> 了解更多 </a>）</li>
+      <li><strong>AOTAutograd</strong> 生成与 TorchDynamo 捕获的前向图对应的反向图（<a href="https://dev-discuss.pytorch.org/t/torchdynamo-update-6-training-support-with-aotautograd/570"> 了解更多 </a>）。</li>
+      <li><strong>PrimTorch</strong> 将复杂的 PyTorch 操作分解成更简单、更基本的操作（<a href="https://dev-discuss.pytorch.org/t/tracing-with-primitives-update-2/645"> 了解更多 </a>）。</li>
+      <li><strong>[后端]</strong> 后端与 TorchDynamo 集成，将图编译成可以在加速器上运行的 IR。例如，<strong>TorchInductor</strong> 将图编译为用于 GPU 执行的 <strong>Triton</strong> 或用于 CPU 执行的 <strong>OpenMP</strong>（<a href="https://dev-discuss.pytorch.org/t/torchinductor-a-pytorch-native-compiler-with-define-by-run-ir-and-symbolic-shapes/747"> 了解更多 </a>）。</li>
+    </ul>
+  </li>
+  <li>
+    <p><strong>2.0版本目前支持哪些编译器后端？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">默认且最完整的后端是 <a href="https://github.com/pytorch/pytorch/tree/master/torch/_inductor">TorchInductor</a>，但 TorchDynamo 有一个不断增长的后端列表，可以通过调用 <code class="language-plaintext highlighter-rouge">torchdynamo.list_backends()</code> 来获取。</p>
+  </li>
+  <li>
+    <p><strong>2.0版本中分布式训练是如何工作的？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">编译模式下，DDP 和 FSDP 可以比 Eager-Mode 快 15%，在 AMP 精度下可以快 80%。PT2.0 进行了一些额外的优化，以确保 DDP 的通信-计算重叠与 Dynamo 的局部图创建良好配合。请确保使用 DDP 时 static_graph=False。更多详情<a href="https://dev-discuss.pytorch.org/t/torchdynamo-update-9-making-ddp-work-with-torchdynamo/860">请点击这里 </a>。</p>
+  </li>
+  <li>
+    <p><strong>我该如何了解 PT2.0 的最新进展？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="http://dev-discuss.pytorch.org/">PyTorch 开发者论坛</a>是直接从构建它们的开发者那里了解 2.0 组件的最佳场所。</p>
+  </li>
+  <li>
+    <p><strong>帮帮我，我的代码在2.0的编译模式下运行得更慢了！</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">性能下降最可能的原因是图断开太多。例如，在模型前向传播中添加一个看似无害的打印语句就会触发图断开。我们有一些方法可以诊断这些问题 - 更多信息请点击<a href="https://pytorch.org/docs/stable/torch.compiler_faq.html#why-am-i-not-seeing-speedups">这里 </a>。</p>
+  </li>
+  <li><strong>我之前运行的代码在2.0的编译模式下崩溃了！我该如何调试它？</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">这里有一些技术可以帮助您诊断代码可能失败的地方，并打印出有用的日志：<a href="https://pytorch.org/docs/stable/torch.compiler_faq.html#why-is-my-code-crashing">https://pytorch.org/docs/stable/torch.compiler_faq.html#why-is-my-code-crashing</a>。</li>
+</ol>
+
+<h2 id="ask-the-engineers-20-live-qa-series">工程师问答：2.0直播问答系列</h2>
+
+<p>我们将举办一系列现场问答环节，让社区成员与专家进行更深入的提问和对话。请查看全年主题的完整日历。如果您无法参加：1）它们将被录制供将来观看；2）您可以参加我们每周五上午 10 点太平洋标准时间（PST）的 Dev Infra Office Hours @ <a href="https://github.com/pytorch/pytorch/wiki/Dev-Infra-Office-Hours">https://github.com/pytorch/pytorch/wiki/Dev-Infra-Office-Hours</a>。</p>
+
+<p>请点击<a href="https://pytorchconference22.splashthat.com/">此处</a>查看日期、时间、描述和链接。</p>
+
+<p>声明：请勿在加入现场会议和提交问题时分享您的个人信息、姓氏、公司。</p>
+
+<table style="min-width: 350px" class="QnATable">
+  <tbody><tr>
+   <td style="width:50%"><b>TOPIC</b></td>
+   <td style="width:50%"><b>HOST</b></td>
+  </tr>
+  <tr>
+   <td><b>使用2.0的新开发者体验（安装、设置、克隆示例、使用2.0运行）</b></td>
+   <td>苏拉吉·苏布拉马尼亚<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/surajsubramanian/">领英 </a> |
+<a href="https://twitter.com/subramen">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://www.youtube.com/watch?v=1FSBurHpH_Q&amp;list=PL_lsbAsL_o2CQr8oh5sNWt96yWQphNEzM&amp;index=2"><b>PT2 性能分析和调试</b></a></td>
+   <td>贝特·马赫<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/bertrand-maher/">领英 </a> |
+<a href="https://twitter.com/tensorbert">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://community.linuxfoundation.org/j/gayr75zshnded/"><b>火炬加速器与 PT 2.0 后端集成深度解析</b></a></td>
+   <td>吉梅尔申娜·娜塔莉亚、包斌和黄雪瑞</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">吉梅尔申娜塔莉亚<br>
+   <a href="https://www.linkedin.com/in/natalia-gimelshein-8347a480/">领英</font></font></font></a><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">黄雪瑞<br>
+   <a href="https://www.linkedin.com/in/sherlock-baihan-huang-07787a59/">领英</a>
+   </td>
+  </tr>
+  <tr>
+   <td><b>无需 C++和 functorch 扩展 PyTorch：为 PyTorch 提供类似 JAX 的可组合函数转换</b></td>
+   <td>安贾利·乔尔迪亚和萨曼莎·安德鲁</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">安贾利·乔尔迪亚<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/anjali-chourdia/">领英 </a> |
+<a href="https://twitter.com/AChourdia">推特</a></font></font></font><br>萨曼莎·安德鲁<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/samantha-andow-1b6965a7/">领英 </a> |
+<a href="https://twitter.com/_samdow">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://www.youtube.com/watch?v=5FNHwPIyHr8&amp;list=PL_lsbAsL_o2CQr8oh5sNWt96yWQphNEzM&amp;index=3"><b>火炬 Dynamo 深度解析</b></a></td>
+   <td>米哈伊尔·沃兹涅先斯基<br>
+   <a href="https://www.linkedin.com/in/michael-voznesensky-70459624/">领英</a>
+   </td>
+  </tr>
+  <tr>
+   <td><b>重新思考使用 TorchData：Datapipes 和 Dataloader2 加载数据</b></td>
+   <td>谢凯文<br>
+   <a href="https://www.linkedin.com/in/kevin-tse-35051367/">领英</a>
+   </td>
+  </tr>
+  <tr>
+   <td><b>可组合训练（+ torcheval，torchsnapshot）</b></td>
+   <td>Subramaniam Ananth</td>
+  </tr>
+  <tr>
+   <td><a href="https://www.youtube.com/watch?v=v4nDZTK_eJg&amp;list=PL_lsbAsL_o2CQr8oh5sNWt96yWQphNEzM&amp;index=1"><b>如何以及为什么为 PyTorch 贡献代码和教程</b></a></td>
+   <td>Zain Rizvi、Svetlana Karslioglu 和 Carl Parker<br>
+   Zain Rizvi<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://linkedin.com/in/zainrizvi">领英 </a> |
+<a href="https://twitter.com/zainrzv">推特</a></font></font></font><br>斯维特拉娜·卡尔什利奥古卢<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/svetlana-karslioglu">领英 </a> |
+<a href="https://twitter.com/laignas">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><b>动态形状和计算最大批量大小</b></td>
+   <td>杨德昌和艾利亚斯·埃利森</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">杨德昌<br>
+   <a href="https://twitter.com/ezyang">推特</a>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://www.youtube.com/watch?v=U6J5hl6nXlU&amp;list=PL_lsbAsL_o2CQr8oh5sNWt96yWQphNEzM&amp;index=4"><b>PyTorch 2.0 导出：为 PyTorch 捕获完整图</b></a></td>
+   <td>苏浩然 和 曹艳娜</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">曹艳娜<br>
+   <a href="https://www.linkedin.com/in/yanan-cao-65836020/">领英</a>
+   </td>
+  </tr>
+  <tr>
+   <td><b>使用 DistributedTensor 和 PyTorch DistributedTensor 的二维并行性</b></td>
+   <td>梁万超 和 阿利松·古萨蒂·阿佐利尼</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">梁万超<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/wanchaol/">领英 </a> |
+<a href="https://twitter.com/wanchao_">推特</a></font></font></font><br>阿利松·古萨蒂·阿佐利尼<br>
+   <a href="https://www.linkedin.com/in/alissonazzolini/">领英</a>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://www.youtube.com/watch?v=NgW6gp69ssc&amp;list=PL_lsbAsL_o2CQr8oh5sNWt96yWQphNEzM&amp;index=5"><b>TorchRec 和 FSDP 在生产中</b></a></td>
+   <td>丹尼斯·范德·斯塔伊、安德鲁·古和罗汉·瓦玛</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">丹尼斯·范德·斯塔伊<br>
+   <a href="https://www.linkedin.com/in/staay/">领英</font></font></font></a><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">罗汉·瓦玛<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/varmarohan/">领英 </a> |
+<a href="https://twitter.com/rvarm1">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><b>PyTorch 设备上的未来</b></td>
+   <td>拉齐尔·阿尔瓦雷斯·格瓦拉<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/razielalvarez/">领英 </a> |
+<a href="https://twitter.com/razielag">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><b>Torch 多模态</b><br>
+   <a href="https://pytorch.org/blog/introducing-torchmultimodal/" target="_blank">介绍博客</a><br>
+   <a href="https://pytorch.org/blog/scaling-multimodal-foundation-models-in-torchmultimodal-with-pytorch-distributed/" target="_blank">扩展博客</a></td>
+   <td>卡特卡伊·汗德尔瓦尔<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/kartikaykhandelwal/">领英 </a> |
+<a href="https://twitter.com/kakemeister">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><b>BetterTransformers（+与 Hugging Face 的集成）、模型服务与优化</b><br>
+   <a href="https://medium.com/pytorch/bettertransformer-out-of-the-box-performance-for-huggingface-transformers-3fbe27d50ab2" target="_blank">博客1</a><br>
+   <a href="https://github.com/pytorch/serve" target="_blank">Github</a></td>
+   <td>哈米德·肖贾纳泽里和马克·萨拉菲姆</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">马克·萨拉菲姆<br>
+   <font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://www.linkedin.com/in/marksaroufim/">领英 </a> |
+<a href="https://twitter.com/marksaroufim">推特</a></font></font></font>
+   </td>
+  </tr>
+  <tr>
+   <td><a href="https://community.linuxfoundation.org/j/5s25r7uxmpq5e/"><b>PT2 和分布式</b></a></td>
+   <td>威尔·康斯特布尔<br>
+   <a href="https://www.linkedin.com/in/will-constable-969a53b/">领英</a>
+   </td>
+  </tr>
+</tbody></table>
+
+<h2 id="watch-the-talks-from-pytorch-conference">查看 PyTorch 会议的演讲</h2>
+
+<ul>
+  <li><a href="https://www.youtube.com/watch?v=vbtGZL7IrAw">TorchDynamo</a></li>
+  <li><a href="https://www.youtube.com/watch?v=vbtGZL7IrAw">TorchInductor</a></li>
+  <li><a href="https://www.youtube.com/watch?v=vbtGZL7IrAw">动态形状</a></li>
+  <li><a href="https://www.youtube.com/watch?v=vbtGZL7IrAw">导出路径</a></li>
+</ul>
+
+<script src="/assets/get-started-sidebar.js"></script>
+
+</article>
+      </div>
+    </div>
+  </div>
+   
+        </div>
+      </div>
+    </div>
+
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+  
+
+</body></html>

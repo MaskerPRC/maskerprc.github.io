@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      How to Train State-Of-The-Art Models Using TorchVision’s Latest Primitives | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="
+
+A few weeks ago, TorchVision v0.11 was released packed with numerous new primitives, models and training recipe improvements which allowed achieving state-of-the-art (SOTA) results. The project was dubbed “TorchVision with Batteries Included” and aimed to modernize our library. We wanted to enable researchers to reproduce papers and conduct research more easily by using common building blocks. Moreover, we aspired to provide the necessary tools to Applied ML practitioners to train their models on their own data using the same SOTA techniques as in research. Finally, we wanted to refresh our pre-trained weights and offer&nbsp;better off-the-shelf models to our users, hoping that they would build better applications.
+
+Though there is still much work to be done, we wanted to share with you some exciting results from the above work. We will showcase how one can use the new tools included in TorchVision to achieve state-of-the-art results on a highly competitive and well-studied architecture such as ResNet50 [1]. We will share the exact recipe used to improve our baseline by over 4.7 accuracy points to reach a final top-1 accuracy of 80.9% and share the journey for deriving the new training process. Moreover, we will show that this recipe generalizes well to other model variants and families. We hope that the above will influence future research for developing stronger generalizable training methodologies and will inspire the community to adopt and contribute to our efforts.
+
+The Results
+
+Using our new training recipe found on ResNet50, we’ve refreshed the pre-trained weights of the following models:
+
+
+  
+    
+      Model
+      Accuracy@1
+      Accuracy@5
+    
+  
+  
+    
+      ResNet50
+      80.858
+      95.434
+    
+  
+  
+    
+      ResNet101
+      81.886
+      95.780
+    
+  
+  
+    
+      ResNet152
+      82.284
+      96.002
+    
+  
+  
+    
+      ResNeXt50-32x4d
+      81.198
+      95.340
+    
+  
+
+
+Note that the accuracy of all models except RetNet50 can be further improved by adjusting their training parameters slightly, but our focus was to have a single robust recipe which performs well for all.
+
+UPDATE: We have refreshed the majority of popular classification models of TorchVision, you can find the details on this blog post.
+
+There are currently two ways to use the latest weights of the model.
+
+Using the Multi-pretrained weight API
+
+We are currently working on a new prototype mechanism which will extend the model builder methods of TorchVision to support multiple weights. Along with the weights, we store useful meta-data (such as the labels, the accuracy, links to recipe etc) and the preprocessing transforms necessary for using the models. Example:
+
+  from PIL import Image
+  from torchvision import prototype as P
+  img = Image.open(" test="" assets="" encode_jpeg="" grace_hopper_517x606.jpg")=""  ="" #="" initialize="" model="" weights="P.models.ResNet50_Weights.IMAGENET1K_V2" model.eval()="" inference="" transforms="" preprocess="weights.transforms()" apply="" preprocessing="" batch="preprocess(img).unsqueeze(0)" prediction="model(batch).squeeze(0).softmax(0)" make="" predictions="" label="prediction.argmax().item()" score="prediction[label].item()" use="" meta="" to="" get="" the="" labels="" category_name="weights.meta['categories'][label]" print(f"{category_name}:="" {100="" *="" score}%")="" using="" legacy="" api="" those="" who="" don’t="" want="" a="" prototype="" have="" option="" of="" accessing="" new="" via="" following="" approach:="" from="" torchvision.models="" import="" resnet="" overwrite="" url="" previous="" resnet.model_urls["resnet50"]="https://download.pytorch.org/models/resnet50-11ad3fa6.pth" todo:="" +="" call="" ...="" training="" recipe="" our="" goal="" was="" newly="" introduced="" primitives="" torchvision="" derive="" strong="" which="" achieves="" state-of-the-art="" results="" for="" vanilla="" resnet50="" architecture="" when="" trained="" scratch="" on="" imagenet="" with="" no="" additional="" external="" data.="" though="" by="" specific="" tricks [2]="" one="" could="" further="" improve="" accuracy,="" we’ve="" decided="" not="" include="" them="" so="" that="" can="" be="" used="" in="" other="" architectures.="" recipe heavily="" focuses="" simplicity="" and="" builds="" upon="" work="" fair="" [3],="" [4],="" [5],="" [6],="" [7]. our="" findings="" align="" the parallel="" study="" wightman="" et="" al.="" [7],="" also="" report="" major="" accuracy="" improvements="" focusing="" recipes.="" without="" ado,="" here="" are="" main="" parameters="" recipe:="" optimizer="" &amp;="" lr="" scheme="" ngpus="8," batch_size="128,&nbsp;" per="" gpu="" epochs="600," opt="sgd" ,="" momentum="0.9," lr_scheduler="cosineannealinglr" lr_warmup_epochs="5," lr_warmup_method="linear" lr_warmup_decay="0.01," regularization="" augmentation="" weight_decay="2e-05," norm_weight_decay="0.0," label_smoothing="0.1," mixup_alpha="0.2," cutmix_alpha="1.0," auto_augment="ta_wide" random_erase="0.1," ra_sampler="True," ra_reps="4," ema="" configuration="" model_ema="True," model_ema_steps="32," model_ema_decay="0.99998," resizing="" interpolation="bilinear" val_resize_size="232," val_crop_size="224," train_crop_size="176," standard="" reference="" script,="" we="" train="" command:="" torchrun="" --nproc_per_node="8" train.py="" --model="" --batch-size="" 128="" --lr="" 0.5="" \="" --lr-scheduler="" cosineannealinglr="" --lr-warmup-epochs="" 5="" --lr-warmup-method="" linear="" --auto-augment="" ta_wide="" --epochs="" 600="" --random-erase="" 0.1="" --weight-decay="" 0.00002 \="" --norm-weight-decay="" 0.0="" --label-smoothing="" --mixup-alpha="" 0.2="" --cutmix-alpha="" 1.0 \="" --train-crop-size="" 176="" --model-ema="" --val-resize-size="" 232="" --ra-sampler="" --ra-reps="" 4="" methodology="" there="" few="" principles="" kept="" mind="" during="" explorations:="" is="" stochastic="" process="" validation="" metric="" try="" optimize="" random="" variable.="" this="" due="" weight="" initialization="" employed="" existence="" effects="" process.="" means="" can’t="" do="" single="" run="" assess="" effect="" change.="" practice="" doing="" multiple="" runs="" (usually="" 3="" 5)="" studying="" summarization="" stats="" (such="" as="" mean,="" std,="" median,="" max,="" etc).="" usually="" significant="" interaction="" between="" different="" parameters,="" especially="" techniques="" focus="" reducing="" overfitting.="" thus="" changing="" value="" optimal="" configurations="" others.="" account="" either="" adopt="" greedy="" search="" approach="" (which="" often="" leads="" suboptimal="" but="" tractable="" experiments)="" or="" grid="" better="" computationally="" expensive).="" work,="" mixture="" both.="" non-deterministic="" introduce="" noise="" require="" longer="" cycles="" performance.="" keep="" things="" tractable,="" initially="" short="" (small="" number="" epochs)="" decide="" paths="" eliminated="" early="" should="" explored="" training.="" risk="" overfitting="" dataset="" [8]="" because="" repeated="" experiments.="" mitigate="" some="" risk,="" only="" optimizations="" provide="" k-fold="" cross="" verify="" done="" set.="" moreover="" confirm="" ingredients="" generalize="" well="" models="" didn’t="" hyper-parameters.="" break="" down="" key="" discussed="" in earlier="" blogposts,="" journey="" monotonically="" increasing="" accuracies="" involves="" lot="" backtracking.="" quantify="" each="" optimization,="" below="" attempt="" show-case="" an="" idealized="" deriving="" final="" starting="" original="" torchvision.="" would="" like="" clarify="" oversimplification="" actual="" path="" followed="" it="" taken="" grain="" salt. ="" table="" below,="" summary="" performance="" stacked="" incremental="" top="" baseline.="" unless="" denoted="" otherwise,="" best="" acc@1="" out="" runs:="" accuracy@1="" accuracy@5="" diff="" absolute="" baseline="" 76.130="" 92.862="" 0.000="" 76.494="" 93.198="" 0.364="" trivialaugment="" 76.806="" 93.272="" 0.312="" 0.676="" long="" 78.606="" 94.052="" 1.800="" 2.476="" erasing="" 78.796="" 94.094="" 0.190="" 2.666="" smoothing="" 79.114="" 94.374="" 0.318="" 2.984="" mixup="" 79.232="" 94.536="" 0.118="" 3.102="" cutmix="" 79.510="" 94.642="" 0.278="" 3.380="" decay="" tuning="" 80.036="" 94.746="" 0.526="" 3.906="" fixres="" mitigations="" 80.196="" 94.672="" 0.160="" 4.066="" 80.450="" 94.908="" 0.254="" 4.320="" resize="" 80.674="" 95.166="" 0.224="" 4.544="" **="" 80.858="" 95.434="" 0.184="" 4.728="" *the="" size="" last="" model.="" see="" details.="" community="" contribution="" after="" release="" article.="" previously="" released="" lr_step_size="30," lr_gamma="0.1," most="" above="" defaults="" scripts.="" will="" start="" building="" introducing="" until="" gradually="" arrive="" at="" recipe.="" parameter="" updates="" both="" speed="" achieved="" lr.="" another="" common="" method="" warmup="" increase="" learning="" rate.="" beneficial="" very="" high="" rates="" helps="" stability="" epochs.="" finally,="" optimization="" cosine="" schedule="" adjust="" big="" advantage="" hyper-parameters="" optimize,="" cuts="" space.="" applied="" note="" experiments="" determine="" parameters:="" top-1="" points="" comparing="" order="" combine="" strategies="" sequentiallr="" scheduler.="" basic="" such="" resized="" crops="" horizontal="" flips.="" easy="" way="" more="" complex="" “automatic-augmentation”="" techniques.="" performed="" us="" trivialaugment [9],="" which is="" extremely="" simple="" considered="" “parameter="" free”,="" help="" cut="" space="" further.="" update="" step:="" increased="" by 0.312="" points compared="" step.="" contains="" behave="" randomly.="" specifically="" adding="" noise,="" becomes="" crucial.="" stages="" exploration,="" relatively="" roughly="" 200="" later="" 400="" started="" narrowing="" finally="" versions="" earlier="" steps:="" increases="" 1.8="" biggest="" observe="" iterative="" it’s="" worth="" noting="" overstated="" somehow="" misleading.="" just="" old="" won’t="" yield="" improvements.="" nevertheless="" combination="" benefit="" cycles.="" mentioning="" reason="" lengthy="" next="" steps="" that require="" significantly="" good="" results.="" data="" technique="" known="" classification="" [10],="" [11].="" paired="" automatic="" methods,="" yields="" its="" effect.="" tuned="" probability="" applying="" found="" low="" levels,="" typically="" around="" 10%. ="" extra="" previous:="" further 0.190="" points.="" reduce="" stop="" becoming="" overconfident.="" softening="" ground="" truth="" smoothing [12].="" controls="" degree="" (the="" higher="" stronger)="" need="" specify.="" optimizing="" possible,="" values="" 0.05-0.15="" similar="" results,="" avoid="" same="" the paper="" it.="" find="" config="" added="" pytorch’s="" introduced crossentropyloss="" additional 0.318="" two="" produce="" sota="" cutmix [13],="" [14].="" they="" images.="" setup="" randomly="" equal="" probability.="" parameterized="" a hyperparameter="" alpha,="" shape="" beta="" distribution="" sampled.="" did="" limited="" search,="" primarily="" proposed="" papers. ="" you="" alpha="" techniques:="" by 0.118="" combining="" improves="" uses="" l2="" larger="" universally="" all="" learned="" default.="" recipe,="" approach.="" first="" perform="" tune="" second="" disable="" normalization="" layers. ="" further 0.526="" points,="" providing="" experimental="" evidence="" fact="" has="" separating="" rest="" inspired="" by classyvision’s="" important="" property="" identified="" if="" resolution="" 224x224="" studied="" detail="" paper="" [5] and="" proposed:="" a)="" maximized="" b)="" fine-tune="" two-phase="" adjusts="" target="" resolution.="" since="" 2-phase="" training,="" went="" a).="" reduced="" crop="" 224="" maximizes="" 224x224.="" improved="" sped="" up="" still="" persists,="" meaning="" continues="" moreover,="" crop-size="" actually="" hurts="" accuracy.="" intuitively="" makes="" sense="" much="" before="" critical="" details="" disappearing="" picture.="" mitigation="" seems="" depth="" resnet50.="" deeper="" variants="" receptive="" fields="" seem="" slightly="" negatively="" affected="" (typically="" 0.1-0.2="" points).="" hence="" consider="" part="" optional.="" visualize="" available="" checkpoints="" (with="" full="" recipe)="" resolution:="" exponential="" moving="" average="" (ema)="" allows="" push="" complexity="" time.="" performs="" stable="" models.="" averaging="" happens="" every="" iterations="" search. ="" by 0.254="" torchvision’s ema="" implementation="" build="" averagedmodel="" class="" difference="" being="" averages="" buffers.="" adopted="" tricks="" from pycls which="" allow="" parameterize="" doesn’t="" depend="" unlike="" involved="" inference,="" image="" then="" central="" 256,="" caused="" discrepancy="" described="" [5].="" bringing="" closer="" resolution,="" select="" interval="" [224,="" 256]="" step="" 8.="" overfitting,="" selected="" half="" set="" confirmed="" half.="" by 0.224="" points. it’s="" works="" resnet101,="" resnet152="" resnext50,="" hints="" generalizes="" across="" models:="" [update]="" [15],="" [16]="" overall="" been="" recipes="" [7].="" tal="" ben-nun,="" contributor,="" proposing="" repetitions.="" his="" came="" by 0.184="" points. ="" were="" tested="" research,="" experimented="" techniques,="" optimizations.="" anything="" improvement.="" approaches="" took="" optimizers:="" optimizers="" adam,="" rmsprop="" sgd="" nesterov="" didn’t provide="" than="" momentum.="" schedulers: we="" tried="" scheduler="" schemes="" steplr="" exponential.="" latter="" tends="" ema,="" requires="" defining="" minimum="" well.="" instead,="" annealing="" decaying="" zero="" choose="" checkpoint="" highest="" augmentations: we’ve="" autoaugment="" randaugment.="" none="" these="" outperformed="" simpler="" parameter-free="" trivialaugment.="" interpolation:="" bicubic="" nearest="" bilinear.="" layers:="" sync="" norm="" yield significantly="" regular="" norm.="" acknowledgements="" thank piotr="" dollar,="" mannat="" singh="" hugo="" touvron="" their="" insights="" feedback="" development="" research="" based="" on.="" support="" invaluable="" achieving="" result.="" thank prabhat="" roy,="" kai="" zhang,="" yiwen="" song,="" joel="" schlosser,="" ilqar="" ramazanli,="" francisco="" massa,="" singh,="" xiaoliang="" dai,="" samuel="" gabriel,="" allen="" goodman="" ben-nun="" contributions="" batteries="" included="" project.="" references="" kaiming="" he,="" xiangyu="" shaoqing="" ren,="" jian="" sun.="" “deep="" residual="" recognition”.="" tong="" zhi="" hang="" zhongyue="" junyuan="" xie,="" mu="" li.="" “bag="" convolutional="" neural="" networks”="" piotr="" dollár,="" ross="" girshick.="" “fast="" accurate="" scaling”="" tete="" xiao,="" eric="" mintun,="" trevor="" darrell,="" “early="" convolutions="" transformers="" better”="" touvron,="" andrea="" vedaldi,="" matthijs="" douze,="" hervé="" jégou.="" “fixing="" train-test="" matthieu="" cord,="" alexandre="" sablayrolles,="" “training="" data-efficient="" distillation="" through="" attention”="" wightman,="" “resnet="" strikes="" back:="" procedure="" timm”="" benjamin="" recht,="" rebecca="" roelofs,="" ludwig="" schmidt,="" vaishaal="" shankar.="" “do="" classifiers="" imagenet?”="" g.="" müller,="" frank="" hutter.="" “trivialaugment:="" tuning-free="" yet="" augmentation”="" zhun="" zhong,="" liang="" zheng,="" guoliang="" kang,="" shaozi="" li,="" yi="" yang.="" “random="" terrance="" devries,="" graham="" w.="" taylor.="" “improved="" networks="" cutout”="" christian="" szegedy,="" vincent="" vanhoucke,="" sergey="" ioffe,="" jon="" shlens,="" zbigniew="" wojna.="" “rethinking="" inception="" computer="" vision”="" hongyi="" moustapha="" cisse,="" yann="" n.="" dauphin,="" david="" lopez-paz.="" “mixup:="" beyond="" empirical="" minimization”="" sangdoo="" yun,="" dongyoon="" han,="" seong="" joon="" oh,="" sanghyuk="" chun,="" junsuk="" choe,="" youngjoon="" yoo.="" “cutmix:="" strategy="" localizable="" features”="" elad="" hoffer,="" itay="" hubara,="" niv="" giladi,="" torsten="" hoefler,="" daniel="" soudry.="" “augment="" your="" batch:="" batches”="" maxim="" berman,="" jégou,="" iasonas="" kokkinos,="" douze.="" “multigrain:="" unified="" embedding="" classes="" instances”="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/fx-image2.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/fx-image2.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="How to Train State-Of-The-Art Models Using TorchVision’s Latest Primitives">
+<meta property="og:description" content="
+
+A few weeks ago, TorchVision v0.11 was released packed with numerous new primitives, models and training recipe improvements which allowed achieving state-of-the-art (SOTA) results. The project was dubbed “TorchVision with Batteries Included” and aimed to modernize our library. We wanted to enable researchers to reproduce papers and conduct research more easily by using common building blocks. Moreover, we aspired to provide the necessary tools to Applied ML practitioners to train their models on their own data using the same SOTA techniques as in research. Finally, we wanted to refresh our pre-trained weights and offer&nbsp;better off-the-shelf models to our users, hoping that they would build better applications.
+
+Though there is still much work to be done, we wanted to share with you some exciting results from the above work. We will showcase how one can use the new tools included in TorchVision to achieve state-of-the-art results on a highly competitive and well-studied architecture such as ResNet50 [1]. We will share the exact recipe used to improve our baseline by over 4.7 accuracy points to reach a final top-1 accuracy of 80.9% and share the journey for deriving the new training process. Moreover, we will show that this recipe generalizes well to other model variants and families. We hope that the above will influence future research for developing stronger generalizable training methodologies and will inspire the community to adopt and contribute to our efforts.
+
+The Results
+
+Using our new training recipe found on ResNet50, we’ve refreshed the pre-trained weights of the following models:
+
+
+  
+    
+      Model
+      Accuracy@1
+      Accuracy@5
+    
+  
+  
+    
+      ResNet50
+      80.858
+      95.434
+    
+  
+  
+    
+      ResNet101
+      81.886
+      95.780
+    
+  
+  
+    
+      ResNet152
+      82.284
+      96.002
+    
+  
+  
+    
+      ResNeXt50-32x4d
+      81.198
+      95.340
+    
+  
+
+
+Note that the accuracy of all models except RetNet50 can be further improved by adjusting their training parameters slightly, but our focus was to have a single robust recipe which performs well for all.
+
+UPDATE: We have refreshed the majority of popular classification models of TorchVision, you can find the details on this blog post.
+
+There are currently two ways to use the latest weights of the model.
+
+Using the Multi-pretrained weight API
+
+We are currently working on a new prototype mechanism which will extend the model builder methods of TorchVision to support multiple weights. Along with the weights, we store useful meta-data (such as the labels, the accuracy, links to recipe etc) and the preprocessing transforms necessary for using the models. Example:
+
+  from PIL import Image
+  from torchvision import prototype as P
+  img = Image.open(" test="" assets="" encode_jpeg="" grace_hopper_517x606.jpg")=""  ="" #="" initialize="" model="" weights="P.models.ResNet50_Weights.IMAGENET1K_V2" model.eval()="" inference="" transforms="" preprocess="weights.transforms()" apply="" preprocessing="" batch="preprocess(img).unsqueeze(0)" prediction="model(batch).squeeze(0).softmax(0)" make="" predictions="" label="prediction.argmax().item()" score="prediction[label].item()" use="" meta="" to="" get="" the="" labels="" category_name="weights.meta['categories'][label]" print(f"{category_name}:="" {100="" *="" score}%")="" using="" legacy="" api="" those="" who="" don’t="" want="" a="" prototype="" have="" option="" of="" accessing="" new="" via="" following="" approach:="" from="" torchvision.models="" import="" resnet="" overwrite="" url="" previous="" resnet.model_urls["resnet50"]="https://download.pytorch.org/models/resnet50-11ad3fa6.pth" todo:="" +="" call="" ...="" training="" recipe="" our="" goal="" was="" newly="" introduced="" primitives="" torchvision="" derive="" strong="" which="" achieves="" state-of-the-art="" results="" for="" vanilla="" resnet50="" architecture="" when="" trained="" scratch="" on="" imagenet="" with="" no="" additional="" external="" data.="" though="" by="" specific="" tricks [2]="" one="" could="" further="" improve="" accuracy,="" we’ve="" decided="" not="" include="" them="" so="" that="" can="" be="" used="" in="" other="" architectures.="" recipe heavily="" focuses="" simplicity="" and="" builds="" upon="" work="" fair="" [3],="" [4],="" [5],="" [6],="" [7]. our="" findings="" align="" the parallel="" study="" wightman="" et="" al.="" [7],="" also="" report="" major="" accuracy="" improvements="" focusing="" recipes.="" without="" ado,="" here="" are="" main="" parameters="" recipe:="" optimizer="" &amp;="" lr="" scheme="" ngpus="8," batch_size="128,&nbsp;" per="" gpu="" epochs="600," opt="sgd" ,="" momentum="0.9," lr_scheduler="cosineannealinglr" lr_warmup_epochs="5," lr_warmup_method="linear" lr_warmup_decay="0.01," regularization="" augmentation="" weight_decay="2e-05," norm_weight_decay="0.0," label_smoothing="0.1," mixup_alpha="0.2," cutmix_alpha="1.0," auto_augment="ta_wide" random_erase="0.1," ra_sampler="True," ra_reps="4," ema="" configuration="" model_ema="True," model_ema_steps="32," model_ema_decay="0.99998," resizing="" interpolation="bilinear" val_resize_size="232," val_crop_size="224," train_crop_size="176," standard="" reference="" script,="" we="" train="" command:="" torchrun="" --nproc_per_node="8" train.py="" --model="" --batch-size="" 128="" --lr="" 0.5="" \="" --lr-scheduler="" cosineannealinglr="" --lr-warmup-epochs="" 5="" --lr-warmup-method="" linear="" --auto-augment="" ta_wide="" --epochs="" 600="" --random-erase="" 0.1="" --weight-decay="" 0.00002 \="" --norm-weight-decay="" 0.0="" --label-smoothing="" --mixup-alpha="" 0.2="" --cutmix-alpha="" 1.0 \="" --train-crop-size="" 176="" --model-ema="" --val-resize-size="" 232="" --ra-sampler="" --ra-reps="" 4="" methodology="" there="" few="" principles="" kept="" mind="" during="" explorations:="" is="" stochastic="" process="" validation="" metric="" try="" optimize="" random="" variable.="" this="" due="" weight="" initialization="" employed="" existence="" effects="" process.="" means="" can’t="" do="" single="" run="" assess="" effect="" change.="" practice="" doing="" multiple="" runs="" (usually="" 3="" 5)="" studying="" summarization="" stats="" (such="" as="" mean,="" std,="" median,="" max,="" etc).="" usually="" significant="" interaction="" between="" different="" parameters,="" especially="" techniques="" focus="" reducing="" overfitting.="" thus="" changing="" value="" optimal="" configurations="" others.="" account="" either="" adopt="" greedy="" search="" approach="" (which="" often="" leads="" suboptimal="" but="" tractable="" experiments)="" or="" grid="" better="" computationally="" expensive).="" work,="" mixture="" both.="" non-deterministic="" introduce="" noise="" require="" longer="" cycles="" performance.="" keep="" things="" tractable,="" initially="" short="" (small="" number="" epochs)="" decide="" paths="" eliminated="" early="" should="" explored="" training.="" risk="" overfitting="" dataset="" [8]="" because="" repeated="" experiments.="" mitigate="" some="" risk,="" only="" optimizations="" provide="" k-fold="" cross="" verify="" done="" set.="" moreover="" confirm="" ingredients="" generalize="" well="" models="" didn’t="" hyper-parameters.="" break="" down="" key="" discussed="" in earlier="" blogposts,="" journey="" monotonically="" increasing="" accuracies="" involves="" lot="" backtracking.="" quantify="" each="" optimization,="" below="" attempt="" show-case="" an="" idealized="" deriving="" final="" starting="" original="" torchvision.="" would="" like="" clarify="" oversimplification="" actual="" path="" followed="" it="" taken="" grain="" salt. ="" table="" below,="" summary="" performance="" stacked="" incremental="" top="" baseline.="" unless="" denoted="" otherwise,="" best="" acc@1="" out="" runs:="" accuracy@1="" accuracy@5="" diff="" absolute="" baseline="" 76.130="" 92.862="" 0.000="" 76.494="" 93.198="" 0.364="" trivialaugment="" 76.806="" 93.272="" 0.312="" 0.676="" long="" 78.606="" 94.052="" 1.800="" 2.476="" erasing="" 78.796="" 94.094="" 0.190="" 2.666="" smoothing="" 79.114="" 94.374="" 0.318="" 2.984="" mixup="" 79.232="" 94.536="" 0.118="" 3.102="" cutmix="" 79.510="" 94.642="" 0.278="" 3.380="" decay="" tuning="" 80.036="" 94.746="" 0.526="" 3.906="" fixres="" mitigations="" 80.196="" 94.672="" 0.160="" 4.066="" 80.450="" 94.908="" 0.254="" 4.320="" resize="" 80.674="" 95.166="" 0.224="" 4.544="" **="" 80.858="" 95.434="" 0.184="" 4.728="" *the="" size="" last="" model.="" see="" details.="" community="" contribution="" after="" release="" article.="" previously="" released="" lr_step_size="30," lr_gamma="0.1," most="" above="" defaults="" scripts.="" will="" start="" building="" introducing="" until="" gradually="" arrive="" at="" recipe.="" parameter="" updates="" both="" speed="" achieved="" lr.="" another="" common="" method="" warmup="" increase="" learning="" rate.="" beneficial="" very="" high="" rates="" helps="" stability="" epochs.="" finally,="" optimization="" cosine="" schedule="" adjust="" big="" advantage="" hyper-parameters="" optimize,="" cuts="" space.="" applied="" note="" experiments="" determine="" parameters:="" top-1="" points="" comparing="" order="" combine="" strategies="" sequentiallr="" scheduler.="" basic="" such="" resized="" crops="" horizontal="" flips.="" easy="" way="" more="" complex="" “automatic-augmentation”="" techniques.="" performed="" us="" trivialaugment [9],="" which is="" extremely="" simple="" considered="" “parameter="" free”,="" help="" cut="" space="" further.="" update="" step:="" increased="" by 0.312="" points compared="" step.="" contains="" behave="" randomly.="" specifically="" adding="" noise,="" becomes="" crucial.="" stages="" exploration,="" relatively="" roughly="" 200="" later="" 400="" started="" narrowing="" finally="" versions="" earlier="" steps:="" increases="" 1.8="" biggest="" observe="" iterative="" it’s="" worth="" noting="" overstated="" somehow="" misleading.="" just="" old="" won’t="" yield="" improvements.="" nevertheless="" combination="" benefit="" cycles.="" mentioning="" reason="" lengthy="" next="" steps="" that require="" significantly="" good="" results.="" data="" technique="" known="" classification="" [10],="" [11].="" paired="" automatic="" methods,="" yields="" its="" effect.="" tuned="" probability="" applying="" found="" low="" levels,="" typically="" around="" 10%. ="" extra="" previous:="" further 0.190="" points.="" reduce="" stop="" becoming="" overconfident.="" softening="" ground="" truth="" smoothing [12].="" controls="" degree="" (the="" higher="" stronger)="" need="" specify.="" optimizing="" possible,="" values="" 0.05-0.15="" similar="" results,="" avoid="" same="" the paper="" it.="" find="" config="" added="" pytorch’s="" introduced crossentropyloss="" additional 0.318="" two="" produce="" sota="" cutmix [13],="" [14].="" they="" images.="" setup="" randomly="" equal="" probability.="" parameterized="" a hyperparameter="" alpha,="" shape="" beta="" distribution="" sampled.="" did="" limited="" search,="" primarily="" proposed="" papers. ="" you="" alpha="" techniques:="" by 0.118="" combining="" improves="" uses="" l2="" larger="" universally="" all="" learned="" default.="" recipe,="" approach.="" first="" perform="" tune="" second="" disable="" normalization="" layers. ="" further 0.526="" points,="" providing="" experimental="" evidence="" fact="" has="" separating="" rest="" inspired="" by classyvision’s="" important="" identified="" if="" resolution="" 224x224="" studied="" detail="" paper="" [5] and="" proposed:="" a)="" maximized="" b)="" fine-tune="" two-phase="" adjusts="" target="" resolution.="" since="" 2-phase="" training,="" went="" a).="" reduced="" crop="" 224="" maximizes="" 224x224.="" improved="" sped="" up="" still="" persists,="" meaning="" continues="" moreover,="" crop-size="" actually="" hurts="" accuracy.="" intuitively="" makes="" sense="" much="" before="" critical="" details="" disappearing="" picture.="" mitigation="" seems="" depth="" resnet50.="" deeper="" variants="" receptive="" fields="" seem="" slightly="" negatively="" affected="" (typically="" 0.1-0.2="" points).="" hence="" consider="" part="" optional.="" visualize="" available="" checkpoints="" (with="" full="" recipe)="" resolution:="" exponential="" moving="" average="" (ema)="" allows="" push="" complexity="" time.="" performs="" stable="" models.="" averaging="" happens="" every="" iterations="" search. ="" by 0.254="" torchvision’s ema="" implementation="" build="" averagedmodel="" class="" difference="" being="" averages="" buffers.="" adopted="" tricks="" from pycls which="" allow="" parameterize="" doesn’t="" depend="" unlike="" involved="" inference,="" image="" then="" central="" 256,="" caused="" discrepancy="" described="" [5].="" bringing="" closer="" resolution,="" select="" interval="" [224,="" 256]="" step="" 8.="" overfitting,="" selected="" half="" set="" confirmed="" half.="" by 0.224="" points. it’s="" works="" resnet101,="" resnet152="" resnext50,="" hints="" generalizes="" across="" models:="" [update]="" [15],="" [16]="" overall="" been="" recipes="" [7].="" tal="" ben-nun,="" contributor,="" proposing="" repetitions.="" his="" came="" by 0.184="" points. ="" were="" tested="" research,="" experimented="" techniques,="" optimizations.="" anything="" improvement.="" approaches="" took="" optimizers:="" optimizers="" adam,="" rmsprop="" sgd="" nesterov="" didn’t provide="" than="" momentum.="" schedulers: we="" tried="" scheduler="" schemes="" steplr="" exponential.="" latter="" tends="" ema,="" requires="" defining="" minimum="" well.="" instead,="" annealing="" decaying="" zero="" choose="" checkpoint="" highest="" augmentations: we’ve="" autoaugment="" randaugment.="" none="" these="" outperformed="" simpler="" parameter-free="" trivialaugment.="" interpolation:="" bicubic="" nearest="" bilinear.="" layers:="" sync="" norm="" yield significantly="" regular="" norm.="" acknowledgements="" thank piotr="" dollar,="" mannat="" singh="" hugo="" touvron="" their="" insights="" feedback="" development="" research="" based="" on.="" support="" invaluable="" achieving="" result.="" thank prabhat="" roy,="" kai="" zhang,="" yiwen="" song,="" joel="" schlosser,="" ilqar="" ramazanli,="" francisco="" massa,="" singh,="" xiaoliang="" dai,="" samuel="" gabriel,="" allen="" goodman="" ben-nun="" contributions="" batteries="" included="" project.="" references="" kaiming="" he,="" xiangyu="" shaoqing="" ren,="" jian="" sun.="" “deep="" residual="" recognition”.="" tong="" zhi="" hang="" zhongyue="" junyuan="" xie,="" mu="" li.="" “bag="" convolutional="" neural="" networks”="" piotr="" dollár,="" ross="" girshick.="" “fast="" accurate="" scaling”="" tete="" xiao,="" eric="" mintun,="" trevor="" darrell,="" “early="" convolutions="" transformers="" better”="" touvron,="" andrea="" vedaldi,="" matthijs="" douze,="" hervé="" jégou.="" “fixing="" train-test="" matthieu="" cord,="" alexandre="" sablayrolles,="" “training="" data-efficient="" distillation="" through="" attention”="" wightman,="" “resnet="" strikes="" back:="" procedure="" timm”="" benjamin="" recht,="" rebecca="" roelofs,="" ludwig="" schmidt,="" vaishaal="" shankar.="" “do="" classifiers="" imagenet?”="" g.="" müller,="" frank="" hutter.="" “trivialaugment:="" tuning-free="" yet="" augmentation”="" zhun="" zhong,="" liang="" zheng,="" guoliang="" kang,="" shaozi="" li,="" yi="" yang.="" “random="" terrance="" devries,="" graham="" w.="" taylor.="" “improved="" networks="" cutout”="" christian="" szegedy,="" vincent="" vanhoucke,="" sergey="" ioffe,="" jon="" shlens,="" zbigniew="" wojna.="" “rethinking="" inception="" computer="" vision”="" hongyi="" moustapha="" cisse,="" yann="" n.="" dauphin,="" david="" lopez-paz.="" “mixup:="" beyond="" empirical="" minimization”="" sangdoo="" yun,="" dongyoon="" han,="" seong="" joon="" oh,="" sanghyuk="" chun,="" junsuk="" choe,="" youngjoon="" yoo.="" “cutmix:="" strategy="" localizable="" features”="" elad="" hoffer,="" itay="" hubara,="" niv="" giladi,="" torsten="" hoefler,="" daniel="" soudry.="" “augment="" your="" batch:="" batches”="" maxim="" berman,="" jégou,="" iasonas="" kokkinos,="" douze.="" “multigrain:="" unified="" embedding="" classes="" instances”="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to Train State-Of-The-Art Models Using TorchVision’s Latest Primitives">
+<meta name="twitter:description" content="
+
+A few weeks ago, TorchVision v0.11 was released packed with numerous new primitives, models and training recipe improvements which allowed achieving state-of-the-art (SOTA) results. The project was dubbed “TorchVision with Batteries Included” and aimed to modernize our library. We wanted to enable researchers to reproduce papers and conduct research more easily by using common building blocks. Moreover, we aspired to provide the necessary tools to Applied ML practitioners to train their models on their own data using the same SOTA techniques as in research. Finally, we wanted to refresh our pre-trained weights and offer&nbsp;better off-the-shelf models to our users, hoping that they would build better applications.
+
+Though there is still much work to be done, we wanted to share with you some exciting results from the above work. We will showcase how one can use the new tools included in TorchVision to achieve state-of-the-art results on a highly competitive and well-studied architecture such as ResNet50 [1]. We will share the exact recipe used to improve our baseline by over 4.7 accuracy points to reach a final top-1 accuracy of 80.9% and share the journey for deriving the new training process. Moreover, we will show that this recipe generalizes well to other model variants and families. We hope that the above will influence future research for developing stronger generalizable training methodologies and will inspire the community to adopt and contribute to our efforts.
+
+The Results
+
+Using our new training recipe found on ResNet50, we’ve refreshed the pre-trained weights of the following models:
+
+
+  
+    
+      Model
+      Accuracy@1
+      Accuracy@5
+    
+  
+  
+    
+      ResNet50
+      80.858
+      95.434
+    
+  
+  
+    
+      ResNet101
+      81.886
+      95.780
+    
+  
+  
+    
+      ResNet152
+      82.284
+      96.002
+    
+  
+  
+    
+      ResNeXt50-32x4d
+      81.198
+      95.340
+    
+  
+
+
+Note that the accuracy of all models except RetNet50 can be further improved by adjusting their training parameters slightly, but our focus was to have a single robust recipe which performs well for all.
+
+UPDATE: We have refreshed the majority of popular classification models of TorchVision, you can find the details on this blog post.
+
+There are currently two ways to use the latest weights of the model.
+
+Using the Multi-pretrained weight API
+
+We are currently working on a new prototype mechanism which will extend the model builder methods of TorchVision to support multiple weights. Along with the weights, we store useful meta-data (such as the labels, the accuracy, links to recipe etc) and the preprocessing transforms necessary for using the models. Example:
+
+  from PIL import Image
+  from torchvision import prototype as P
+  img = Image.open(" test="" assets="" encode_jpeg="" grace_hopper_517x606.jpg")=""  ="" #="" initialize="" model="" weights="P.models.ResNet50_Weights.IMAGENET1K_V2" model.eval()="" inference="" transforms="" preprocess="weights.transforms()" apply="" preprocessing="" batch="preprocess(img).unsqueeze(0)" prediction="model(batch).squeeze(0).softmax(0)" make="" predictions="" label="prediction.argmax().item()" score="prediction[label].item()" use="" meta="" to="" get="" the="" labels="" category_name="weights.meta['categories'][label]" print(f"{category_name}:="" {100="" *="" score}%")="" using="" legacy="" api="" those="" who="" don’t="" want="" a="" prototype="" have="" option="" of="" accessing="" new="" via="" following="" approach:="" from="" torchvision.models="" import="" resnet="" overwrite="" url="" previous="" resnet.model_urls["resnet50"]="https://download.pytorch.org/models/resnet50-11ad3fa6.pth" todo:="" +="" call="" ...="" training="" recipe="" our="" goal="" was="" newly="" introduced="" primitives="" torchvision="" derive="" strong="" which="" achieves="" state-of-the-art="" results="" for="" vanilla="" resnet50="" architecture="" when="" trained="" scratch="" on="" imagenet="" with="" no="" additional="" external="" data.="" though="" by="" specific="" tricks [2]="" one="" could="" further="" improve="" accuracy,="" we’ve="" decided="" not="" include="" them="" so="" that="" can="" be="" used="" in="" other="" architectures.="" recipe heavily="" focuses="" simplicity="" and="" builds="" upon="" work="" fair="" [3],="" [4],="" [5],="" [6],="" [7]. our="" findings="" align="" the parallel="" study="" wightman="" et="" al.="" [7],="" also="" report="" major="" accuracy="" improvements="" focusing="" recipes.="" without="" ado,="" here="" are="" main="" parameters="" recipe:="" optimizer="" &amp;="" lr="" scheme="" ngpus="8," batch_size="128,&nbsp;" per="" gpu="" epochs="600," opt="sgd" ,="" momentum="0.9," lr_scheduler="cosineannealinglr" lr_warmup_epochs="5," lr_warmup_method="linear" lr_warmup_decay="0.01," regularization="" augmentation="" weight_decay="2e-05," norm_weight_decay="0.0," label_smoothing="0.1," mixup_alpha="0.2," cutmix_alpha="1.0," auto_augment="ta_wide" random_erase="0.1," ra_sampler="True," ra_reps="4," ema="" configuration="" model_ema="True," model_ema_steps="32," model_ema_decay="0.99998," resizing="" interpolation="bilinear" val_resize_size="232," val_crop_size="224," train_crop_size="176," standard="" reference="" script,="" we="" train="" command:="" torchrun="" --nproc_per_node="8" train.py="" --model="" --batch-size="" 128="" --lr="" 0.5="" \="" --lr-scheduler="" cosineannealinglr="" --lr-warmup-epochs="" 5="" --lr-warmup-method="" linear="" --auto-augment="" ta_wide="" --epochs="" 600="" --random-erase="" 0.1="" --weight-decay="" 0.00002 \="" --norm-weight-decay="" 0.0="" --label-smoothing="" --mixup-alpha="" 0.2="" --cutmix-alpha="" 1.0 \="" --train-crop-size="" 176="" --model-ema="" --val-resize-size="" 232="" --ra-sampler="" --ra-reps="" 4="" methodology="" there="" few="" principles="" kept="" mind="" during="" explorations:="" is="" stochastic="" process="" validation="" metric="" try="" optimize="" random="" variable.="" this="" due="" weight="" initialization="" employed="" existence="" effects="" process.="" means="" can’t="" do="" single="" run="" assess="" effect="" change.="" practice="" doing="" multiple="" runs="" (usually="" 3="" 5)="" studying="" summarization="" stats="" (such="" as="" mean,="" std,="" median,="" max,="" etc).="" usually="" significant="" interaction="" between="" different="" parameters,="" especially="" techniques="" focus="" reducing="" overfitting.="" thus="" changing="" value="" optimal="" configurations="" others.="" account="" either="" adopt="" greedy="" search="" approach="" (which="" often="" leads="" suboptimal="" but="" tractable="" experiments)="" or="" grid="" better="" computationally="" expensive).="" work,="" mixture="" both.="" non-deterministic="" introduce="" noise="" require="" longer="" cycles="" performance.="" keep="" things="" tractable,="" initially="" short="" (small="" number="" epochs)="" decide="" paths="" eliminated="" early="" should="" explored="" training.="" risk="" overfitting="" dataset="" [8]="" because="" repeated="" experiments.="" mitigate="" some="" risk,="" only="" optimizations="" provide="" k-fold="" cross="" verify="" done="" set.="" moreover="" confirm="" ingredients="" generalize="" well="" models="" didn’t="" hyper-parameters.="" break="" down="" key="" discussed="" in earlier="" blogposts,="" journey="" monotonically="" increasing="" accuracies="" involves="" lot="" backtracking.="" quantify="" each="" optimization,="" below="" attempt="" show-case="" an="" idealized="" deriving="" final="" starting="" original="" torchvision.="" would="" like="" clarify="" oversimplification="" actual="" path="" followed="" it="" taken="" grain="" salt. ="" table="" below,="" summary="" performance="" stacked="" incremental="" top="" baseline.="" unless="" denoted="" otherwise,="" best="" acc@1="" out="" runs:="" accuracy@1="" accuracy@5="" diff="" absolute="" baseline="" 76.130="" 92.862="" 0.000="" 76.494="" 93.198="" 0.364="" trivialaugment="" 76.806="" 93.272="" 0.312="" 0.676="" long="" 78.606="" 94.052="" 1.800="" 2.476="" erasing="" 78.796="" 94.094="" 0.190="" 2.666="" smoothing="" 79.114="" 94.374="" 0.318="" 2.984="" mixup="" 79.232="" 94.536="" 0.118="" 3.102="" cutmix="" 79.510="" 94.642="" 0.278="" 3.380="" decay="" tuning="" 80.036="" 94.746="" 0.526="" 3.906="" fixres="" mitigations="" 80.196="" 94.672="" 0.160="" 4.066="" 80.450="" 94.908="" 0.254="" 4.320="" resize="" 80.674="" 95.166="" 0.224="" 4.544="" **="" 80.858="" 95.434="" 0.184="" 4.728="" *the="" size="" last="" model.="" see="" details.="" community="" contribution="" after="" release="" article.="" previously="" released="" lr_step_size="30," lr_gamma="0.1," most="" above="" defaults="" scripts.="" will="" start="" building="" introducing="" until="" gradually="" arrive="" at="" recipe.="" parameter="" updates="" both="" speed="" achieved="" lr.="" another="" common="" method="" warmup="" increase="" learning="" rate.="" beneficial="" very="" high="" rates="" helps="" stability="" epochs.="" finally,="" optimization="" cosine="" schedule="" adjust="" big="" advantage="" hyper-parameters="" optimize,="" cuts="" space.="" applied="" note="" experiments="" determine="" parameters:="" top-1="" points="" comparing="" order="" combine="" strategies="" sequentiallr="" scheduler.="" basic="" such="" resized="" crops="" horizontal="" flips.="" easy="" way="" more="" complex="" “automatic-augmentation”="" techniques.="" performed="" us="" trivialaugment [9],="" which is="" extremely="" simple="" considered="" “parameter="" free”,="" help="" cut="" space="" further.="" update="" step:="" increased="" by 0.312="" points compared="" step.="" contains="" behave="" randomly.="" specifically="" adding="" noise,="" becomes="" crucial.="" stages="" exploration,="" relatively="" roughly="" 200="" later="" 400="" started="" narrowing="" finally="" versions="" earlier="" steps:="" increases="" 1.8="" biggest="" observe="" iterative="" it’s="" worth="" noting="" overstated="" somehow="" misleading.="" just="" old="" won’t="" yield="" improvements.="" nevertheless="" combination="" benefit="" cycles.="" mentioning="" reason="" lengthy="" next="" steps="" that require="" significantly="" good="" results.="" data="" technique="" known="" classification="" [10],="" [11].="" paired="" automatic="" methods,="" yields="" its="" effect.="" tuned="" probability="" applying="" found="" low="" levels,="" typically="" around="" 10%. ="" extra="" previous:="" further 0.190="" points.="" reduce="" stop="" becoming="" overconfident.="" softening="" ground="" truth="" smoothing [12].="" controls="" degree="" (the="" higher="" stronger)="" need="" specify.="" optimizing="" possible,="" values="" 0.05-0.15="" similar="" results,="" avoid="" same="" the paper="" it.="" find="" config="" added="" pytorch’s="" introduced crossentropyloss="" additional 0.318="" two="" produce="" sota="" cutmix [13],="" [14].="" they="" images.="" setup="" randomly="" equal="" probability.="" parameterized="" a hyperparameter="" alpha,="" shape="" beta="" distribution="" sampled.="" did="" limited="" search,="" primarily="" proposed="" papers. ="" you="" alpha="" techniques:="" by 0.118="" combining="" improves="" uses="" l2="" larger="" universally="" all="" learned="" default.="" recipe,="" approach.="" first="" perform="" tune="" second="" disable="" normalization="" layers. ="" further 0.526="" points,="" providing="" experimental="" evidence="" fact="" has="" separating="" rest="" inspired="" by classyvision’s="" important="" property="" identified="" if="" resolution="" 224x224="" studied="" detail="" paper="" [5] and="" proposed:="" a)="" maximized="" b)="" fine-tune="" two-phase="" adjusts="" target="" resolution.="" since="" 2-phase="" training,="" went="" a).="" reduced="" crop="" 224="" maximizes="" 224x224.="" improved="" sped="" up="" still="" persists,="" meaning="" continues="" moreover,="" crop-size="" actually="" hurts="" accuracy.="" intuitively="" makes="" sense="" much="" before="" critical="" details="" disappearing="" picture.="" mitigation="" seems="" depth="" resnet50.="" deeper="" variants="" receptive="" fields="" seem="" slightly="" negatively="" affected="" (typically="" 0.1-0.2="" points).="" hence="" consider="" part="" optional.="" visualize="" available="" checkpoints="" (with="" full="" recipe)="" resolution:="" exponential="" moving="" average="" (ema)="" allows="" push="" complexity="" time.="" performs="" stable="" models.="" averaging="" happens="" every="" iterations="" search. ="" by 0.254="" torchvision’s ema="" implementation="" build="" averagedmodel="" class="" difference="" being="" averages="" buffers.="" adopted="" tricks="" from pycls which="" allow="" parameterize="" doesn’t="" depend="" unlike="" involved="" inference,="" image="" then="" central="" 256,="" caused="" discrepancy="" described="" [5].="" bringing="" closer="" resolution,="" select="" interval="" [224,="" 256]="" step="" 8.="" overfitting,="" selected="" half="" set="" confirmed="" half.="" by 0.224="" points. it’s="" works="" resnet101,="" resnet152="" resnext50,="" hints="" generalizes="" across="" models:="" [update]="" [15],="" [16]="" overall="" been="" recipes="" [7].="" tal="" ben-nun,="" contributor,="" proposing="" repetitions.="" his="" came="" by 0.184="" points. ="" were="" tested="" research,="" experimented="" techniques,="" optimizations.="" anything="" improvement.="" approaches="" took="" optimizers:="" optimizers="" adam,="" rmsprop="" sgd="" nesterov="" didn’t provide="" than="" momentum.="" schedulers: we="" tried="" scheduler="" schemes="" steplr="" exponential.="" latter="" tends="" ema,="" requires="" defining="" minimum="" well.="" instead,="" annealing="" decaying="" zero="" choose="" checkpoint="" highest="" augmentations: we’ve="" autoaugment="" randaugment.="" none="" these="" outperformed="" simpler="" parameter-free="" trivialaugment.="" interpolation:="" bicubic="" nearest="" bilinear.="" layers:="" sync="" norm="" yield significantly="" regular="" norm.="" acknowledgements="" thank piotr="" dollar,="" mannat="" singh="" hugo="" touvron="" their="" insights="" feedback="" development="" research="" based="" on.="" support="" invaluable="" achieving="" result.="" thank prabhat="" roy,="" kai="" zhang,="" yiwen="" song,="" joel="" schlosser,="" ilqar="" ramazanli,="" francisco="" massa,="" singh,="" xiaoliang="" dai,="" samuel="" gabriel,="" allen="" goodman="" ben-nun="" contributions="" batteries="" included="" project.="" references="" kaiming="" he,="" xiangyu="" shaoqing="" ren,="" jian="" sun.="" “deep="" residual="" recognition”.="" tong="" zhi="" hang="" zhongyue="" junyuan="" xie,="" mu="" li.="" “bag="" convolutional="" neural="" networks”="" piotr="" dollár,="" ross="" girshick.="" “fast="" accurate="" scaling”="" tete="" xiao,="" eric="" mintun,="" trevor="" darrell,="" “early="" convolutions="" transformers="" better”="" touvron,="" andrea="" vedaldi,="" matthijs="" douze,="" hervé="" jégou.="" “fixing="" train-test="" matthieu="" cord,="" alexandre="" sablayrolles,="" “training="" data-efficient="" distillation="" through="" attention”="" wightman,="" “resnet="" strikes="" back:="" procedure="" timm”="" benjamin="" recht,="" rebecca="" roelofs,="" ludwig="" schmidt,="" vaishaal="" shankar.="" “do="" classifiers="" imagenet?”="" g.="" müller,="" frank="" hutter.="" “trivialaugment:="" tuning-free="" yet="" augmentation”="" zhun="" zhong,="" liang="" zheng,="" guoliang="" kang,="" shaozi="" li,="" yi="" yang.="" “random="" terrance="" devries,="" graham="" w.="" taylor.="" “improved="" networks="" cutout”="" christian="" szegedy,="" vincent="" vanhoucke,="" sergey="" ioffe,="" jon="" shlens,="" zbigniew="" wojna.="" “rethinking="" inception="" computer="" vision”="" hongyi="" moustapha="" cisse,="" yann="" n.="" dauphin,="" david="" lopez-paz.="" “mixup:="" beyond="" empirical="" minimization”="" sangdoo="" yun,="" dongyoon="" han,="" seong="" joon="" oh,="" sanghyuk="" chun,="" junsuk="" choe,="" youngjoon="" yoo.="" “cutmix:="" strategy="" localizable="" features”="" elad="" hoffer,="" itay="" hubara,="" niv="" giladi,="" torsten="" hoefler,="" daniel="" soudry.="" “augment="" your="" batch:="" batches”="" maxim="" berman,="" jégou,="" iasonas="" kokkinos,="" douze.="" “multigrain:="" unified="" embedding="" classes="" instances”="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年11月18日</p>
+            <h1>
+                <a class="blog-title">如何使用 TorchVision 最新原语训练最先进的模型</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由瓦西利斯·弗里尼奥蒂斯著</p>
+                    <style type="text/css">
+article.pytorch-article table tr th, article.pytorch-article table td {line-height: 1.5rem}
+</style>
+
+<p>几周前，TorchVision v0.11 版本发布，其中包含了许多新的原语、模型和训练食谱的改进，这些改进使得达到最先进（SOTA）的结果成为可能。该项目被称为“<a href="https://github.com/pytorch/vision/issues/3911"> 内置电池的 TorchVision</a>”，旨在使我们的库现代化。我们希望研究人员能够通过使用常见的构建块更容易地重现论文和进行研究。此外，我们渴望为应用机器学习从业者提供必要的工具，让他们能够使用与研究中相同的最先进技术在自己的数据上训练模型。最后，我们希望刷新我们的预训练权重，并为用户提供更好的现成模型，希望他们能够构建更好的应用程序。</p>
+
+<p>尽管还有很多工作要做，但我们想与您分享一些上述工作的激动人心的成果。我们将展示如何使用 TorchVision 中包含的新工具在 ResNet50 这样的高度竞争和深入研究架构上实现最先进的成果。我们将分享提高我们的基线超过 4.7 个准确度点以达到最终 80.9%的 top-1 准确率的精确配方，并分享推导新训练过程的过程。此外，我们还将展示这个配方对其他模型变体和家族的泛化效果良好。我们希望上述内容能够影响未来的研究，以开发更强的可泛化训练方法，并激励社区采用并贡献我们的努力。</p>
+
+<h2 id="the-results">结果</h2>
+
+<p>使用我们在 ResNet50 上找到的新训练配方，我们刷新了以下模型的预训练权重：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th style="text-align: center">准确率@1</th>
+      <th style="text-align: center">准确率@5</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ResNet50</td>
+      <td style="text-align: center">80.858</td>
+      <td style="text-align: center">95.434</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>ResNet101</td>
+      <td style="text-align: center">81.886</td>
+      <td style="text-align: center">95.780</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>ResNet152</td>
+      <td style="text-align: center">82.284</td>
+      <td style="text-align: center">96.002</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>ResNeXt50-32x4d</td>
+      <td style="text-align: center">81.198</td>
+      <td style="text-align: center">95.340</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>注意，除了 RetNet50 之外的所有模型的准确性都可以通过稍微调整它们的训练参数来进一步提高，但我们的重点是拥有一个适用于所有模型的单一稳健配方。</p>
+
+<p><strong>更新：</strong> 我们已经更新了 TorchVision 中大多数流行的分类模型，您可以在<a href="https://pytorch.org/blog/introducing-torchvision-new-multi-weight-support-api/">这篇博客文章</a>中找到详细信息。</p>
+
+<p>目前有两种方式可以使用该模型的最新权重。</p>
+
+<h2 id="using-the-multi-pretrained-weight-api">使用多预训练权重 API</h2>
+
+<p>我们目前正在开发一种新的原型机制，该机制将扩展 TorchVision 的模型构建方法以<a href="https://github.com/pytorch/vision/issues/4611">支持多个权重 </a>。除了权重外，我们还存储了有用的<a href="https://github.com/pytorch/vision/blob/c5fb79f8fad60511c89957c4970cc2a5cfc8432e/torchvision/prototype/models/resnet.py#L94-L103">元数据 </a>（例如标签、准确率、食谱链接等）以及使用模型所需的预处理转换。示例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kn">from</span> <span class="nn">PIL</span> <span class="kn">import</span> <span class="n">Image</span>
+  <span class="kn">from</span> <span class="nn">torchvision</span> <span class="kn">import</span> <span class="n">prototype</span> <span class="k">as</span> <span class="n">P</span>
+  <span class="n">img</span> <span class="o">=</span> <span class="n">Image</span><span class="p">.</span><span class="nb">open</span><span class="p">(</span><span class="s">"test/assets/encode_jpeg/grace_hopper_517x606.jpg"</span><span class="p">)</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Initialize model
+</span>  <span class="n">weights</span> <span class="o">=</span> <span class="n">P</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">ResNet50_Weights</span><span class="p">.</span><span class="n">IMAGENET1K_V2</span>
+  <span class="n">model</span> <span class="o">=</span> <span class="n">P</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">)</span>
+  <span class="n">model</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+
+  <span class="c1"># Initialize inference transforms
+</span>  <span class="n">preprocess</span> <span class="o">=</span> <span class="n">weights</span><span class="p">.</span><span class="n">transforms</span><span class="p">()</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Apply inference preprocessing transforms
+</span>  <span class="n">batch</span> <span class="o">=</span> <span class="n">preprocess</span><span class="p">(</span><span class="n">img</span><span class="p">).</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+  <span class="n">prediction</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">batch</span><span class="p">).</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">softmax</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Make predictions
+</span>  <span class="n">label</span> <span class="o">=</span> <span class="n">prediction</span><span class="p">.</span><span class="n">argmax</span><span class="p">().</span><span class="n">item</span><span class="p">()</span>
+  <span class="n">score</span> <span class="o">=</span> <span class="n">prediction</span><span class="p">[</span><span class="n">label</span><span class="p">].</span><span class="n">item</span><span class="p">()</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Use meta to get the labels
+</span>  <span class="n">category_name</span> <span class="o">=</span> <span class="n">weights</span><span class="p">.</span><span class="n">meta</span><span class="p">[</span><span class="s">'categories'</span><span class="p">][</span><span class="n">label</span><span class="p">]</span>
+  <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"</span><span class="si">{</span><span class="n">category_name</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="mi">100</span> <span class="o">*</span> <span class="n">score</span><span class="si">}</span><span class="s">%"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<h2 id="using-the-legacy-api">使用传统 API</h2>
+
+<p>不想使用原型 API 的用户可以选择通过以下方法使用传统 API 访问新权重：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kn">from</span> <span class="nn">torchvision.models</span> <span class="kn">import</span> <span class="n">resnet</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Overwrite the URL of the previous weights
+</span>  <span class="n">resnet</span><span class="p">.</span><span class="n">model_urls</span><span class="p">[</span><span class="s">"resnet50"</span><span class="p">]</span> <span class="o">=</span> <span class="s">"https://download.pytorch.org/models/resnet50-11ad3fa6.pth"</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># Initialize the model using the legacy API
+</span>  <span class="n">model</span> <span class="o">=</span> <span class="n">resnet</span><span class="p">.</span><span class="n">resnet50</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+  <span class="err">&nbsp;</span>
+  <span class="c1"># TODO: Apply preprocessing + call the model
+</span>  <span class="c1"># ...
+</span></code></pre></div></div>
+
+<h2 id="the-training-recipe">训练配方</h2>
+
+<p>我们的目的是利用 TorchVision 新引入的原始操作，推导出一个新的强大训练配方，该配方在从零开始训练 ImageNet 的 vanilla ResNet50 架构时，实现了最先进的性能。尽管通过使用针对特定架构的技巧[2]可以进一步提高准确率，但我们决定不包含它们，以便该配方可以用于其他架构。我们的配方高度重视简洁性，并基于 FAIR[3]、[4]、[5]、[6]、[7]的工作。我们的发现与 Wightman 等人[7]的并行研究相一致，他们也报告了通过关注训练配方实现了显著的准确率提升。我们的发现与 Wightman 等人[7]的并行研究相一致，他们也报告了通过关注训练配方实现了显著的准确率提升。</p>
+
+<p>不再拖延，以下是我们的配方的主要参数：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="c1"># Optimizer &amp; LR scheme
+</span>  <span class="n">ngpus</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+  <span class="n">batch_size</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span><span class="err">&nbsp;</span> <span class="c1"># per GPU
+</span>
+  <span class="n">epochs</span><span class="o">=</span><span class="mi">600</span><span class="p">,</span> 
+  <span class="n">opt</span><span class="o">=</span><span class="s">'sgd'</span><span class="p">,</span> <span class="err">&nbsp;</span>
+  <span class="n">momentum</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span>
+
+  <span class="n">lr</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> 
+  <span class="n">lr_scheduler</span><span class="o">=</span><span class="s">'cosineannealinglr'</span><span class="p">,</span> 
+  <span class="n">lr_warmup_epochs</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> 
+  <span class="n">lr_warmup_method</span><span class="o">=</span><span class="s">'linear'</span><span class="p">,</span> 
+  <span class="n">lr_warmup_decay</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span> 
+
+
+  <span class="c1"># Regularization and Augmentation
+</span>  <span class="n">weight_decay</span><span class="o">=</span><span class="mf">2e-05</span><span class="p">,</span> 
+  <span class="n">norm_weight_decay</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+
+  <span class="n">label_smoothing</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> 
+  <span class="n">mixup_alpha</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> 
+  <span class="n">cutmix_alpha</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> 
+  <span class="n">auto_augment</span><span class="o">=</span><span class="s">'ta_wide'</span><span class="p">,</span> 
+  <span class="n">random_erase</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> 
+  
+  <span class="n">ra_sampler</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+  <span class="n">ra_reps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+
+
+  <span class="c1"># EMA configuration
+</span>  <span class="n">model_ema</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> 
+  <span class="n">model_ema_steps</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> 
+  <span class="n">model_ema_decay</span><span class="o">=</span><span class="mf">0.99998</span><span class="p">,</span> 
+
+
+  <span class="c1"># Resizing
+</span>  <span class="n">interpolation</span><span class="o">=</span><span class="s">'bilinear'</span><span class="p">,</span> 
+  <span class="n">val_resize_size</span><span class="o">=</span><span class="mi">232</span><span class="p">,</span> 
+  <span class="n">val_crop_size</span><span class="o">=</span><span class="mi">224</span><span class="p">,</span> 
+  <span class="n">train_crop_size</span><span class="o">=</span><span class="mi">176</span><span class="p">,</span>
+</code></pre></div></div>
+
+<p>使用我们的标准<a href="https://github.com/pytorch/vision/tree/main/references/classification">训练参考脚本 </a>，我们可以使用以下命令训练 ResNet50：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torchrun --nproc_per_node=8 train.py --model resnet50 --batch-size 128 --lr 0.5 \
+--lr-scheduler cosineannealinglr --lr-warmup-epochs 5 --lr-warmup-method linear \
+--auto-augment ta_wide --epochs 600 --random-erase 0.1 --weight-decay 0.00002&nbsp;\
+--norm-weight-decay 0.0 --label-smoothing 0.1 --mixup-alpha 0.2 --cutmix-alpha 1.0&nbsp;\
+--train-crop-size 176 --model-ema --val-resize-size 232 --ra-sampler --ra-reps 4
+</code></pre></div></div>
+
+<h2 id="methodology">方法论</h2>
+
+<p>在我们的探索过程中，我们始终牢记以下原则：</p>
+
+<ol>
+  <li>训练是一个随机过程，我们试图优化的验证指标是一个随机变量。这是由于采用的随机权重初始化方案以及在训练过程中存在的随机效应。这意味着我们不能通过单次运行来评估食谱更改的影响。标准做法是进行多次运行（通常3到5次），并研究总结统计（如平均值、标准差、中位数、最大值等）。</li>
+  <li>通常不同参数之间存在显著的相互作用，尤其是在关注正则化和减少过拟合的技术中。因此，改变一个参数的值可能会影响其他参数的最佳配置。为了解决这个问题，可以采用贪婪搜索方法（这通常会导致次优结果但实验可行）或应用网格搜索（这会导致更好的结果但计算成本高昂）。在本工作中，我们使用了这两种方法的混合。</li>
+  <li>非确定性的技术或引入噪声的技术通常需要更长的训练周期来提高模型性能。为了保持可追踪性，我们最初使用了短训练周期（少量 epoch）来决定哪些路径可以早期消除，哪些应该使用更长的训练来探索。</li>
+  <li>由于重复实验，存在过度拟合验证数据集的风险[8]。为了减轻一些风险，我们只应用提供显著精度改进的训练优化，并使用 K 折交叉验证来验证在验证集上进行的优化。此外，我们还确认我们的配方成分在其他模型上也能很好地泛化，这些模型我们没有优化超参数。</li>
+</ol>
+
+<h2 id="break-down-of-key-accuracy-improvements">关键精度改进的分解</h2>
+
+<p>如前文<a href="https://pytorch.org/blog/torchvision-ssdlite-implementation/#break-down-of-key-accuracy-improvements">所述 </a>，训练模型并非单调递增准确率的旅程，过程中涉及大量回溯。为了量化每次优化的效果，以下我们尝试展示从 TorchVision 原始配方开始，推导最终配方的理想化线性旅程。我们想明确指出，这实际上是实际路径的简化，因此应持保留态度。</p>
+
+<p align="center">
+<img src="/assets/images/sota/Cumulative Accuracy Improvements for ResNet50.png" alt="Cumulative Accuracy Improvements for ResNet50" width="100%">
+</p>
+
+<p>下表总结了在基线之上叠加增量改进的性能。除非另有说明，否则我们报告的是 3 次运行中 Acc@1 最好的模型：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>&nbsp;</th>
+      <th style="text-align: center">准确率@1</th>
+      <th style="text-align: center">准确率@5</th>
+      <th style="text-align: left">增量差分</th>
+      <th style="text-align: center">绝对差分</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ResNet50 基准</td>
+      <td style="text-align: center">76.130</td>
+      <td style="text-align: center">92.862</td>
+      <td style="text-align: left">0.000</td>
+      <td style="text-align: center">0.000</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 学习率优化</td>
+      <td style="text-align: center">76.494</td>
+      <td style="text-align: center">93.198</td>
+      <td style="text-align: left">0.364</td>
+      <td style="text-align: center">0.364</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 简单增强</td>
+      <td style="text-align: center">76.806</td>
+      <td style="text-align: center">93.272</td>
+      <td style="text-align: left">0.312</td>
+      <td style="text-align: center">0.676</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 长期训练</td>
+      <td style="text-align: center">78.606</td>
+      <td style="text-align: center">94.052</td>
+      <td style="text-align: left">1.800</td>
+      <td style="text-align: center">2.476</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 随机擦除</td>
+      <td style="text-align: center">78.796</td>
+      <td style="text-align: center">94.094</td>
+      <td style="text-align: left">0.190</td>
+      <td style="text-align: center">2.666</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 标签平滑</td>
+      <td style="text-align: center">79.114</td>
+      <td style="text-align: center">94.374</td>
+      <td style="text-align: left">0.318</td>
+      <td style="text-align: center">2.984</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 混合</td>
+      <td style="text-align: center">79.232</td>
+      <td style="text-align: center">94.536</td>
+      <td style="text-align: left">0.118</td>
+      <td style="text-align: center">3.102</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 切换混合</td>
+      <td style="text-align: center">79.510</td>
+      <td style="text-align: center">94.642</td>
+      <td style="text-align: left">0.278</td>
+      <td style="text-align: center">3.380</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 权重衰减调整</td>
+      <td style="text-align: center">80.036</td>
+      <td style="text-align: center">94.746</td>
+      <td style="text-align: left">0.526</td>
+      <td style="text-align: center">3.906</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ FixRes 缓解措施</td>
+      <td style="text-align: center">80.196</td>
+      <td style="text-align: center">94.672</td>
+      <td style="text-align: left">0.160</td>
+      <td style="text-align: center">4.066</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ EMA</td>
+      <td style="text-align: center">80.450</td>
+      <td style="text-align: center">94.908</td>
+      <td style="text-align: left">0.254</td>
+      <td style="text-align: center">4.320</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 推理尺寸调整调整 *</td>
+      <td style="text-align: center">80.674</td>
+      <td style="text-align: center">95.166</td>
+      <td style="text-align: left">0.224</td>
+      <td style="text-align: center">4.544</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>+ 重复增强 **</td>
+      <td style="text-align: center">80.858</td>
+      <td style="text-align: center">95.434</td>
+      <td style="text-align: left">0.184</td>
+      <td style="text-align: center">4.728</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>*在最后一个模型的基础上进行了推理尺寸的调整。详情见下文。</p>
+
+<p>**文章发布后的社区贡献。详情见下文。**</p>
+
+<h2 id="baseline">基准</h2>
+
+<p>我们的基线是之前发布的 TorchVision 的 ResNet50 模型。它使用以下配方进行训练：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="c1"># Optimizer &amp; LR scheme
+</span>  <span class="n">ngpus</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+  <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span><span class="err">&nbsp;</span> <span class="c1"># per GPU
+</span>
+  <span class="n">epochs</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span> 
+  <span class="n">opt</span><span class="o">=</span><span class="s">'sgd'</span><span class="p">,</span> <span class="err">&nbsp;</span>
+  <span class="n">momentum</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span>
+
+  <span class="n">lr</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> 
+  <span class="n">lr_scheduler</span><span class="o">=</span><span class="s">'steplr'</span><span class="p">,</span> 
+  <span class="n">lr_step_size</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> 
+  <span class="n">lr_gamma</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> 
+
+
+  <span class="c1"># Regularization
+</span>  <span class="n">weight_decay</span><span class="o">=</span><span class="mf">1e-4</span><span class="p">,</span>
+
+
+  <span class="c1"># Resizing
+</span>  <span class="n">interpolation</span><span class="o">=</span><span class="s">'bilinear'</span><span class="p">,</span> 
+  <span class="n">val_resize_size</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> 
+  <span class="n">val_crop_size</span><span class="o">=</span><span class="mi">224</span><span class="p">,</span> 
+  <span class="n">train_crop_size</span><span class="o">=</span><span class="mi">224</span><span class="p">,</span>
+</code></pre></div></div>
+
+<p>上述大多数参数都是我们<a href="https://github.com/pytorch/vision/tree/main/references/classification">训练脚本</a>的默认值。我们将在此基础上进行优化，逐步达到最终的配方。</p>
+
+<h2 id="lr-optimizations">学习率优化</h2>
+
+<p>我们可以应用一些参数更新来提高训练的准确性和速度。这可以通过增加批量大小和调整学习率（LR）来实现。另一种常见的方法是应用预热并逐渐增加我们的学习率。这特别有利于我们使用非常高的学习率时，有助于在早期 epoch 中提高训练的稳定性。最后，另一种优化是应用余弦调度来调整 epoch 中的学习率。余弦的一个大优点是无需优化超参数，这减少了我们的搜索空间。</p>
+
+<p>以下是基于基线方案的额外优化。请注意，我们已经进行了多次实验以确定参数的最佳配置：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">batch_size</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span><span class="err">&nbsp;</span> <span class="c1"># per GPU
+</span>
+  <span class="n">lr</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> 
+  <span class="n">lr_scheduler</span><span class="o">=</span><span class="s">'cosineannealinglr'</span><span class="p">,</span> 
+  <span class="n">lr_warmup_epochs</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> 
+  <span class="n">lr_warmup_method</span><span class="o">=</span><span class="s">'linear'</span><span class="p">,</span> 
+  <span class="n">lr_warmup_decay</span><span class="o">=</span><span class="mf">0.01</span><span class="p">,</span>
+</code></pre></div></div>
+
+<p>与基线相比，上述优化将我们的 top-1 准确率提高了 0.364 个百分点。请注意，为了结合不同的学习率策略，我们使用了新引入的 <a href="https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.SequentialLR.html#torch.optim.lr_scheduler.SequentialLR">SequentialLR</a> 调度器。</p>
+
+<h2 id="trivialaugment">TrivialAugment</h2>
+
+<p>原始模型使用基本的增强变换进行训练，例如随机裁剪和水平翻转。提高我们准确度的一个简单方法是应用更复杂的“自动增强”技术。对我们来说表现最好的是 TrivialAugment <a href="https://arxiv.org/abs/2103.10158">[9]</a>，它极其简单，可以被认为是“参数自由”，这意味着它可以进一步帮助我们缩小搜索空间。</p>
+
+<p>这里是应用在上一个步骤之上的更新：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>auto_augment='ta_wide',
+</code></pre></div></div>
+
+<p>使用 TrivialAugment 增加了我们的 top-1 准确率，比上一步提高了 0.312 个百分点。</p>
+
+<h2 id="long-training">长时间训练</h2>
+
+<p>当我们的配方包含行为随机的成分时，更长的训练周期是有益的。更具体地说，当我们开始添加越来越多引入噪声的技术时，增加 epoch 的数量变得至关重要。请注意，在我们探索的早期阶段，我们使用了大约 200 个 epoch 的相对较短的周期，后来增加到 400 个 epoch，当我们开始缩小大多数参数时，最后在配方的最终版本中增加到 600 个 epoch。</p>
+
+<p>下面我们看到的是在早期步骤上应用了更新：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>epochs=600,
+</code></pre></div></div>
+
+<p>这进一步增加了我们基于前一步骤的 top-1 准确率 1.8 个百分点。这是我们在此迭代过程中观察到的最大增幅。值得注意的是，这种单次优化的效果被夸大了，并且有些误导。仅仅在旧的基线之上增加 epoch 数量并不会带来如此显著的改进。尽管如此，LR 优化与强大的增强策略的结合有助于模型从更长的周期中受益。还值得一提的是，我们之所以在早期过程中引入长时间的训练周期，是因为在接下来的步骤中，我们将引入需要更多 epoch 才能提供良好结果的技巧。</p>
+
+<h2 id="random-erasing">随机擦除</h2>
+
+<p>另一种已知有助于提高分类准确性的数据增强技术是随机擦除 <a href="https://arxiv.org/abs/1708.04896">[10]</a>，<a href="https://arxiv.org/abs/1708.04552">[11]</a>。通常与自动增强方法搭配使用，由于其正则化效果，通常能带来额外的精度提升。在我们的实验中，我们仅通过网格搜索调整了应用此方法的概率，发现将其概率保持在低水平，通常在 10%左右是有益的。</p>
+
+<p>在之前的参数基础上，这里引入了一个额外的参数：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>random_erase=0.1,</code>
+</font></font></font></pre></div></div>
+
+<p>应用随机擦除可进一步提高我们的 Acc@1 0.190 个点。</p>
+
+<h2 id="label-smoothing">标签平滑</h2>
+
+<p>减少过拟合的一个好方法是阻止模型变得过于自信。这可以通过使用标签平滑来软化真实标签实现 <a href="https://www.cv-foundation.org/openaccess/content_cvpr_2016/papers/Szegedy_Rethinking_the_Inception_CVPR_2016_paper.pdf">[12]</a>。有一个参数控制平滑的程度（值越高越强），我们需要指定。虽然可以通过网格搜索来优化它，但我们发现 0.05-0.15 的值会产生相似的结果，因此为了避免过拟合，我们使用了它在介绍该方法的论文中使用的相同值。</p>
+
+<p>下面我们可以找到在此步骤中添加的额外配置：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>label_smoothing=0.1,
+</code></pre></div></div>
+
+<p>我们使用了 PyTorch 新引入的 <a href="https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html?highlight=label_smoothing">CrossEntropyLoss</a> 标签平滑参数，这使我们的准确率额外提高了 0.318 个百分点。</p>
+
+<h2 id="mixup-and-cutmix">Mixup 和 Cutmix</h2>
+
+<p>经常用于产生最先进（SOTA）结果的两种数据增强技术是 Mixup 和 Cutmix[13]，[14]。它们都通过软化标签和图像来提供强大的正则化效果。在我们的设置中，我们发现随机应用其中之一，概率相等，是有益的。每个都使用超参数 alpha 进行参数化，该参数控制从其中采样平滑概率的 Beta 分布的形状。我们进行了非常有限的网格搜索，主要关注论文上提出的常见值。</p>
+
+<p>下面是两种技术的 alpha 参数的最佳值：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mixup_alpha=0.2, 
+cutmix_alpha=1.0,
+</code></pre></div></div>
+
+<p>应用 Mixup 将我们的准确率提高了 0.118 个百分点，将其与 Cutmix 结合可以提高额外的 0.278 个百分点。</p>
+
+<h2 id="weight-decay-tuning">权重衰减调整</h2>
+
+<p>我们的标准配方使用 L2 正则化来减少过拟合。权重衰减参数控制正则化的程度（越大越强），默认情况下应用于模型的全部学习参数。在这个配方中，我们对标准方法进行了两种优化。首先，我们进行网格搜索来调整权重衰减参数，其次，我们禁用了归一化层参数的权重衰减。</p>
+
+<p>以下是我们配方中权重衰减的最佳配置：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>weight_decay=2e-05, 
+norm_weight_decay=0.0,
+</code></pre></div></div>
+
+<p>上述更新使我们的准确率提高了 0.526 个点，为已知事实提供了额外的实验证据，即调整权重衰减对模型性能有显著影响。我们将归一化参数与其他参数分离的方法受到了 <a href="https://github.com/facebookresearch/ClassyVision">ClassyVision 的</a>方法的启发。</p>
+
+<h2 id="fixres-mitigations">FixRes 缓解措施</h2>
+
+<p>在我们的实验中早期确定的一个重要属性是，如果将验证过程中使用的分辨率从训练的 224x224 提高，模型的表现将显著更好。这一效应在 FixRes 论文 <a href="https://arxiv.org/abs/1906.06423">[5]</a> 中进行了详细研究，并提出了两种缓解措施：a) 可以尝试降低训练分辨率，以使在验证分辨率上的准确性最大化；或者 b) 可以对模型进行两阶段训练微调，使其适应目标分辨率。由于我们不希望引入两阶段训练，所以我们选择了方案 a）。这意味着我们将训练裁剪大小从 224 降低，并使用网格搜索找到最大化 224x224 分辨率验证的值。</p>
+
+<p>下面你可以看到我们食谱中使用的最佳值：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>val_crop_size=224, 
+train_crop_size=176,
+</code></pre></div></div>
+
+<p>上述优化使我们的准确性提高了0.160个点，并使训练速度提高了10%。</p>
+
+<p>值得注意的是，FixRes 效果仍然存在，这意味着当我们提高分辨率时，模型在验证集上的表现仍然更好。此外，进一步减少训练裁剪尺寸实际上会损害准确度。从直观上看，这是有道理的，因为分辨率降低到一定程度后，图片中的关键细节就会开始消失。最后，我们应该注意到，上述 FixRes 缓解似乎对与 ResNet50 深度相似度的模型有益。具有更大感受野的深度变体似乎会受到轻微的负面影响（通常为 0.1-0.2 分）。因此，我们认为这部分配方是可选的。以下我们可视化使用完整配方训练的模型（176 和 224 分辨率）的最佳可用检查点的性能：</p>
+
+<div style="display: flex">
+<img src="/assets/images/sota/Best ResNet50 trained with 176 Resolution.png" alt="Best ResNet50 trained with 176 Resolution" width="50%">
+<img src="/assets/images/sota/Best ResNet50 trained with 224 Resolution.png" alt="Best ResNet50 trained with 224 Resolution" width="50%">
+</div>
+
+<h2 id="exponential-moving-average-ema">指数移动平均（EMA）</h2>
+
+<p>EMA 是一种技术，允许在不增加模型复杂度或推理时间的情况下提高模型的准确度。它对模型权重执行指数移动平均，这导致准确度提高和模型更稳定。平均每几轮迭代发生一次，其衰减参数通过网格搜索进行调整。</p>
+
+<p>以下是可以看到我们食谱的最佳值：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model_ema=True, 
+model_ema_steps=32, 
+model_ema_decay=0.99998,
+</code></pre></div></div>
+
+<p>使用 EMA（指数移动平均）将我们的准确性提高了 0.254 个百分点，与上一步相比。请注意，TorchVision 的 <a href="https://github.com/pytorch/vision/pull/4406">EMA 实现</a>建立在 PyTorch 的 <a href="https://pytorch.org/docs/stable/optim.html#stochastic-weight-averaging">AveragedModel</a> 类之上，关键区别在于它不仅平均模型参数，还平均其缓冲区。此外，我们还采用了来自 <a href="https://github.com/facebookresearch/pycls/tree/main/pycls">Pycls</a> 的技巧，允许我们以不依赖于 epoch 数量的方式参数化衰减。</p>
+
+<h2 id="inference-resize-tuning">推理调整大小</h2>
+
+<p>与其他所有涉及使用不同参数训练模型的步骤不同，这次优化是在最终模型之上进行的。在推理过程中，图像被调整到特定分辨率，然后从中裁剪出一个中心 224x224 的区域。原始配方使用了 256 的调整大小，这导致了与 FixRes 论文中描述的类似差异 <a href="https://arxiv.org/abs/1906.06423">[5]</a>。通过将这个调整大小值更接近目标推理分辨率，可以提高准确性。为了选择这个值，我们在[224, 256]区间内进行了一次简短的网格搜索，步长为 8。为了避免过拟合，使用验证集的一半来选择这个值，并使用另一半来确认。</p>
+
+<p>下面你可以看到我们食谱中使用的最佳值：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>val_resize_size=232,
+</code></pre></div></div>
+
+<p>上述优化提高了我们的准确率 0.224 个百分点。值得注意的是，ResNet50 的最佳值也适用于 ResNet101、ResNet152 和 ResNeXt50，这表明它在不同模型间具有泛化性：</p>
+
+<div style="display: flex">
+<img src="/assets/images/sota/ResNet50 Inference Resize.png" alt="ResNet50 Inference Resize" width="30%">
+<img src="/assets/images/sota/ResNet101 Inference Resize.png" alt="ResNet101 Inference Resize" width="30%">
+<img src="/assets/images/sota/ResNet152 Inference Resize.png" alt="Best ResNet50 trained with 224 Resolution" width="30%">
+</div>
+
+<h2 id="update-repeated-augmentation">[更新] 重复增强</h2>
+
+<p>重复增强 <a href="https://arxiv.org/abs/1901.09335">[15]</a>，<a href="https://arxiv.org/abs/1902.05509">[16]</a> 是另一种可以提高整体准确率的技巧，并被其他强大的食谱如 <a href="https://arxiv.org/abs/2012.12877">[6]</a>，<a href="https://arxiv.org/abs/2110.00476">[7]</a> 所采用。社区贡献者 Tal Ben-Nun 通过提出使用 4 次重复训练模型的方法，进一步改进了我们的原始食谱 <a href="https://github.com/pytorch/vision/pull/5201">。</a> 他的贡献是在这篇文章发布之后。</p>
+
+<p>下面你可以看到我们食谱中使用的最佳值：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">ra_sampler=True,
+ra_reps=4,
+</font></font></font></pre></div></div>
+
+<p>上述是最终的优化，使我们的准确率提高了0.184个百分点。</p>
+
+<h2 id="optimizations-that-were-tested-but-not-adopted">测试过但未采纳的优化</h2>
+
+<p>在我们研究的早期阶段，我们尝试了额外的技术、配置和优化。由于我们的目标是尽可能保持我们的配方简单，我们决定不包括任何没有提供显著改进的内容。以下是一些我们采取但最终没有进入最终配方的方案：</p>
+
+<ul>
+  <li><strong>优化器：</strong> 使用更复杂的优化器，如 Adam、RMSProp 或具有 Nesterov 动量的 SGD，与具有动量的普通 SGD 相比，并没有提供显著更好的结果。</li>
+  <li><strong>学习率调度器：</strong> 我们尝试了不同的学习率调度器方案，如 StepLR 和指数调度器。尽管后者与 EMA 一起使用时效果更好，但它通常需要定义最小学习率等额外的超参数才能正常工作。因此，我们只使用将学习率衰减到零的余弦退火，并选择具有最高精度的检查点。</li>
+  <li><strong>自动增强：</strong> 我们尝试了不同的增强策略，如 AutoAugment 和 RandAugment，但它们都没有比简单的无参数 TrivialAugment 表现更好。</li>
+  <li><strong>插值：</strong> 使用双三次插值或最近邻插值并没有比双线性插值提供显著更好的结果。</li>
+  <li>标准化层：使用同步批量归一化并没有比使用常规批量归一化产生显著更好的结果。</li>
+</ul>
+
+<h2 id="acknowledgements">致谢</h2>
+
+<p>我们要感谢 Piotr Dollar、Mannat Singh 和 Hugo Touvron 在开发配方过程中提供的见解和反馈，以及他们之前关于本配方所基于的研究工作。他们的支持对于实现上述结果至关重要。此外，我们还要感谢 Prabhat Roy、Kai Zhang、Yiwen Song、Joel Schlosser、Ilqar Ramazanli、Francisco Massa、Mannat Singh、Xiaoliang Dai、Samuel Gabriel、Allen Goodman 和 Tal Ben-Nun 对“电池包含”项目的贡献。</p>
+
+<h2 id="references">参考文献列表</h2>
+
+<ol>
+  <li>哈姆明·何，张祥宇，任少卿，孙剑. “深度残差学习在图像识别中的应用”.</li>
+  <li>何彤，张志，张航，张中岳，谢俊元，李穆. “卷积神经网络图像分类的技巧集”.</li>
+  <li>皮奥特·多拉尔，曼纳特·辛格，罗斯·吉什克. “快速且精确的模型缩放”.</li>
+  <li>肖特，曼纳特·辛格，埃里克·明顿，特雷弗·达雷尔，皮奥特·多拉尔，罗斯·吉什克. “早期卷积有助于 Transformer 更好地观察”.</li>
+  <li>雨果·图尔沃恩，安德烈亚·韦达利，马蒂吉·杜兹，赫维·热若。 “解决训练-测试分辨率差异问题”</li>
+  <li>雨果·图尔沃恩，马蒂尤·科尔，马蒂吉·杜兹，弗朗西斯科·马萨，亚历山大·萨布罗莱斯，赫维·热若。 “训练数据高效图像变换器与注意力蒸馏”</li>
+  <li>罗斯·赖特曼，雨果·图尔沃恩，赫维·热若。 “ResNet 卷土重来：timm 中的改进训练过程”</li>
+  <li>本杰明·雷希特，丽贝卡·罗尔夫斯，路德维希·施密特，瓦伊沙尔·尚卡尔。 “ImageNet 分类器是否泛化到 ImageNet？”</li>
+  <li>Samuel G. Müller, Frank Hutter. “TrivialAugment：无需调整即可达到最先进的数据增强”</li>
+  <li>Zhun Zhong, Liang Zheng, Guoliang Kang, Shaozi Li, Yi Yang. “随机擦除数据增强”</li>
+  <li>Terrance DeVries, Graham W. Taylor. “改进卷积神经网络的 Cutout 正则化”</li>
+  <li>Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon Shlens, Zbigniew Wojna. “重新思考计算机视觉中的 Inception 架构”</li>
+  <li>张红毅，西塞，达普欣，洛佩斯-帕斯。 “mixup：超越经验风险最小化”</li>
+  <li>韩尚斗，韩东云，吴成俊，崔尚旭，崔俊锡，刘永俊。 “CutMix：用于训练具有可定位特征的强大分类器的正则化策略”</li>
+  <li>赫弗，本-努恩，胡巴拉，加拉德，霍弗勒，索德瑞。 “扩大你的批量：使用更大的批量进行更好的训练”</li>
+  <li>伯曼，热杰，维达利，科基诺斯，杜兹。 “Multigrain：统一图像嵌入，用于类别和实例”</li>
+</ol>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

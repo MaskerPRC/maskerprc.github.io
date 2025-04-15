@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Efficient PyTorch I/O library for Large Datasets, Many Files, Many GPUs | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Data sets are growing bigger every day and GPUs are getting faster. This means there are more data sets for deep learning researchers and engineers to train and validate their models.
+
+
+  Many datasets for research in still image recognition are becoming available with 10 million or more images, including OpenImages and Places.
+  million YouTube videos (YouTube 8M) consume about 300 TB in 720p, used for research in object recognition, video analytics, and action recognition.
+  The Tobacco Corpus consists of about 20 million scanned HD pages, useful for OCR and text analytics research.
+
+
+Although the most commonly encountered big data sets right now involve images and videos, big datasets occur in many other domains and involve many other kinds of data types: web pages, financial transactions, network traces, brain scans, etc.
+
+However, working with the large amount of data sets presents a number of challenges:
+
+
+  Dataset Size: datasets often exceed the capacity of node-local disk storage, requiring distributed storage systems and efficient network access.
+  Number of Files: datasets often consist of billions of files with uniformly random access patterns, something that often overwhelms both local and network file systems.
+  Data Rates: training jobs on large datasets often use many GPUs, requiring aggregate I/O bandwidths to the dataset of many GBytes/s; these can only be satisfied by massively parallel I/O systems.
+  Shuffling and Augmentation: training data needs to be shuffled and augmented prior to training.
+  Scalability: users often want to develop and test on small datasets and then rapidly scale up to large datasets.
+
+
+Traditional local and network file systems, and even object storage servers, are not designed for these kinds of applications. The WebDataset I/O library for PyTorch, together with the optional AIStore server and Tensorcom RDMA libraries, provide an efficient, simple, and standards-based solution to all these problems. The library is simple enough for day-to-day use, is based on mature open source standards, and is easy to migrate to from existing file-based datasets.
+
+Using WebDataset is simple and requires little effort, and it will let you scale up the same code from running local experiments to using hundreds of GPUs on clusters or in the cloud with linearly scalable performance. Even on small problems and on your desktop, it can speed up I/O tenfold and simplifies data management and processing of large datasets. The rest of this blog post tells you how to get started with WebDataset and how it works.
+
+The WebDataset Library
+
+The WebDataset library provides a simple solution to the challenges listed above. Currently, it is available as a separate library (github.com/tmbdev/webdataset), but it is on track for being incorporated into PyTorch (see RFC 38419).  The WebDataset implementation is small (about 1500 LOC) and has no external dependencies.
+
+Instead of inventing a new format, WebDataset represents large datasets as collections of POSIX tar archive files consisting of the original data files. The WebDataset library can use such tar archives directly for training, without the need for unpacking or local storage.
+
+WebDataset scales perfectly from small, local datasets to petascale datasets and training on hundreds of GPUs and allows data to be stored on local disk, on web servers, or dedicated file servers. For container-based training, WebDataset eliminates the need for volume plugins or node-local storage. As an additional benefit, datasets need not be unpacked prior to training, simplifying the distribution and use of research data.
+
+WebDataset implements PyTorch’s IterableDataset interface and can be used like existing DataLoader-based code. Since data is stored as files inside an archive, existing loading and data augmentation code usually requires minimal modification.
+
+The WebDataset library is a complete solution for working with large datasets and distributed training in PyTorch (and also works with TensorFlow, Keras, and DALI via their Python APIs). Since POSIX tar archives are a standard, widely supported format, it is easy to write other tools for manipulating datasets in this format. E.g., the tarp command is written in Go and can shuffle and process training datasets.
+
+Benefits
+
+The use of sharded, sequentially readable formats is essential for very large datasets. In addition, it has benefits in many other environments. WebDataset provides a solution that scales well from small problems on a desktop machine to very large deep learning problems in clusters or in the cloud. The following table summarizes some of the benefits in different environments.
+
+
+  
+    
+      Environment
+      Benefits of WebDataset
+    
+  
+  
+    
+      Local Cluster with AIStore
+      AIStore can be deployed easily as K8s containers and offers linear scalability and near 100% utilization of network and I/O bandwidth. Suitable for petascale deep learning.
+    
+    
+      Cloud Computing
+      WebDataset deep learning jobs can be trained directly against datasets stored in cloud buckets; no volume plugins required. Local and cloud jobs work identically. Suitable for petascale learning.
+    
+    
+      Local Cluster with existing distributed FS or object store
+      WebDataset’s large sequential reads improve performance with existing distributed stores and eliminate the need for dedicated volume plugins.
+    
+    
+      Educational Environments
+      WebDatasets can be stored on existing web servers and web caches, and can be accessed directly by students by URL
+    
+    
+      Training on Workstations from Local Drives
+      Jobs can start training as the data still downloads. Data doesn’t need to be unpacked for training. Ten-fold improvements in I/O performance on hard drives over random access file-based datasets.
+    
+    
+      All Environments
+      Datasets are represented in an archival format and contain metadata such as file types. Data is compressed in native formats (JPEG, MP4, etc.). Data management, ETL-style jobs, and data transformations and I/O are simplified and easily parallelized.
+    
+  
+
+
+We will be adding more examples giving benchmarks and showing how to use WebDataset in these environments over the coming months.
+
+High-Performance
+For high-performance computation on local clusters, the companion open-source AIStore server provides full disk to GPU I/O bandwidth, subject only to hardware constraints. This Bigdata 2019 Paper contains detailed benchmarks and performance measurements. In addition to benchmarks, research projects at NVIDIA and Microsoft have used WebDataset for petascale datasets and billions of training samples.
+
+Below is a benchmark of AIStore with WebDataset clients using 12 server nodes with 10 rotational drives each.
+
+
+  
+
+
+The left axis shows the aggregate bandwidth from the cluster, while the right scale shows the measured per drive I/O bandwidth. WebDataset and AIStore scale linearly to about 300 clients, at which point they are increasingly limited by the maximum I/O bandwidth available from the rotational drives (about 150 MBytes/s per drive). For comparison, HDFS is shown. HDFS uses a similar approach to AIStore/WebDataset and also exhibits linear scaling up to about 192 clients; at that point, it hits a performance limit of about 120 MBytes/s per drive, and it failed when using more than 1024 clients. Unlike HDFS, the WebDataset-based code just uses standard URLs and HTTP to access data and works identically with local files, with files stored on web servers, and with AIStore. For comparison, NFS in similar experiments delivers about 10-20 MBytes/s per drive.
+
+Storing Datasets in Tar Archives
+
+The format used for WebDataset is standard POSIX tar archives, the same archives used for backup and data distribution. In order to use the format to store training samples for deep learning, we adopt some simple naming conventions:
+
+  datasets are POSIX tar archives
+  each training sample consists of adjacent files with the same basename
+  shards are numbered consecutively
+
+
+For example, ImageNet is stored in 1282 separate 100 Mbyte shards with names pythonimagenet-train-000000.tar to imagenet-train-001281.tar, the contents of the first shard are:
+
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03991062_24866.cls
+-r--r--r-- bigdata/bigdata 108611 2020-05-08 21:23 n03991062_24866.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n07749582_9506.cls
+-r--r--r-- bigdata/bigdata 129044 2020-05-08 21:23 n07749582_9506.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03425413_23604.cls
+-r--r--r-- bigdata/bigdata 106255 2020-05-08 21:23 n03425413_23604.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n02795169_27274.cls
+
+
+WebDataset datasets can be used directly from local disk, from web servers (hence the name), from cloud storage and object stores, just by changing a URL. WebDataset datasets can be used for training without unpacking, and training can even be carried out on streaming data, with no local storage.
+
+Shuffling during training is important for many deep learning applications, and WebDataset performs shuffling both at the shard level and at the sample level. Splitting of data across multiple workers is performed at the shard level using a user-provided shard_selection function that defaults to a function that splits based on get_worker_info. (WebDataset can be combined with the tensorcom library to offload decompression/data augmentation and provide RDMA and direct-to-GPU loading; see below.)
+
+Code Sample
+Here are some code snippets illustrating the use of WebDataset in a typical PyTorch deep learning application (you can find a full example at http://github.com/tmbdev/pytorch-imagenet-wds.
+
+import webdataset as wds
+import ...
+
+sharedurl = " imagenet="" imagenet-train-{000000..001281}.tar"="" normalize="transforms.Normalize(" mean="[0.485," 0.456,="" 0.406],="" std="[0.229," 0.224,="" 0.225])="" preproc="transforms.Compose([" transforms.randomresizedcrop(224),="" transforms.randomhorizontalflip(),="" transforms.totensor(),="" normalize,="" ])="" dataset="(" wds.dataset(sharedurl)="" .shuffle(1000)="" .decode("pil")="" .rename(image="jpg;png" ,="" data="json" )="" .map_dict(image="preproc)" .to_tuple("image",="" "data")="" loader="torch.utils.data.DataLoader(dataset," batch_size="64," num_workers="8)" for="" inputs,="" targets="" in="" loader:="" ...="" this="" code="" is="" nearly="" identical="" to="" the="" file-based="" i="" o="" pipeline="" found="" pytorch="" example:="" it="" creates="" a="" preprocessing="" augmentation="" pipeline,="" instantiates="" using="" that="" and="" source="" location,="" then="" constructs="" dataloader="" instance="" from="" dataset.="" webdataset="" uses="" fluent="" api="" configuration="" internally="" builds="" up="" processing="" pipeline.="" without="" any="" added="" stages,="" example,="" used="" with="" class,="" which="" replicates="" instances="" across="" multiple="" threads="" performs="" both="" parallel="" augmentation.="" themselves="" just="" iterate="" through="" each="" training="" sample="" as="" dictionary:="" #="" load="" web="" server="" separate="" client="" process="" sharedurl="pipe:curl -s http://server/imagenet/imagenet-train-{000000..001281}.tar" dataset:="" sample["jpg"]="" contains="" raw="" image="" sample["cls"]="" class="" general="" introduction="" how="" we="" handle="" large="" scale="" webdataset,="" see="" these="" youtube="" videos.="" related="" software="" aistore="" an="" open-source="" object="" store="" capable="" of="" full-bandwidth="" disk-to-gpu="" delivery="" (meaning="" if="" you="" have="" 1000="" rotational="" drives="" 200="" mb="" s="" read="" speed,="" actually="" delivers="" aggregate="" bandwidth="" gb="" gpus).="" fully="" compatible="" client,="" addition="" understands="" format,="" permitting="" perform="" shuffling,="" sorting,="" etl,="" some="" map-reduce="" operations="" directly="" storage="" system.="" can="" be="" thought="" remix="" distributed="" store,="" network="" file="" system,="" database,="" gpu-accelerated="" implementation.="" tarp="" small="" command-line="" program="" splitting,="" merging,="" tar="" archives="" datasets.="" tensorcom="" library="" supporting="" rdma="" gpu.="" pytorch-imagenet-wds="" example="" use="" imagenet,="" based="" on="" example.="" bigdata="" 2019="" paper="" benchmarks="" check="" out="" provide="" your="" feedback="" rfc="" 38419.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Efficient PyTorch I/O library for Large Datasets, Many Files, Many GPUs">
+<meta property="og:description" content="Data sets are growing bigger every day and GPUs are getting faster. This means there are more data sets for deep learning researchers and engineers to train and validate their models.
+
+
+  Many datasets for research in still image recognition are becoming available with 10 million or more images, including OpenImages and Places.
+  million YouTube videos (YouTube 8M) consume about 300 TB in 720p, used for research in object recognition, video analytics, and action recognition.
+  The Tobacco Corpus consists of about 20 million scanned HD pages, useful for OCR and text analytics research.
+
+
+Although the most commonly encountered big data sets right now involve images and videos, big datasets occur in many other domains and involve many other kinds of data types: web pages, financial transactions, network traces, brain scans, etc.
+
+However, working with the large amount of data sets presents a number of challenges:
+
+
+  Dataset Size: datasets often exceed the capacity of node-local disk storage, requiring distributed storage systems and efficient network access.
+  Number of Files: datasets often consist of billions of files with uniformly random access patterns, something that often overwhelms both local and network file systems.
+  Data Rates: training jobs on large datasets often use many GPUs, requiring aggregate I/O bandwidths to the dataset of many GBytes/s; these can only be satisfied by massively parallel I/O systems.
+  Shuffling and Augmentation: training data needs to be shuffled and augmented prior to training.
+  Scalability: users often want to develop and test on small datasets and then rapidly scale up to large datasets.
+
+
+Traditional local and network file systems, and even object storage servers, are not designed for these kinds of applications. The WebDataset I/O library for PyTorch, together with the optional AIStore server and Tensorcom RDMA libraries, provide an efficient, simple, and standards-based solution to all these problems. The library is simple enough for day-to-day use, is based on mature open source standards, and is easy to migrate to from existing file-based datasets.
+
+Using WebDataset is simple and requires little effort, and it will let you scale up the same code from running local experiments to using hundreds of GPUs on clusters or in the cloud with linearly scalable performance. Even on small problems and on your desktop, it can speed up I/O tenfold and simplifies data management and processing of large datasets. The rest of this blog post tells you how to get started with WebDataset and how it works.
+
+The WebDataset Library
+
+The WebDataset library provides a simple solution to the challenges listed above. Currently, it is available as a separate library (github.com/tmbdev/webdataset), but it is on track for being incorporated into PyTorch (see RFC 38419).  The WebDataset implementation is small (about 1500 LOC) and has no external dependencies.
+
+Instead of inventing a new format, WebDataset represents large datasets as collections of POSIX tar archive files consisting of the original data files. The WebDataset library can use such tar archives directly for training, without the need for unpacking or local storage.
+
+WebDataset scales perfectly from small, local datasets to petascale datasets and training on hundreds of GPUs and allows data to be stored on local disk, on web servers, or dedicated file servers. For container-based training, WebDataset eliminates the need for volume plugins or node-local storage. As an additional benefit, datasets need not be unpacked prior to training, simplifying the distribution and use of research data.
+
+WebDataset implements PyTorch’s IterableDataset interface and can be used like existing DataLoader-based code. Since data is stored as files inside an archive, existing loading and data augmentation code usually requires minimal modification.
+
+The WebDataset library is a complete solution for working with large datasets and distributed training in PyTorch (and also works with TensorFlow, Keras, and DALI via their Python APIs). Since POSIX tar archives are a standard, widely supported format, it is easy to write other tools for manipulating datasets in this format. E.g., the tarp command is written in Go and can shuffle and process training datasets.
+
+Benefits
+
+The use of sharded, sequentially readable formats is essential for very large datasets. In addition, it has benefits in many other environments. WebDataset provides a solution that scales well from small problems on a desktop machine to very large deep learning problems in clusters or in the cloud. The following table summarizes some of the benefits in different environments.
+
+
+  
+    
+      Environment
+      Benefits of WebDataset
+    
+  
+  
+    
+      Local Cluster with AIStore
+      AIStore can be deployed easily as K8s containers and offers linear scalability and near 100% utilization of network and I/O bandwidth. Suitable for petascale deep learning.
+    
+    
+      Cloud Computing
+      WebDataset deep learning jobs can be trained directly against datasets stored in cloud buckets; no volume plugins required. Local and cloud jobs work identically. Suitable for petascale learning.
+    
+    
+      Local Cluster with existing distributed FS or object store
+      WebDataset’s large sequential reads improve performance with existing distributed stores and eliminate the need for dedicated volume plugins.
+    
+    
+      Educational Environments
+      WebDatasets can be stored on existing web servers and web caches, and can be accessed directly by students by URL
+    
+    
+      Training on Workstations from Local Drives
+      Jobs can start training as the data still downloads. Data doesn’t need to be unpacked for training. Ten-fold improvements in I/O performance on hard drives over random access file-based datasets.
+    
+    
+      All Environments
+      Datasets are represented in an archival format and contain metadata such as file types. Data is compressed in native formats (JPEG, MP4, etc.). Data management, ETL-style jobs, and data transformations and I/O are simplified and easily parallelized.
+    
+  
+
+
+We will be adding more examples giving benchmarks and showing how to use WebDataset in these environments over the coming months.
+
+High-Performance
+For high-performance computation on local clusters, the companion open-source AIStore server provides full disk to GPU I/O bandwidth, subject only to hardware constraints. This Bigdata 2019 Paper contains detailed benchmarks and performance measurements. In addition to benchmarks, research projects at NVIDIA and Microsoft have used WebDataset for petascale datasets and billions of training samples.
+
+Below is a benchmark of AIStore with WebDataset clients using 12 server nodes with 10 rotational drives each.
+
+
+  
+
+
+The left axis shows the aggregate bandwidth from the cluster, while the right scale shows the measured per drive I/O bandwidth. WebDataset and AIStore scale linearly to about 300 clients, at which point they are increasingly limited by the maximum I/O bandwidth available from the rotational drives (about 150 MBytes/s per drive). For comparison, HDFS is shown. HDFS uses a similar approach to AIStore/WebDataset and also exhibits linear scaling up to about 192 clients; at that point, it hits a performance limit of about 120 MBytes/s per drive, and it failed when using more than 1024 clients. Unlike HDFS, the WebDataset-based code just uses standard URLs and HTTP to access data and works identically with local files, with files stored on web servers, and with AIStore. For comparison, NFS in similar experiments delivers about 10-20 MBytes/s per drive.
+
+Storing Datasets in Tar Archives
+
+The format used for WebDataset is standard POSIX tar archives, the same archives used for backup and data distribution. In order to use the format to store training samples for deep learning, we adopt some simple naming conventions:
+
+  datasets are POSIX tar archives
+  each training sample consists of adjacent files with the same basename
+  shards are numbered consecutively
+
+
+For example, ImageNet is stored in 1282 separate 100 Mbyte shards with names pythonimagenet-train-000000.tar to imagenet-train-001281.tar, the contents of the first shard are:
+
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03991062_24866.cls
+-r--r--r-- bigdata/bigdata 108611 2020-05-08 21:23 n03991062_24866.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n07749582_9506.cls
+-r--r--r-- bigdata/bigdata 129044 2020-05-08 21:23 n07749582_9506.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03425413_23604.cls
+-r--r--r-- bigdata/bigdata 106255 2020-05-08 21:23 n03425413_23604.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n02795169_27274.cls
+
+
+WebDataset datasets can be used directly from local disk, from web servers (hence the name), from cloud storage and object stores, just by changing a URL. WebDataset datasets can be used for training without unpacking, and training can even be carried out on streaming data, with no local storage.
+
+Shuffling during training is important for many deep learning applications, and WebDataset performs shuffling both at the shard level and at the sample level. Splitting of data across multiple workers is performed at the shard level using a user-provided shard_selection function that defaults to a function that splits based on get_worker_info. (WebDataset can be combined with the tensorcom library to offload decompression/data augmentation and provide RDMA and direct-to-GPU loading; see below.)
+
+Code Sample
+Here are some code snippets illustrating the use of WebDataset in a typical PyTorch deep learning application (you can find a full example at http://github.com/tmbdev/pytorch-imagenet-wds.
+
+import webdataset as wds
+import ...
+
+sharedurl = " imagenet="" imagenet-train-{000000..001281}.tar"="" normalize="transforms.Normalize(" mean="[0.485," 0.456,="" 0.406],="" std="[0.229," 0.224,="" 0.225])="" preproc="transforms.Compose([" transforms.randomresizedcrop(224),="" transforms.randomhorizontalflip(),="" transforms.totensor(),="" normalize,="" ])="" dataset="(" wds.dataset(sharedurl)="" .shuffle(1000)="" .decode("pil")="" .rename(image="jpg;png" ,="" data="json" )="" .map_dict(image="preproc)" .to_tuple("image",="" "data")="" loader="torch.utils.data.DataLoader(dataset," batch_size="64," num_workers="8)" for="" inputs,="" targets="" in="" loader:="" ...="" this="" code="" is="" nearly="" identical="" to="" the="" file-based="" i="" o="" pipeline="" found="" pytorch="" example:="" it="" creates="" a="" preprocessing="" augmentation="" pipeline,="" instantiates="" using="" that="" and="" source="" location,="" then="" constructs="" dataloader="" instance="" from="" dataset.="" webdataset="" uses="" fluent="" api="" configuration="" internally="" builds="" up="" processing="" pipeline.="" without="" any="" added="" stages,="" example,="" used="" with="" class,="" which="" replicates="" instances="" across="" multiple="" threads="" performs="" both="" parallel="" augmentation.="" themselves="" just="" iterate="" through="" each="" training="" sample="" as="" dictionary:="" #="" load="" web="" server="" separate="" client="" process="" sharedurl="pipe:curl -s http://server/imagenet/imagenet-train-{000000..001281}.tar" dataset:="" sample["jpg"]="" contains="" raw="" image="" sample["cls"]="" class="" general="" introduction="" how="" we="" handle="" large="" scale="" webdataset,="" see="" these="" youtube="" videos.="" related="" software="" aistore="" an="" open-source="" object="" store="" capable="" of="" full-bandwidth="" disk-to-gpu="" delivery="" (meaning="" if="" you="" have="" 1000="" rotational="" drives="" 200="" mb="" s="" read="" speed,="" actually="" delivers="" aggregate="" bandwidth="" gb="" gpus).="" fully="" compatible="" client,="" addition="" understands="" format,="" permitting="" perform="" shuffling,="" sorting,="" etl,="" some="" map-reduce="" operations="" directly="" storage="" system.="" can="" be="" thought="" remix="" distributed="" store,="" network="" file="" system,="" database,="" gpu-accelerated="" implementation.="" tarp="" small="" command-line="" program="" splitting,="" merging,="" tar="" archives="" datasets.="" tensorcom="" library="" supporting="" rdma="" gpu.="" pytorch-imagenet-wds="" example="" use="" imagenet,="" based="" on="" example.="" bigdata="" 2019="" paper="" benchmarks="" check="" out="" provide="" your="" feedback="" rfc="" 38419.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Efficient PyTorch I/O library for Large Datasets, Many Files, Many GPUs">
+<meta name="twitter:description" content="Data sets are growing bigger every day and GPUs are getting faster. This means there are more data sets for deep learning researchers and engineers to train and validate their models.
+
+
+  Many datasets for research in still image recognition are becoming available with 10 million or more images, including OpenImages and Places.
+  million YouTube videos (YouTube 8M) consume about 300 TB in 720p, used for research in object recognition, video analytics, and action recognition.
+  The Tobacco Corpus consists of about 20 million scanned HD pages, useful for OCR and text analytics research.
+
+
+Although the most commonly encountered big data sets right now involve images and videos, big datasets occur in many other domains and involve many other kinds of data types: web pages, financial transactions, network traces, brain scans, etc.
+
+However, working with the large amount of data sets presents a number of challenges:
+
+
+  Dataset Size: datasets often exceed the capacity of node-local disk storage, requiring distributed storage systems and efficient network access.
+  Number of Files: datasets often consist of billions of files with uniformly random access patterns, something that often overwhelms both local and network file systems.
+  Data Rates: training jobs on large datasets often use many GPUs, requiring aggregate I/O bandwidths to the dataset of many GBytes/s; these can only be satisfied by massively parallel I/O systems.
+  Shuffling and Augmentation: training data needs to be shuffled and augmented prior to training.
+  Scalability: users often want to develop and test on small datasets and then rapidly scale up to large datasets.
+
+
+Traditional local and network file systems, and even object storage servers, are not designed for these kinds of applications. The WebDataset I/O library for PyTorch, together with the optional AIStore server and Tensorcom RDMA libraries, provide an efficient, simple, and standards-based solution to all these problems. The library is simple enough for day-to-day use, is based on mature open source standards, and is easy to migrate to from existing file-based datasets.
+
+Using WebDataset is simple and requires little effort, and it will let you scale up the same code from running local experiments to using hundreds of GPUs on clusters or in the cloud with linearly scalable performance. Even on small problems and on your desktop, it can speed up I/O tenfold and simplifies data management and processing of large datasets. The rest of this blog post tells you how to get started with WebDataset and how it works.
+
+The WebDataset Library
+
+The WebDataset library provides a simple solution to the challenges listed above. Currently, it is available as a separate library (github.com/tmbdev/webdataset), but it is on track for being incorporated into PyTorch (see RFC 38419).  The WebDataset implementation is small (about 1500 LOC) and has no external dependencies.
+
+Instead of inventing a new format, WebDataset represents large datasets as collections of POSIX tar archive files consisting of the original data files. The WebDataset library can use such tar archives directly for training, without the need for unpacking or local storage.
+
+WebDataset scales perfectly from small, local datasets to petascale datasets and training on hundreds of GPUs and allows data to be stored on local disk, on web servers, or dedicated file servers. For container-based training, WebDataset eliminates the need for volume plugins or node-local storage. As an additional benefit, datasets need not be unpacked prior to training, simplifying the distribution and use of research data.
+
+WebDataset implements PyTorch’s IterableDataset interface and can be used like existing DataLoader-based code. Since data is stored as files inside an archive, existing loading and data augmentation code usually requires minimal modification.
+
+The WebDataset library is a complete solution for working with large datasets and distributed training in PyTorch (and also works with TensorFlow, Keras, and DALI via their Python APIs). Since POSIX tar archives are a standard, widely supported format, it is easy to write other tools for manipulating datasets in this format. E.g., the tarp command is written in Go and can shuffle and process training datasets.
+
+Benefits
+
+The use of sharded, sequentially readable formats is essential for very large datasets. In addition, it has benefits in many other environments. WebDataset provides a solution that scales well from small problems on a desktop machine to very large deep learning problems in clusters or in the cloud. The following table summarizes some of the benefits in different environments.
+
+
+  
+    
+      Environment
+      Benefits of WebDataset
+    
+  
+  
+    
+      Local Cluster with AIStore
+      AIStore can be deployed easily as K8s containers and offers linear scalability and near 100% utilization of network and I/O bandwidth. Suitable for petascale deep learning.
+    
+    
+      Cloud Computing
+      WebDataset deep learning jobs can be trained directly against datasets stored in cloud buckets; no volume plugins required. Local and cloud jobs work identically. Suitable for petascale learning.
+    
+    
+      Local Cluster with existing distributed FS or object store
+      WebDataset’s large sequential reads improve performance with existing distributed stores and eliminate the need for dedicated volume plugins.
+    
+    
+      Educational Environments
+      WebDatasets can be stored on existing web servers and web caches, and can be accessed directly by students by URL
+    
+    
+      Training on Workstations from Local Drives
+      Jobs can start training as the data still downloads. Data doesn’t need to be unpacked for training. Ten-fold improvements in I/O performance on hard drives over random access file-based datasets.
+    
+    
+      All Environments
+      Datasets are represented in an archival format and contain metadata such as file types. Data is compressed in native formats (JPEG, MP4, etc.). Data management, ETL-style jobs, and data transformations and I/O are simplified and easily parallelized.
+    
+  
+
+
+We will be adding more examples giving benchmarks and showing how to use WebDataset in these environments over the coming months.
+
+High-Performance
+For high-performance computation on local clusters, the companion open-source AIStore server provides full disk to GPU I/O bandwidth, subject only to hardware constraints. This Bigdata 2019 Paper contains detailed benchmarks and performance measurements. In addition to benchmarks, research projects at NVIDIA and Microsoft have used WebDataset for petascale datasets and billions of training samples.
+
+Below is a benchmark of AIStore with WebDataset clients using 12 server nodes with 10 rotational drives each.
+
+
+  
+
+
+The left axis shows the aggregate bandwidth from the cluster, while the right scale shows the measured per drive I/O bandwidth. WebDataset and AIStore scale linearly to about 300 clients, at which point they are increasingly limited by the maximum I/O bandwidth available from the rotational drives (about 150 MBytes/s per drive). For comparison, HDFS is shown. HDFS uses a similar approach to AIStore/WebDataset and also exhibits linear scaling up to about 192 clients; at that point, it hits a performance limit of about 120 MBytes/s per drive, and it failed when using more than 1024 clients. Unlike HDFS, the WebDataset-based code just uses standard URLs and HTTP to access data and works identically with local files, with files stored on web servers, and with AIStore. For comparison, NFS in similar experiments delivers about 10-20 MBytes/s per drive.
+
+Storing Datasets in Tar Archives
+
+The format used for WebDataset is standard POSIX tar archives, the same archives used for backup and data distribution. In order to use the format to store training samples for deep learning, we adopt some simple naming conventions:
+
+  datasets are POSIX tar archives
+  each training sample consists of adjacent files with the same basename
+  shards are numbered consecutively
+
+
+For example, ImageNet is stored in 1282 separate 100 Mbyte shards with names pythonimagenet-train-000000.tar to imagenet-train-001281.tar, the contents of the first shard are:
+
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03991062_24866.cls
+-r--r--r-- bigdata/bigdata 108611 2020-05-08 21:23 n03991062_24866.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n07749582_9506.cls
+-r--r--r-- bigdata/bigdata 129044 2020-05-08 21:23 n07749582_9506.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n03425413_23604.cls
+-r--r--r-- bigdata/bigdata 106255 2020-05-08 21:23 n03425413_23604.jpg
+-r--r--r-- bigdata/bigdata      3 2020-05-08 21:23 n02795169_27274.cls
+
+
+WebDataset datasets can be used directly from local disk, from web servers (hence the name), from cloud storage and object stores, just by changing a URL. WebDataset datasets can be used for training without unpacking, and training can even be carried out on streaming data, with no local storage.
+
+Shuffling during training is important for many deep learning applications, and WebDataset performs shuffling both at the shard level and at the sample level. Splitting of data across multiple workers is performed at the shard level using a user-provided shard_selection function that defaults to a function that splits based on get_worker_info. (WebDataset can be combined with the tensorcom library to offload decompression/data augmentation and provide RDMA and direct-to-GPU loading; see below.)
+
+Code Sample
+Here are some code snippets illustrating the use of WebDataset in a typical PyTorch deep learning application (you can find a full example at http://github.com/tmbdev/pytorch-imagenet-wds.
+
+import webdataset as wds
+import ...
+
+sharedurl = " imagenet="" imagenet-train-{000000..001281}.tar"="" normalize="transforms.Normalize(" mean="[0.485," 0.456,="" 0.406],="" std="[0.229," 0.224,="" 0.225])="" preproc="transforms.Compose([" transforms.randomresizedcrop(224),="" transforms.randomhorizontalflip(),="" transforms.totensor(),="" normalize,="" ])="" dataset="(" wds.dataset(sharedurl)="" .shuffle(1000)="" .decode("pil")="" .rename(image="jpg;png" ,="" data="json" )="" .map_dict(image="preproc)" .to_tuple("image",="" "data")="" loader="torch.utils.data.DataLoader(dataset," batch_size="64," num_workers="8)" for="" inputs,="" targets="" in="" loader:="" ...="" this="" code="" is="" nearly="" identical="" to="" the="" file-based="" i="" o="" pipeline="" found="" pytorch="" example:="" it="" creates="" a="" preprocessing="" augmentation="" pipeline,="" instantiates="" using="" that="" and="" source="" location,="" then="" constructs="" dataloader="" instance="" from="" dataset.="" webdataset="" uses="" fluent="" api="" configuration="" internally="" builds="" up="" processing="" pipeline.="" without="" any="" added="" stages,="" example,="" used="" with="" class,="" which="" replicates="" instances="" across="" multiple="" threads="" performs="" both="" parallel="" augmentation.="" themselves="" just="" iterate="" through="" each="" training="" sample="" as="" dictionary:="" #="" load="" web="" server="" separate="" client="" process="" sharedurl="pipe:curl -s http://server/imagenet/imagenet-train-{000000..001281}.tar" dataset:="" sample["jpg"]="" contains="" raw="" image="" sample["cls"]="" class="" general="" introduction="" how="" we="" handle="" large="" scale="" webdataset,="" see="" these="" youtube="" videos.="" related="" software="" aistore="" an="" open-source="" object="" store="" capable="" of="" full-bandwidth="" disk-to-gpu="" delivery="" (meaning="" if="" you="" have="" 1000="" rotational="" drives="" 200="" mb="" s="" read="" speed,="" actually="" delivers="" aggregate="" bandwidth="" gb="" gpus).="" fully="" compatible="" client,="" addition="" understands="" format,="" permitting="" perform="" shuffling,="" sorting,="" etl,="" some="" map-reduce="" operations="" directly="" storage="" system.="" can="" be="" thought="" remix="" distributed="" store,="" network="" file="" system,="" database,="" gpu-accelerated="" implementation.="" tarp="" small="" command-line="" program="" splitting,="" merging,="" tar="" archives="" datasets.="" tensorcom="" library="" supporting="" rdma="" gpu.="" pytorch-imagenet-wds="" example="" use="" imagenet,="" based="" on="" example.="" bigdata="" 2019="" paper="" benchmarks="" check="" out="" provide="" your="" feedback="" rfc="" 38419.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2020年8月11日</p>
+            <h1>
+                <a class="blog-title">大型数据集、多个文件、多个 GPU 的高效 PyTorch I/O 库</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Alex Aizman、Gavin Maltby、Thomas Breuel 所著</p>
+                    <p>数据集每天都在增长，GPU 也在变得越来越快。这意味着深度学习研究人员和工程师有更多的数据集来训练和验证他们的模型。</p>
+
+<ul>
+  <li>许多用于静态图像识别的研究数据集正在变得可用，包括包含 1000 万或更多图像的 OpenImages 和 Places。</li>
+  <li>一百万 YouTube 视频 <a href="https://research.google.com/youtube8m/">(YouTube 8M)</a> 在 720p 下消耗约 300 TB，用于对象识别、视频分析和动作识别的研究。</li>
+  <li>烟草语料库包含约 2000 万页扫描的高清页面，对 OCR 和文本分析研究非常有用。</li>
+</ul>
+
+<p>尽管目前最常见的庞大数据集涉及图像和视频，但大数据集出现在许多其他领域，并涉及许多其他类型的数据：网页、金融交易、网络轨迹、脑部扫描等。</p>
+
+<p>然而，处理大量数据集带来了一系列挑战：</p>
+
+<ul>
+  <li><strong>数据集大小：</strong> 数据集通常超过节点本地磁盘存储的容量，需要分布式存储系统和高效的网络访问。</li>
+  <li><strong>文件数量：</strong> 数据集通常包含数十亿个文件，具有均匀的随机访问模式，这往往会使本地和网络文件系统不堪重负。</li>
+  <li><strong>数据速率：</strong> 在大数据集上进行的训练作业通常需要许多 GPU，需要向数据集提供大量的 I/O 带宽（许多 GBytes/s）；这只能通过大规模并行 I/O 系统来满足。</li>
+  <li><strong>洗牌和增强：</strong> 在训练之前需要对训练数据进行洗牌和增强。</li>
+  <li><strong>可扩展性：</strong> 用户通常希望在小型数据集上进行开发和测试，然后快速扩展到大型数据集。</li>
+</ul>
+
+<p>传统本地和网络文件系统，甚至对象存储服务器，都不是为这些应用而设计的。 <a href="https://github.com/tmbdev/webdataset">WebDataset I/O 库 </a> 与可选的 <a href="https://github.com/NVIDIA/aistore">AIStore 服务器 </a> 和 <a href="https://github.com/NVlabs/tensorcom">Tensorcom</a> RDMA 库一起，提供了一个高效、简单且基于标准的解决方案，以解决所有这些问题。该库足够简单，足以用于日常使用，基于成熟的开源标准，并且易于从现有的基于文件的数据库迁移过来。</p>
+
+<p>使用 WebDataset 很简单，几乎不需要费力，它可以让您将相同的代码从运行本地实验扩展到在集群或云中使用数百个 GPU，并且性能线性可扩展。即使在小型问题上和您的桌面上，它也可以将 I/O 速度提高十倍，并简化大型数据集的数据管理和处理。本博客的其余部分将向您介绍如何开始使用 WebDataset 以及它是如何工作的。</p>
+
+<h2 id="the-webdataset-library">WebDataset 库</h2>
+
+<p>WebDataset 库为上述挑战提供了一个简单的解决方案。目前，它作为一个独立的库提供（github.com/tmbdev/webdataset），但正在计划将其集成到 PyTorch 中（参见 <a href="https://github.com/pytorch/pytorch/issues/38419">RFC 38419</a>）。WebDataset 的实现规模较小（大约 1500 行代码）且没有外部依赖。</p>
+
+<p>WebDataset 不是发明一种新的格式，而是将大型数据集表示为 POSIX tar 存档文件的集合，这些存档文件包含原始数据文件。WebDataset 库可以直接使用这样的 tar 存档进行训练，无需解包或本地存储。</p>
+
+<p>WebDataset 可以完美地从小型本地数据集扩展到 PB 级数据集，并在数百个 GPU 上进行训练，允许数据存储在本地磁盘、Web 服务器或专用文件服务器上。对于基于容器的训练，WebDataset 消除了对卷插件或节点本地存储的需求。作为额外的好处，在训练之前无需解包数据集，简化了研究数据的分发和使用。</p>
+
+<p>WebDataset 实现了 PyTorch 的<a href="https://pytorch.org/docs/stable/data.html#torch.utils.data.IterableDataset">可迭代数据集</a>接口，可以像现有的基于 DataLoader 的代码一样使用。由于数据存储在存档内的文件中，现有的加载和数据增强代码通常只需要进行最小修改。</p>
+
+<p>WebDataset 库是 PyTorch（以及也支持通过它们的 Python API 使用 TensorFlow、Keras 和 DALI）中处理大型数据集和分布式训练的完整解决方案。由于 POSIX tar 存档是一种标准、广泛支持的格式，因此很容易编写其他工具来操作这种格式的数据集。例如，<a href="https://github.com/tmbdev/tarp">tarp</a> 命令是用 Go 编写的，可以打乱并处理训练数据集。</p>
+
+<h2 id="benefits">优点</h2>
+
+<p>对于非常大的数据集，使用分片、顺序可读的格式至关重要。此外，它在许多其他环境中也有好处。WebDataset 提供了一种解决方案，可以从桌面机器上的小问题扩展到集群或云中的非常大的深度学习问题，并且具有良好的可扩展性。以下表格总结了在不同环境中的一些优点。</p>
+
+<table class="table table-striped table-bordered">
+  <thead>
+    <tr>
+      <th>环境</th>
+      <th>WebDataset 的优势</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>带有 AIStore 的本地集群</td>
+      <td>AIStore 可以轻松作为 K8s 容器部署，提供线性可扩展性和接近 100% 的网络和 I/O 带宽利用率。适用于 petascale 深度学习。</td>
+    </tr>
+    <tr>
+      <td>云计算</td>
+      <td>WebDataset 深度学习作业可以直接针对存储在云存储桶中的数据集进行训练；无需卷插件。本地和云作业工作方式相同。适用于佩塔级学习。</td>
+    </tr>
+    <tr>
+      <td>带有现有分布式文件系统或对象存储的本地集群</td>
+      <td>WebDataset 的大规模顺序读取提高了现有分布式存储的性能，并消除了对专用卷插件的需求。</td>
+    </tr>
+    <tr>
+      <td>教育环境</td>
+      <td>Web 数据集可以存储在现有的 Web 服务器和 Web 缓存中，学生可以直接通过 URL 访问</td>
+    </tr>
+    <tr>
+      <td>在本地驱动器上对工作站进行训练</td>
+      <td>在数据下载的同时，作业可以开始训练。数据不需要解压缩即可用于训练。硬盘 I/O 性能比基于随机访问文件的数据集提高十倍。</td>
+    </tr>
+    <tr>
+      <td>所有环境</td>
+      <td>数据集以归档格式表示，并包含文件类型等元数据。数据以原生格式（JPEG、MP4 等）压缩。数据管理、ETL 风格的作业以及数据转换和 I/O 简化，并易于并行化。</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>在接下来的几个月中，我们将添加更多示例，提供基准测试，并展示如何在这些环境中使用 WebDataset。</p>
+
+<h2 id="high-performance">高性能</h2>
+<p>对于在本地集群上进行高性能计算，配套的开源 <a href="https://github.com/NVIDIA/AIStore">AIStore</a> 服务器提供了全盘到 GPU 的 I/O 带宽，仅受硬件限制。这篇 <a href="https://arxiv.org/abs/2001.01858">Bigdata 2019 论文</a>包含了详细的基准测试和性能测量。除了基准测试之外，NVIDIA 和微软的研究项目也使用了 WebDataset 来处理 PB 级数据集和数十亿的训练样本。</p>
+
+<p>下面是使用 12 个服务器节点，每个节点有 10 个旋转硬盘的 AIStore 与 WebDataset 客户端的基准测试。</p>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/pytorchwebdataset1.png" width="100%">
+</div>
+
+<p>左轴显示集群的总带宽，而右轴显示每块硬盘的测量 I/O 带宽。WebDataset 和 AIStore 线性扩展到大约 300 个客户端，在此之后，它们越来越多地受到来自旋转硬盘的最大 I/O 带宽（每块硬盘约 150 MBytes/s）的限制。为了比较，这里展示了 HDFS。HDFS 采用与 AIStore/WebDataset 类似的方法，并且也表现出线性扩展到大约 192 个客户端；在此之后，它达到每块硬盘约 120 MBytes/s 的性能限制，并且当使用超过 1024 个客户端时失败。与 HDFS 不同，基于 WebDataset 的代码仅使用标准 URL 和 HTTP 来访问数据，并且与本地文件、存储在 Web 服务器上的文件以及 AIStore 工作方式相同。为了比较，在类似的实验中，NFS 每块硬盘提供大约 10-20 MBytes/s。</p>
+
+<h2 id="storing-datasets-in-tar-archives">存储数据集在 Tar 归档中</h2>
+
+<p>WebDataset 使用的格式是标准的 POSIX tar 归档，与用于备份和数据分发的归档相同。为了使用该格式存储用于深度学习的训练样本，我们采用一些简单的命名约定：</p>
+<ul>
+  <li>数据集是 POSIX tar 归档</li>
+  <li>每个训练样本由具有相同基本名的相邻文件组成</li>
+  <li>数据块按顺序编号</li>
+</ul>
+
+<p>例如，ImageNet 存储在 1282 个独立的 100 兆字节数据块中，名称为 <code class="language-plaintext highlighter-rouge">pythonimagenet-train-000000.tar to imagenet-train-001281.tar,</code> 第一个数据块的内容为：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span>      <span class="mi">3</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n03991062_24866</span><span class="p">.</span><span class="n">cls</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span> <span class="mi">108611</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n03991062_24866</span><span class="p">.</span><span class="n">jpg</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span>      <span class="mi">3</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n07749582_9506</span><span class="p">.</span><span class="n">cls</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span> <span class="mi">129044</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n07749582_9506</span><span class="p">.</span><span class="n">jpg</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span>      <span class="mi">3</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n03425413_23604</span><span class="p">.</span><span class="n">cls</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span> <span class="mi">106255</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n03425413_23604</span><span class="p">.</span><span class="n">jpg</span>
+<span class="o">-</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span><span class="n">r</span><span class="o">--</span> <span class="n">bigdata</span><span class="o">/</span><span class="n">bigdata</span>      <span class="mi">3</span> <span class="mi">2020</span><span class="o">-</span><span class="mi">05</span><span class="o">-</span><span class="mi">08</span> <span class="mi">21</span><span class="p">:</span><span class="mi">23</span> <span class="n">n02795169_27274</span><span class="p">.</span><span class="n">cls</span>
+</code></pre></div></div>
+
+<p>WebDataset 数据集可以直接从本地磁盘、网络服务器（因此得名）、云存储和对象存储中使用，只需更改 URL。WebDataset 数据集可以直接用于训练而无需解包，并且训练甚至可以在流式数据上进行，无需本地存储。</p>
+
+<p>训练过程中的洗牌对于许多深度学习应用非常重要，WebDataset 在分块级别和样本级别都执行洗牌。跨多个工作者的数据分割是在分块级别通过用户提供的 <code class="language-plaintext highlighter-rouge">shard_selection</code> 函数执行的，该函数默认为基于 <code class="language-plaintext highlighter-rouge">get_worker_info。</code> 的分割函数（WebDataset 可以与 tensorcom 库结合使用，以卸载解压缩/数据增强并提供 RDMA 和直接到 GPU 的加载；见下文）。</p>
+
+<h2 id="code-sample">代码示例</h2>
+<p>下面是一些代码片段，展示了在典型的 PyTorch 深度学习应用中使用 WebDataset 的方法（你可以在 <a href="http://github.com/tmbdev/pytorch-imagenet-wds">http://github.com/tmbdev/pytorch-imagenet-wds</a> 找到完整的示例）。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">webdataset</span> <span class="k">as</span> <span class="n">wds</span>
+<span class="kn">import</span> <span class="nn">...</span>
+
+<span class="n">sharedurl</span> <span class="o">=</span> <span class="s">"/imagenet/imagenet-train-{000000..001281}.tar"</span>
+
+<span class="n">normalize</span> <span class="o">=</span> <span class="n">transforms</span><span class="p">.</span><span class="n">Normalize</span><span class="p">(</span>
+  <span class="n">mean</span><span class="o">=</span><span class="p">[</span><span class="mf">0.485</span><span class="p">,</span> <span class="mf">0.456</span><span class="p">,</span> <span class="mf">0.406</span><span class="p">],</span>
+  <span class="n">std</span><span class="o">=</span><span class="p">[</span><span class="mf">0.229</span><span class="p">,</span> <span class="mf">0.224</span><span class="p">,</span> <span class="mf">0.225</span><span class="p">])</span>
+
+<span class="n">preproc</span> <span class="o">=</span> <span class="n">transforms</span><span class="p">.</span><span class="n">Compose</span><span class="p">([</span>
+  <span class="n">transforms</span><span class="p">.</span><span class="n">RandomResizedCrop</span><span class="p">(</span><span class="mi">224</span><span class="p">),</span>
+  <span class="n">transforms</span><span class="p">.</span><span class="n">RandomHorizontalFlip</span><span class="p">(),</span>
+  <span class="n">transforms</span><span class="p">.</span><span class="n">ToTensor</span><span class="p">(),</span>
+  <span class="n">normalize</span><span class="p">,</span>
+<span class="p">])</span>
+
+<span class="n">dataset</span> <span class="o">=</span> <span class="p">(</span>
+  <span class="n">wds</span><span class="p">.</span><span class="n">Dataset</span><span class="p">(</span><span class="n">sharedurl</span><span class="p">)</span>
+  <span class="p">.</span><span class="n">shuffle</span><span class="p">(</span><span class="mi">1000</span><span class="p">)</span>
+  <span class="p">.</span><span class="n">decode</span><span class="p">(</span><span class="s">"pil"</span><span class="p">)</span>
+  <span class="p">.</span><span class="n">rename</span><span class="p">(</span><span class="n">image</span><span class="o">=</span><span class="s">"jpg;png"</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="s">"json"</span><span class="p">)</span>
+  <span class="p">.</span><span class="n">map_dict</span><span class="p">(</span><span class="n">image</span><span class="o">=</span><span class="n">preproc</span><span class="p">)</span>
+  <span class="p">.</span><span class="n">to_tuple</span><span class="p">(</span><span class="s">"image"</span><span class="p">,</span> <span class="s">"data"</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="n">loader</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">utils</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_workers</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">targets</span> <span class="ow">in</span> <span class="n">loader</span><span class="p">:</span>
+  <span class="p">...</span>
+</code></pre></div></div>
+
+<p>这段代码几乎与 PyTorch Imagenet 示例中的基于文件的 I/O 管道相同：它创建一个预处理/增强管道，使用该管道和数据源位置实例化一个数据集，然后从数据集中构建一个 DataLoader 实例。</p>
+
+<p>WebDataset 使用流畅的 API 进行配置，内部构建处理管道。在不添加任何处理阶段的情况下，在这个例子中，WebDataset 与 PyTorch DataLoader 类一起使用，该类在多个线程中复制 DataSet 实例，并执行并行 I/O 和并行数据增强。</p>
+
+<p>WebDataset 实例本身只是迭代每个训练样本作为一个字典：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># load from a web server using a separate client process
+</span><span class="n">sharedurl</span> <span class="o">=</span> <span class="s">"pipe:curl -s http://server/imagenet/imagenet-train-{000000..001281}.tar"</span>
+
+<span class="n">dataset</span> <span class="o">=</span> <span class="n">wds</span><span class="p">.</span><span class="n">Dataset</span><span class="p">(</span><span class="n">sharedurl</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">dataset</span><span class="p">:</span>
+  <span class="c1"># sample["jpg"] contains the raw image data
+</span>  <span class="c1"># sample["cls"] contains the class
+</span>  <span class="p">...</span>
+</code></pre></div></div>
+
+<p>想要了解我们如何使用 WebDataset 处理大规模训练的通用介绍，请查看这些 <a href="https://www.youtube.com/playlist?list=PL0dsKxFNMcX4XcB0w1Wm-pvSfQu-eWM26">YouTube 视频 </a>。</p>
+
+<h2 id="related-software">相关软件</h2>
+
+<ul>
+  <li>
+    <p><a href="https://github.com/NVIDIA/AIStore">AIStore</a> 是一个开源的对象存储，能够实现全带宽的磁盘到 GPU 的数据传输（这意味着如果您有 1000 个转速为 200 MB/s 的旋转磁盘，AIStore 实际上可以向 GPU 提供高达 200 GB/s 的聚合带宽）。AIStore 与 WebDataset 客户端完全兼容，并且理解 WebDataset 格式，允许它在存储系统中直接执行洗牌、排序、ETL 以及一些 map-reduce 操作。AIStore 可以被视为分布式对象存储、网络文件系统、分布式数据库和 GPU 加速的 map-reduce 实现的混搭。</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/tmbdev/tarp">tarp</a> 是一个小型命令行程序，用于分割、合并、洗牌和处理 tar 存档以及 WebDataset 数据集。</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/NVLabs/tensorcom">tensorcom</a> 是一个支持分布式数据增强和 RDMA 到 GPU 的库。</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/tmbdev/pytorch-imagenet-wds">pytorch-imagenet-wds</a> 包含了如何使用 WebDataset 与 ImageNet 结合的示例，基于 PyTorch ImageNet 示例。</p>
+  </li>
+  <li>
+    <p><a href="https://arxiv.org/abs/2001.01858">大数据2019论文及基准</a></p>
+  </li>
+</ul>
+
+<p>查看图书馆并提供对<a href="https://github.com/tmbdev/webdataset">该库</a>的反馈，以及对 <a href="https://github.com/pytorch/pytorch/issues/38419">RFC 38419</a> 的反馈。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

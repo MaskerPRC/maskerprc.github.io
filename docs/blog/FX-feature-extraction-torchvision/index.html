@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Feature Extraction in TorchVision using Torch FX | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="
+
+Introduction
+
+FX based feature extraction is a new TorchVision utility that lets us access intermediate transformations of an input during the forward pass of a PyTorch Module. It does so by symbolically tracing the forward method to produce a graph where each node represents a single operation. Nodes are named in a human-readable manner such that one may easily specify which nodes they want to access.
+
+Did that all sound a little complicated? Not to worry as there’s a little in this article for everyone. Whether you’re a beginner or an advanced deep-vision practitioner, chances are you will want to know about FX feature extraction. If you still want more background on feature extraction in general, read on. If you’re already comfortable with that and want to know how to do it in PyTorch, skim ahead to Existing Methods in PyTorch: Pros and Cons. And if you already know about the challenges of doing feature extraction in PyTorch, feel free to skim forward to FX to The Rescue.
+
+A Recap On Feature Extraction
+
+We’re all used to the idea of having a deep neural network (DNN) that takes inputs and produces outputs, and we don’t necessarily think of what happens in between. Let’s just consider a ResNet-50 classification model as an example:
+
+
+	
+	
+		Figure 1: ResNet-50 takes an image of a bird and transforms that into the abstract concept " bird".="" source:="" bird="" image="" from="" imagenet.="" we="" know="" though,="" that="" there="" are="" many="" sequential="" “layers”="" within="" the="" resnet-50="" architecture="" transform="" input="" step-by-step.="" in="" figure="" 2="" below,="" peek="" under="" hood="" to="" show="" layers="" resnet-50,="" and="" also="" intermediate="" transformations="" of="" as="" it="" passes="" through="" those="" layers.="" 2:="" transforms="" multiple="" steps.="" conceptually,="" may="" access="" transformation="" after="" each="" one="" these="" existing="" methods="" pytorch:="" pros="" cons="" were="" already="" a="" few="" ways="" doing="" feature="" extraction="" pytorch="" prior="" fx="" based="" being="" introduced.="" illustrate="" these,="" let’s="" consider="" simple="" convolutional="" neural="" network="" does="" following="" applies="" several="" “blocks”="" with="" convolution="" within.="" blocks,="" uses="" global="" average="" pool="" flatten="" operation.="" finally="" single="" output="" classification="" layer.="" import="" torch="" nn="" class="" convblock(nn.module):="" """="" `num_layers`="" 3x3="" convolutions="" followed="" by="" relu="" then="" downsamples="" via="" 2x2="" max="" pool.="" def="" __init__(self,="" num_layers,="" in_channels,="" out_channels):="" super().__init__()="" self.convs="nn.ModuleList(" [nn.sequential(="" nn.conv2d(in_channels="" if="" i="=0" else="" out_channels,="" 3,="" padding="1)," nn.relu()="" )="" for="" range(num_layers)]="" self.downsample="nn.MaxPool2d(kernel_size=2," stride="2)" forward(self,="" x):="" conv="" self.convs:="" x="conv(x)" return="" cnn(nn.module):="" convblocks="" doubling="" number="" channels,="" halving="" map="" size,="" before="" taking="" classifying.="" num_blocks,="" num_classes):="" first_channels="64" self.blocks="nn.ModuleList(" [convblock(="" in_channels="(in_channels" 0="" first_channels*(2**(i-1))),="" out_channels="first_channels*(2**i))" range(num_blocks)]="" self.global_pool="nn.AdaptiveAvgPool2d((1," 1))="" self.cls="nn.Linear(first_channels*(2**(num_blocks-1))," num_classes)="" block="" self.blocks:="" model="CNN(3," 4,="" 10)="" out="model(torch.zeros(1," 32,="" 32))="" #="" this="" will="" be="" final="" logits="" over="" classes="" say="" want="" get="" pooling.="" could="" do="" following:="" modify="" forward="" method="" self.final_feature_map="x" or="" directly:="" final_feature_map="x" x,="" looks="" pretty="" easy.="" but="" some="" downsides="" here="" which="" all="" stem="" same="" underlying="" issue:="" is,="" modifying="" source="" code="" is="" not="" ideal:="" it’s="" always="" easy="" change="" given="" practical="" considerations="" project.="" flexibility="" (switching="" on="" off,="" having="" variations="" it),="" need="" further="" adapt="" support="" that.="" just="" question="" inserting="" line="" code.="" think="" about="" how="" you="" would="" go="" getting="" blocks="" way="" i’ve="" written="" module.="" overall,="" we’d="" rather="" avoid="" overhead="" maintaining="" model,="" when="" actually="" don’t="" anything="" works.="" can="" see="" downside="" start="" lot="" more="" thorny="" dealing="" larger,="" complicated="" models,="" trying="" at="" features="" nested="" submodules.="" write="" new="" module="" using="" parameters="" original="" example="" above,="" block.="" like="" so:="" cnnfeatures(nn.module):="" backbone):="" feature_maps="[]" feature_maps.append(x)="" backbone="CNN(3," now="" list="" tensors,="" representing="" fact,="" much="" torchvision="" used="" internally="" make="" its="" detection="" models.="" although="" approach="" solves="" issues="" directly,="" still="" major="" downsides:="" only="" really="" straight-forward="" outputs="" top-level="" submodules="" rapidly="" becomes="" complicated.="" have="" careful="" miss="" any="" important="" operations="" between="" output.="" introduce="" potential="" errors="" transcribing="" exact="" functionality="" last="" both="" complication="" tying="" model’s="" itself.="" indeed,="" examine="" models="" might="" suspect="" design="" choices="" influenced="" desire="" use="" them="" downstream="" tasks.="" hooks="" move="" us="" away="" paradigm="" writing="" code,="" towards="" specifying="" outputs.="" considering="" our="" toy="" cnn="" goal="" maps="" layer,="" this:="" hook_feat_map(mod,="" inp,="" out):="" feature_maps.append(out)="" model.blocks:="" block.register_forward_hook(hook_feat_map)="" full="" terms="" accessing="" submodules,="" free="" ourselves="" responsibilities="" fiddling="" comes="" own="" apply="" modules.="" functional="" (reshape,="" view,="" non-linearities,="" etc)="" outputs,="" won’t="" work="" directly="" them.="" modified="" so="" whole="" pass="" executed,="" regardless="" hooks.="" early="" without="" output,="" result="" useless="" computation.="" torchscript="" friendly.="" here’s="" summary="" different="" their="" cons:=""  ="" modifications="" rewriting="" drops="" unnecessary="" computational="" steps="" friendly="" no="" technically="" yes.="" depends="" you’re="" willing="" write.="" practice,="" no.="" yes="" reuses="" mostly="" table="" 1:="" (or="" cons)="" next="" section="" article,="" across="" board.="" rescue="" natural="" new-starters="" python="" coding="" point="" be:="" “can’t="" tell="" line?”="" who="" spent="" time="" coding,="" reason="" can’t="" done="" clear:="" happen="" whether="" they="" explicitly="" there,="" implicit="" sub-operations.="" take="" an="" example:="" mymodule(torch.nn.module):="" __init__(self):="" self.param="torch.nn.Parameter(torch.rand(3," 4))="" self.submodule="MySubModule()" self.submodule(x="" +="" self.param).clamp(min="0.0," has="" unravel="" as:="" add="" self.submodule.="" happening="" submodule.="" i’m="" going="" dummy="" operation="" names="" illustration:="" i.="" submodule.op_1="" ii.="" submodule.op_2="" clamp="" even="" line,="" is:="" “for="" step="" extract="" output?”.="" core="" toolkit="" (oversimplifying)="" unravelling="" mentioned.="" something="" called="" “symbolic="" tracing”,="" means="" interpreted="" stepped="" through,="" operation-by-operation,="" proxy="" real="" input.="" introducing="" nomenclature,="" described="" above="" considered="" “node”,="" consecutive="" nodes="" connected="" another="" form="" “graph”="" (not="" unlike="" common="" mathematical="" notion="" graph).="" “steps”="" translated="" concept="" graph.="" 3:="" graphical="" representation="" symbolically="" tracing="" method.="" note="" call="" graph,="" set="" steps,="" because="" possible="" graph="" branch="" off="" recombine.="" skip="" connection="" residual="" look="" like:="" 4:="" connection.="" middle="" node="" main="" block,="" represents="" sum="" branch.="" now,="" torchvision’s="" get_graph_node_names="" function="" process="" so,="" tags="" human="" readable="" name.="" try="" previous="" section:="" torchvision.models.feature_extraction="" nodes,="" _="get_graph_node_names(model)" print(nodes)="" in:="" ['x',="" 'blocks.0.convs.0.0',="" 'blocks.0.convs.0.1',="" 'blocks.0.convs.1.0',="" 'blocks.0.convs.1.1',="" 'blocks.0.downsample',="" 'blocks.1.convs.0.0',="" 'blocks.1.convs.0.1',="" 'blocks.1.convs.1.0',="" 'blocks.1.convs.1.1',="" 'blocks.1.convs.2.0',="" 'blocks.1.convs.2.1',="" 'blocks.1.downsample',="" 'blocks.2.convs.0.0',="" 'blocks.2.convs.0.1',="" 'blocks.2.convs.1.0',="" 'blocks.2.convs.1.1',="" 'blocks.2.convs.2.0',="" 'blocks.2.convs.2.1',="" 'blocks.2.downsample',="" 'blocks.3.convs.0.0',="" 'blocks.3.convs.0.1',="" 'blocks.3.convs.1.0',="" 'blocks.3.convs.1.1',="" 'blocks.3.convs.2.0',="" 'blocks.3.convs.2.1',="" 'blocks.3.downsample',="" 'global_pool',="" 'flatten',="" 'cls']="" read="" hierarchically="" organised="" “addresses”="" interest.="" ‘blocks.1.downsample’="" refers="" maxpool2d="" layer="" second="" convblock.="" create_feature_extractor,="" where="" magic="" happens,="" goes="" than="" get_graph_node_names.="" takes="" desired="" arguments,="" to:="" assign="" prune="" associated="" parameters.="" translate="" resulting="" back="" into="" user.="" 3="" demonstration,="" create_feature_extractor="" 4="" confused="" specification="" here?="" allowed="" provide="" truncated="" names,="" `create_feature_extractor`="" choose="" prefix.="" feature_extractor="create_feature_extractor(" return_nodes="['blocks.0'," 'blocks.1',="" 'blocks.2',="" 'blocks.3'])="" `out`="" dict="" down="" it,="" making="" what="" naively="" hoped="" first="" started="" programming:="" “just="" give="" me="" (points="" finger="" screen)”*.="" …="" require="" fiddle="" provides="" inputs,="" results="" drop="" computations="" once="" been="" extracted="" didn’t="" mention="" before,="" friendly!="" again="" row="" added="" copy="" 1="" extraction.="" gets="" board!="" current="" limitations="" loved="" end="" post="" boil="" isn’t="" yet="" handled="" interpretation="" translation="" dynamic="" control="" flow="" represented="" static="" easiest="" thing="" problems="" crop="" up="" bundle="" “leaf="" node”.="" recall="" 3?="" agree="" submodule="" should="" treated="" itself="" operations.="" redraw="" 5:="" individual="" `submodule`="" (left="" -="" red="" box),="" consolidated="" (right="" #2)="" "leaf"="" node.="" problematic="" submodule,="" extracting="" it.="" easily="" achievable="" providing="" keyword="" argument="" tracer_kwargs="{'leaf_modules':" [convblock]})="" 'blocks.0',="" 'blocks.3',="" notice="" how,="" compared="" previously,="" convblock="" similar="" functions.="" example,="" python’s="" inbuilt="" len="" needs="" wrapped="" leaf="" functionality:="" torch.fx.wrap('len')="" mymodule(nn.module):="" len(x)="" functions="" define,="" instead="" (minor="" detail:="" why="" instead):="" myfunc(x):="" myfunc(x)="" [myfunc]})="" none="" fixes="" involved="" course,="" times="" very="" causing="" problems.="" here,="" treat="" node,="" cases,="" needed.="" examples="" exhaustive)="" raise="" error="" trace="" assert="" statement.="" case="" remove="" assertion="" switch="" torch._assert="" (this="" public="" bandaid="" caution).="" in-place="" changes="" slices="" tensors="" supported.="" variable="" slice,="" operation,="" reconstruct="" tensor="" concatenation="" stacking.="" logically="" possible.="" distill="" coded="" logic="" documentation="" tips.="" general,="" consult="" detail="" symbolic="" workarounds.="" conclusion="" did="" quick="" recap="" significant="" shortcomings.="" learned="" utility="" works="" makes="" versatile="" methods.="" while="" minor="" kinks="" iron="" latter,="" understand="" limitations,="" trade="" against="" other="" depending="" case.="" hopefully="" adding="" your="" toolkit,="" equipped="" handle="" vast="" majority="" requirements="" come="" across.="" happy="" coding!="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/fx-image2.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/fx-image2.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Feature Extraction in TorchVision using Torch FX">
+<meta property="og:description" content="
+
+Introduction
+
+FX based feature extraction is a new TorchVision utility that lets us access intermediate transformations of an input during the forward pass of a PyTorch Module. It does so by symbolically tracing the forward method to produce a graph where each node represents a single operation. Nodes are named in a human-readable manner such that one may easily specify which nodes they want to access.
+
+Did that all sound a little complicated? Not to worry as there’s a little in this article for everyone. Whether you’re a beginner or an advanced deep-vision practitioner, chances are you will want to know about FX feature extraction. If you still want more background on feature extraction in general, read on. If you’re already comfortable with that and want to know how to do it in PyTorch, skim ahead to Existing Methods in PyTorch: Pros and Cons. And if you already know about the challenges of doing feature extraction in PyTorch, feel free to skim forward to FX to The Rescue.
+
+A Recap On Feature Extraction
+
+We’re all used to the idea of having a deep neural network (DNN) that takes inputs and produces outputs, and we don’t necessarily think of what happens in between. Let’s just consider a ResNet-50 classification model as an example:
+
+
+	
+	
+		Figure 1: ResNet-50 takes an image of a bird and transforms that into the abstract concept " bird".="" source:="" bird="" image="" from="" imagenet.="" we="" know="" though,="" that="" there="" are="" many="" sequential="" “layers”="" within="" the="" resnet-50="" architecture="" transform="" input="" step-by-step.="" in="" figure="" 2="" below,="" peek="" under="" hood="" to="" show="" layers="" resnet-50,="" and="" also="" intermediate="" transformations="" of="" as="" it="" passes="" through="" those="" layers.="" 2:="" transforms="" multiple="" steps.="" conceptually,="" may="" access="" transformation="" after="" each="" one="" these="" existing="" methods="" pytorch:="" pros="" cons="" were="" already="" a="" few="" ways="" doing="" feature="" extraction="" pytorch="" prior="" fx="" based="" being="" introduced.="" illustrate="" these,="" let’s="" consider="" simple="" convolutional="" neural="" network="" does="" following="" applies="" several="" “blocks”="" with="" convolution="" within.="" blocks,="" uses="" global="" average="" pool="" flatten="" operation.="" finally="" single="" output="" classification="" layer.="" import="" torch="" nn="" class="" convblock(nn.module):="" """="" `num_layers`="" 3x3="" convolutions="" followed="" by="" relu="" then="" downsamples="" via="" 2x2="" max="" pool.="" def="" __init__(self,="" num_layers,="" in_channels,="" out_channels):="" super().__init__()="" self.convs="nn.ModuleList(" [nn.sequential(="" nn.conv2d(in_channels="" if="" i="=0" else="" out_channels,="" 3,="" padding="1)," nn.relu()="" )="" for="" range(num_layers)]="" self.downsample="nn.MaxPool2d(kernel_size=2," stride="2)" forward(self,="" x):="" conv="" self.convs:="" x="conv(x)" return="" cnn(nn.module):="" convblocks="" doubling="" number="" channels,="" halving="" map="" size,="" before="" taking="" classifying.="" num_blocks,="" num_classes):="" first_channels="64" self.blocks="nn.ModuleList(" [convblock(="" in_channels="(in_channels" 0="" first_channels*(2**(i-1))),="" out_channels="first_channels*(2**i))" range(num_blocks)]="" self.global_pool="nn.AdaptiveAvgPool2d((1," 1))="" self.cls="nn.Linear(first_channels*(2**(num_blocks-1))," num_classes)="" block="" self.blocks:="" model="CNN(3," 4,="" 10)="" out="model(torch.zeros(1," 32,="" 32))="" #="" this="" will="" be="" final="" logits="" over="" classes="" say="" want="" get="" pooling.="" could="" do="" following:="" modify="" forward="" method="" self.final_feature_map="x" or="" directly:="" final_feature_map="x" x,="" looks="" pretty="" easy.="" but="" some="" downsides="" here="" which="" all="" stem="" same="" underlying="" issue:="" is,="" modifying="" source="" code="" is="" not="" ideal:="" it’s="" always="" easy="" change="" given="" practical="" considerations="" project.="" flexibility="" (switching="" on="" off,="" having="" variations="" it),="" need="" further="" adapt="" support="" that.="" just="" question="" inserting="" line="" code.="" think="" about="" how="" you="" would="" go="" getting="" blocks="" way="" i’ve="" written="" module.="" overall,="" we’d="" rather="" avoid="" overhead="" maintaining="" model,="" when="" actually="" don’t="" anything="" works.="" can="" see="" downside="" start="" lot="" more="" thorny="" dealing="" larger,="" complicated="" models,="" trying="" at="" features="" nested="" submodules.="" write="" new="" module="" using="" parameters="" original="" example="" above,="" block.="" like="" so:="" cnnfeatures(nn.module):="" backbone):="" feature_maps="[]" feature_maps.append(x)="" backbone="CNN(3," now="" list="" tensors,="" representing="" fact,="" much="" torchvision="" used="" internally="" make="" its="" detection="" models.="" although="" approach="" solves="" issues="" directly,="" still="" major="" downsides:="" only="" really="" straight-forward="" outputs="" top-level="" submodules="" rapidly="" becomes="" complicated.="" have="" careful="" miss="" any="" important="" operations="" between="" output.="" introduce="" potential="" errors="" transcribing="" exact="" functionality="" last="" both="" complication="" tying="" model’s="" itself.="" indeed,="" examine="" models="" might="" suspect="" design="" choices="" influenced="" desire="" use="" them="" downstream="" tasks.="" hooks="" move="" us="" away="" paradigm="" writing="" code,="" towards="" specifying="" outputs.="" considering="" our="" toy="" cnn="" goal="" maps="" layer,="" this:="" hook_feat_map(mod,="" inp,="" out):="" feature_maps.append(out)="" model.blocks:="" block.register_forward_hook(hook_feat_map)="" full="" terms="" accessing="" submodules,="" free="" ourselves="" responsibilities="" fiddling="" comes="" own="" apply="" modules.="" functional="" (reshape,="" view,="" non-linearities,="" etc)="" outputs,="" won’t="" work="" directly="" them.="" modified="" so="" whole="" pass="" executed,="" regardless="" hooks.="" early="" without="" output,="" result="" useless="" computation.="" torchscript="" friendly.="" here’s="" summary="" different="" their="" cons:=""  ="" modifications="" rewriting="" drops="" unnecessary="" computational="" steps="" friendly="" no="" technically="" yes.="" depends="" you’re="" willing="" write.="" practice,="" no.="" yes="" reuses="" mostly="" table="" 1:="" (or="" cons)="" next="" section="" article,="" across="" board.="" rescue="" natural="" new-starters="" python="" coding="" point="" be:="" “can’t="" tell="" line?”="" who="" spent="" time="" coding,="" reason="" can’t="" done="" clear:="" happen="" whether="" they="" explicitly="" there,="" implicit="" sub-operations.="" take="" an="" example:="" mymodule(torch.nn.module):="" __init__(self):="" self.param="torch.nn.Parameter(torch.rand(3," 4))="" self.submodule="MySubModule()" self.submodule(x="" +="" self.param).clamp(min="0.0," has="" unravel="" as:="" add="" self.submodule.="" happening="" submodule.="" i’m="" going="" dummy="" operation="" names="" illustration:="" i.="" submodule.op_1="" ii.="" submodule.op_2="" clamp="" even="" line,="" is:="" “for="" step="" extract="" output?”.="" core="" toolkit="" (oversimplifying)="" unravelling="" mentioned.="" something="" called="" “symbolic="" tracing”,="" means="" interpreted="" stepped="" through,="" operation-by-operation,="" proxy="" real="" input.="" introducing="" nomenclature,="" described="" above="" considered="" “node”,="" consecutive="" nodes="" connected="" another="" form="" “graph”="" (not="" unlike="" common="" mathematical="" notion="" graph).="" “steps”="" translated="" concept="" graph.="" 3:="" graphical="" representation="" symbolically="" tracing="" method.="" note="" call="" graph,="" set="" steps,="" because="" possible="" graph="" branch="" off="" recombine.="" skip="" connection="" residual="" look="" like:="" 4:="" connection.="" middle="" node="" main="" block,="" represents="" sum="" branch.="" now,="" torchvision’s="" get_graph_node_names="" function="" process="" so,="" tags="" human="" readable="" name.="" try="" previous="" section:="" torchvision.models.feature_extraction="" nodes,="" _="get_graph_node_names(model)" print(nodes)="" in:="" ['x',="" 'blocks.0.convs.0.0',="" 'blocks.0.convs.0.1',="" 'blocks.0.convs.1.0',="" 'blocks.0.convs.1.1',="" 'blocks.0.downsample',="" 'blocks.1.convs.0.0',="" 'blocks.1.convs.0.1',="" 'blocks.1.convs.1.0',="" 'blocks.1.convs.1.1',="" 'blocks.1.convs.2.0',="" 'blocks.1.convs.2.1',="" 'blocks.1.downsample',="" 'blocks.2.convs.0.0',="" 'blocks.2.convs.0.1',="" 'blocks.2.convs.1.0',="" 'blocks.2.convs.1.1',="" 'blocks.2.convs.2.0',="" 'blocks.2.convs.2.1',="" 'blocks.2.downsample',="" 'blocks.3.convs.0.0',="" 'blocks.3.convs.0.1',="" 'blocks.3.convs.1.0',="" 'blocks.3.convs.1.1',="" 'blocks.3.convs.2.0',="" 'blocks.3.convs.2.1',="" 'blocks.3.downsample',="" 'global_pool',="" 'flatten',="" 'cls']="" read="" hierarchically="" organised="" “addresses”="" interest.="" ‘blocks.1.downsample’="" refers="" maxpool2d="" layer="" second="" convblock.="" create_feature_extractor,="" where="" magic="" happens,="" goes="" than="" get_graph_node_names.="" takes="" desired="" arguments,="" to:="" assign="" prune="" associated="" parameters.="" translate="" resulting="" back="" into="" user.="" 3="" demonstration,="" create_feature_extractor="" 4="" confused="" specification="" here?="" allowed="" provide="" truncated="" names,="" `create_feature_extractor`="" choose="" prefix.="" feature_extractor="create_feature_extractor(" return_nodes="['blocks.0'," 'blocks.1',="" 'blocks.2',="" 'blocks.3'])="" `out`="" dict="" down="" it,="" making="" what="" naively="" hoped="" first="" started="" programming:="" “just="" give="" me="" (points="" finger="" screen)”*.="" …="" require="" fiddle="" provides="" inputs,="" results="" drop="" computations="" once="" been="" extracted="" didn’t="" mention="" before,="" friendly!="" again="" row="" added="" copy="" 1="" extraction.="" gets="" board!="" current="" limitations="" loved="" end="" post="" boil="" isn’t="" yet="" handled="" interpretation="" translation="" dynamic="" control="" flow="" represented="" static="" easiest="" thing="" problems="" crop="" up="" bundle="" “leaf="" node”.="" recall="" 3?="" agree="" submodule="" should="" treated="" itself="" operations.="" redraw="" 5:="" individual="" `submodule`="" (left="" -="" red="" box),="" consolidated="" (right="" #2)="" "leaf"="" node.="" problematic="" submodule,="" extracting="" it.="" easily="" achievable="" providing="" keyword="" argument="" tracer_kwargs="{'leaf_modules':" [convblock]})="" 'blocks.0',="" 'blocks.3',="" notice="" how,="" compared="" previously,="" convblock="" similar="" functions.="" example,="" python’s="" inbuilt="" len="" needs="" wrapped="" leaf="" functionality:="" torch.fx.wrap('len')="" mymodule(nn.module):="" len(x)="" functions="" define,="" instead="" (minor="" detail:="" why="" instead):="" myfunc(x):="" myfunc(x)="" [myfunc]})="" none="" fixes="" involved="" course,="" times="" very="" causing="" problems.="" here,="" treat="" node,="" cases,="" needed.="" examples="" exhaustive)="" raise="" error="" trace="" assert="" statement.="" case="" remove="" assertion="" switch="" torch._assert="" (this="" public="" bandaid="" caution).="" in-place="" changes="" slices="" tensors="" supported.="" variable="" slice,="" operation,="" reconstruct="" tensor="" concatenation="" stacking.="" logically="" possible.="" distill="" coded="" logic="" documentation="" tips.="" general,="" consult="" detail="" symbolic="" workarounds.="" conclusion="" did="" quick="" recap="" significant="" shortcomings.="" learned="" utility="" works="" makes="" versatile="" methods.="" while="" minor="" kinks="" iron="" latter,="" understand="" limitations,="" trade="" against="" other="" depending="" case.="" hopefully="" adding="" your="" toolkit,="" equipped="" handle="" vast="" majority="" requirements="" come="" across.="" happy="" coding!="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Feature Extraction in TorchVision using Torch FX">
+<meta name="twitter:description" content="
+
+Introduction
+
+FX based feature extraction is a new TorchVision utility that lets us access intermediate transformations of an input during the forward pass of a PyTorch Module. It does so by symbolically tracing the forward method to produce a graph where each node represents a single operation. Nodes are named in a human-readable manner such that one may easily specify which nodes they want to access.
+
+Did that all sound a little complicated? Not to worry as there’s a little in this article for everyone. Whether you’re a beginner or an advanced deep-vision practitioner, chances are you will want to know about FX feature extraction. If you still want more background on feature extraction in general, read on. If you’re already comfortable with that and want to know how to do it in PyTorch, skim ahead to Existing Methods in PyTorch: Pros and Cons. And if you already know about the challenges of doing feature extraction in PyTorch, feel free to skim forward to FX to The Rescue.
+
+A Recap On Feature Extraction
+
+We’re all used to the idea of having a deep neural network (DNN) that takes inputs and produces outputs, and we don’t necessarily think of what happens in between. Let’s just consider a ResNet-50 classification model as an example:
+
+
+	
+	
+		Figure 1: ResNet-50 takes an image of a bird and transforms that into the abstract concept " bird".="" source:="" bird="" image="" from="" imagenet.="" we="" know="" though,="" that="" there="" are="" many="" sequential="" “layers”="" within="" the="" resnet-50="" architecture="" transform="" input="" step-by-step.="" in="" figure="" 2="" below,="" peek="" under="" hood="" to="" show="" layers="" resnet-50,="" and="" also="" intermediate="" transformations="" of="" as="" it="" passes="" through="" those="" layers.="" 2:="" transforms="" multiple="" steps.="" conceptually,="" may="" access="" transformation="" after="" each="" one="" these="" existing="" methods="" pytorch:="" pros="" cons="" were="" already="" a="" few="" ways="" doing="" feature="" extraction="" pytorch="" prior="" fx="" based="" being="" introduced.="" illustrate="" these,="" let’s="" consider="" simple="" convolutional="" neural="" network="" does="" following="" applies="" several="" “blocks”="" with="" convolution="" within.="" blocks,="" uses="" global="" average="" pool="" flatten="" operation.="" finally="" single="" output="" classification="" layer.="" import="" torch="" nn="" class="" convblock(nn.module):="" """="" `num_layers`="" 3x3="" convolutions="" followed="" by="" relu="" then="" downsamples="" via="" 2x2="" max="" pool.="" def="" __init__(self,="" num_layers,="" in_channels,="" out_channels):="" super().__init__()="" self.convs="nn.ModuleList(" [nn.sequential(="" nn.conv2d(in_channels="" if="" i="=0" else="" out_channels,="" 3,="" padding="1)," nn.relu()="" )="" for="" range(num_layers)]="" self.downsample="nn.MaxPool2d(kernel_size=2," stride="2)" forward(self,="" x):="" conv="" self.convs:="" x="conv(x)" return="" cnn(nn.module):="" convblocks="" doubling="" number="" channels,="" halving="" map="" size,="" before="" taking="" classifying.="" num_blocks,="" num_classes):="" first_channels="64" self.blocks="nn.ModuleList(" [convblock(="" in_channels="(in_channels" 0="" first_channels*(2**(i-1))),="" out_channels="first_channels*(2**i))" range(num_blocks)]="" self.global_pool="nn.AdaptiveAvgPool2d((1," 1))="" self.cls="nn.Linear(first_channels*(2**(num_blocks-1))," num_classes)="" block="" self.blocks:="" model="CNN(3," 4,="" 10)="" out="model(torch.zeros(1," 32,="" 32))="" #="" this="" will="" be="" final="" logits="" over="" classes="" say="" want="" get="" pooling.="" could="" do="" following:="" modify="" forward="" method="" self.final_feature_map="x" or="" directly:="" final_feature_map="x" x,="" looks="" pretty="" easy.="" but="" some="" downsides="" here="" which="" all="" stem="" same="" underlying="" issue:="" is,="" modifying="" source="" code="" is="" not="" ideal:="" it’s="" always="" easy="" change="" given="" practical="" considerations="" project.="" flexibility="" (switching="" on="" off,="" having="" variations="" it),="" need="" further="" adapt="" support="" that.="" just="" question="" inserting="" line="" code.="" think="" about="" how="" you="" would="" go="" getting="" blocks="" way="" i’ve="" written="" module.="" overall,="" we’d="" rather="" avoid="" overhead="" maintaining="" model,="" when="" actually="" don’t="" anything="" works.="" can="" see="" downside="" start="" lot="" more="" thorny="" dealing="" larger,="" complicated="" models,="" trying="" at="" features="" nested="" submodules.="" write="" new="" module="" using="" parameters="" original="" example="" above,="" block.="" like="" so:="" cnnfeatures(nn.module):="" backbone):="" feature_maps="[]" feature_maps.append(x)="" backbone="CNN(3," now="" list="" tensors,="" representing="" fact,="" much="" torchvision="" used="" internally="" make="" its="" detection="" models.="" although="" approach="" solves="" issues="" directly,="" still="" major="" downsides:="" only="" really="" straight-forward="" outputs="" top-level="" submodules="" rapidly="" becomes="" complicated.="" have="" careful="" miss="" any="" important="" operations="" between="" output.="" introduce="" potential="" errors="" transcribing="" exact="" functionality="" last="" both="" complication="" tying="" model’s="" itself.="" indeed,="" examine="" models="" might="" suspect="" design="" choices="" influenced="" desire="" use="" them="" downstream="" tasks.="" hooks="" move="" us="" away="" paradigm="" writing="" code,="" towards="" specifying="" outputs.="" considering="" our="" toy="" cnn="" goal="" maps="" layer,="" this:="" hook_feat_map(mod,="" inp,="" out):="" feature_maps.append(out)="" model.blocks:="" block.register_forward_hook(hook_feat_map)="" full="" terms="" accessing="" submodules,="" free="" ourselves="" responsibilities="" fiddling="" comes="" own="" apply="" modules.="" functional="" (reshape,="" view,="" non-linearities,="" etc)="" outputs,="" won’t="" work="" directly="" them.="" modified="" so="" whole="" pass="" executed,="" regardless="" hooks.="" early="" without="" output,="" result="" useless="" computation.="" torchscript="" friendly.="" here’s="" summary="" different="" their="" cons:=""  ="" modifications="" rewriting="" drops="" unnecessary="" computational="" steps="" friendly="" no="" technically="" yes.="" depends="" you’re="" willing="" write.="" practice,="" no.="" yes="" reuses="" mostly="" table="" 1:="" (or="" cons)="" next="" section="" article,="" across="" board.="" rescue="" natural="" new-starters="" python="" coding="" point="" be:="" “can’t="" tell="" line?”="" who="" spent="" time="" coding,="" reason="" can’t="" done="" clear:="" happen="" whether="" they="" explicitly="" there,="" implicit="" sub-operations.="" take="" an="" example:="" mymodule(torch.nn.module):="" __init__(self):="" self.param="torch.nn.Parameter(torch.rand(3," 4))="" self.submodule="MySubModule()" self.submodule(x="" +="" self.param).clamp(min="0.0," has="" unravel="" as:="" add="" self.submodule.="" happening="" submodule.="" i’m="" going="" dummy="" operation="" names="" illustration:="" i.="" submodule.op_1="" ii.="" submodule.op_2="" clamp="" even="" line,="" is:="" “for="" step="" extract="" output?”.="" core="" toolkit="" (oversimplifying)="" unravelling="" mentioned.="" something="" called="" “symbolic="" tracing”,="" means="" interpreted="" stepped="" through,="" operation-by-operation,="" proxy="" real="" input.="" introducing="" nomenclature,="" described="" above="" considered="" “node”,="" consecutive="" nodes="" connected="" another="" form="" “graph”="" (not="" unlike="" common="" mathematical="" notion="" graph).="" “steps”="" translated="" concept="" graph.="" 3:="" graphical="" representation="" symbolically="" tracing="" method.="" note="" call="" graph,="" set="" steps,="" because="" possible="" graph="" branch="" off="" recombine.="" skip="" connection="" residual="" look="" like:="" 4:="" connection.="" middle="" node="" main="" block,="" represents="" sum="" branch.="" now,="" torchvision’s="" get_graph_node_names="" function="" process="" so,="" tags="" human="" readable="" name.="" try="" previous="" section:="" torchvision.models.feature_extraction="" nodes,="" _="get_graph_node_names(model)" print(nodes)="" in:="" ['x',="" 'blocks.0.convs.0.0',="" 'blocks.0.convs.0.1',="" 'blocks.0.convs.1.0',="" 'blocks.0.convs.1.1',="" 'blocks.0.downsample',="" 'blocks.1.convs.0.0',="" 'blocks.1.convs.0.1',="" 'blocks.1.convs.1.0',="" 'blocks.1.convs.1.1',="" 'blocks.1.convs.2.0',="" 'blocks.1.convs.2.1',="" 'blocks.1.downsample',="" 'blocks.2.convs.0.0',="" 'blocks.2.convs.0.1',="" 'blocks.2.convs.1.0',="" 'blocks.2.convs.1.1',="" 'blocks.2.convs.2.0',="" 'blocks.2.convs.2.1',="" 'blocks.2.downsample',="" 'blocks.3.convs.0.0',="" 'blocks.3.convs.0.1',="" 'blocks.3.convs.1.0',="" 'blocks.3.convs.1.1',="" 'blocks.3.convs.2.0',="" 'blocks.3.convs.2.1',="" 'blocks.3.downsample',="" 'global_pool',="" 'flatten',="" 'cls']="" read="" hierarchically="" organised="" “addresses”="" interest.="" ‘blocks.1.downsample’="" refers="" maxpool2d="" layer="" second="" convblock.="" create_feature_extractor,="" where="" magic="" happens,="" goes="" than="" get_graph_node_names.="" takes="" desired="" arguments,="" to:="" assign="" prune="" associated="" parameters.="" translate="" resulting="" back="" into="" user.="" 3="" demonstration,="" create_feature_extractor="" 4="" confused="" specification="" here?="" allowed="" provide="" truncated="" names,="" `create_feature_extractor`="" choose="" prefix.="" feature_extractor="create_feature_extractor(" return_nodes="['blocks.0'," 'blocks.1',="" 'blocks.2',="" 'blocks.3'])="" `out`="" dict="" down="" it,="" making="" what="" naively="" hoped="" first="" started="" programming:="" “just="" give="" me="" (points="" finger="" screen)”*.="" …="" require="" fiddle="" provides="" inputs,="" results="" drop="" computations="" once="" been="" extracted="" didn’t="" mention="" before,="" friendly!="" again="" row="" added="" copy="" 1="" extraction.="" gets="" board!="" current="" limitations="" loved="" end="" post="" boil="" isn’t="" yet="" handled="" interpretation="" translation="" dynamic="" control="" flow="" represented="" static="" easiest="" thing="" problems="" crop="" up="" bundle="" “leaf="" node”.="" recall="" 3?="" agree="" submodule="" should="" treated="" itself="" operations.="" redraw="" 5:="" individual="" `submodule`="" (left="" -="" red="" box),="" consolidated="" (right="" #2)="" "leaf"="" node.="" problematic="" submodule,="" extracting="" it.="" easily="" achievable="" providing="" keyword="" argument="" tracer_kwargs="{'leaf_modules':" [convblock]})="" 'blocks.0',="" 'blocks.3',="" notice="" how,="" compared="" previously,="" convblock="" similar="" functions.="" example,="" python’s="" inbuilt="" len="" needs="" wrapped="" leaf="" functionality:="" torch.fx.wrap('len')="" mymodule(nn.module):="" len(x)="" functions="" define,="" instead="" (minor="" detail:="" why="" instead):="" myfunc(x):="" myfunc(x)="" [myfunc]})="" none="" fixes="" involved="" course,="" times="" very="" causing="" problems.="" here,="" treat="" node,="" cases,="" needed.="" examples="" exhaustive)="" raise="" error="" trace="" assert="" statement.="" case="" remove="" assertion="" switch="" torch._assert="" (this="" public="" bandaid="" caution).="" in-place="" changes="" slices="" tensors="" supported.="" variable="" slice,="" operation,="" reconstruct="" tensor="" concatenation="" stacking.="" logically="" possible.="" distill="" coded="" logic="" documentation="" tips.="" general,="" consult="" detail="" symbolic="" workarounds.="" conclusion="" did="" quick="" recap="" significant="" shortcomings.="" learned="" utility="" works="" makes="" versatile="" methods.="" while="" minor="" kinks="" iron="" latter,="" understand="" limitations,="" trade="" against="" other="" depending="" case.="" hopefully="" adding="" your="" toolkit,="" equipped="" handle="" vast="" majority="" requirements="" come="" across.="" happy="" coding!="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年10月29日</p>
+            <h1>
+                <a class="blog-title">使用 Torch FX 在 TorchVision 中进行特征提取</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由亚历山大·索阿雷和弗朗西斯科·马萨撰写</p>
+                    <style type="text/css">
+article.pytorch-article table tr th, article.pytorch-article table td {line-height: 1.5rem}
+</style>
+
+<h1 id="introduction">简介</h1>
+
+<p>基于 <a href="https://pytorch.org/docs/stable/fx.html">FX</a> 的特征提取是 <a href="https://pytorch.org/vision/stable/feature_extraction.html">TorchVision</a> 的一个新工具，它允许我们在 PyTorch 模块的前向传递过程中访问输入的中间变换。它是通过符号跟踪前向方法来生成一个图，其中每个节点代表一个单独的操作。节点以人类可读的方式命名，以便可以轻松指定想要访问的节点。</p>
+
+<p>这听起来有点复杂吗？不用担心，这篇文章中有一小部分内容适合每个人。无论你是初学者还是高级深度视觉从业者，你可能会想了解 FX 特征提取。如果你还想了解更多关于特征提取的一般背景，请继续阅读。如果你已经熟悉这一点，并想了解如何在 PyTorch 中实现，请快速浏览《PyTorch 中的现有方法：优缺点》。如果你已经了解在 PyTorch 中进行特征提取的挑战，请随意快速浏览到《FX 拯救》部分。</p>
+
+<h2 id="a-recap-on-feature-extraction">特征提取回顾</h2>
+
+<p>我们都习惯了有一个深度神经网络（DNN）接受输入并产生输出的想法，我们并不一定考虑其中发生了什么。让我们以 ResNet-50 分类模型为例：</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/fx-image1.png" alt="CResNet-50 takes an image of a bird and transforms that into the abstract concept 'bird'" width="100%">
+	<br>图 1：ResNet-50 将一只鸟的图像转化为抽象概念“鸟”。来源：ImageNet 中的鸟图像。</p>
+
+<p>我们知道，在 ResNet-50 架构中存在许多顺序的“层”，它们逐步转换输入。在下面的图 2 中，我们揭开盖子，展示 ResNet-50 中的层，同时也展示了输入在这些层中传递时的中间转换。</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/fx-image2.png" alt="ResNet-50 transforms the input image in multiple steps. Conceptually, we may access the intermediate transformation of the image after each one of these steps." width="100%">
+	<br>图 2：ResNet-50 通过多个步骤转换输入图像。从概念上讲，我们可能访问在这些步骤之后图像的中间转换。来源：ImageNet 中的鸟图像。</p>
+
+<h2 id="existing-methods-in-pytorch-pros-and-cons">PyTorch 中现有方法的优缺点</h2>
+
+<p>在引入 FX 基于的特征提取之前，PyTorch 中已经存在几种进行特征提取的方法。</p>
+
+<p>为了说明这些方法，让我们考虑一个简单的卷积神经网络，它执行以下操作</p>
+
+<ul>
+  <li>应用多个“块”，每个块内部包含多个卷积层。</li>
+  <li>经过几个块之后，它使用全局平均池化和展平操作。</li>
+  <li>最后它使用一个单输出分类层。</li>
+</ul>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">nn</span>
+
+
+<span class="k">class</span> <span class="nc">ConvBlock</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+   <span class="s">"""
+   Applies `num_layers` 3x3 convolutions each followed by ReLU then downsamples
+   via 2x2 max pool.
+   """</span>
+
+   <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_layers</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">):</span>
+       <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">convs</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">ModuleList</span><span class="p">(</span>
+           <span class="p">[</span><span class="n">nn</span><span class="p">.</span><span class="n">Sequential</span><span class="p">(</span>
+               <span class="n">nn</span><span class="p">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">in_channels</span> <span class="k">if</span> <span class="n">i</span><span class="o">==</span><span class="mi">0</span> <span class="k">else</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+               <span class="n">nn</span><span class="p">.</span><span class="n">ReLU</span><span class="p">()</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_layers</span><span class="p">)]</span>
+       <span class="p">)</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">downsample</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">MaxPool2d</span><span class="p">(</span><span class="n">kernel_size</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+      
+   <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+       <span class="k">for</span> <span class="n">conv</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">convs</span><span class="p">:</span>
+           <span class="n">x</span> <span class="o">=</span> <span class="n">conv</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">downsample</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="k">return</span> <span class="n">x</span>
+      
+
+<span class="k">class</span> <span class="nc">CNN</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+   <span class="s">"""
+   Applies several ConvBlocks each doubling the number of channels, and
+   halving the feature map size, before taking a global average and classifying.
+   """</span>
+
+   <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">num_blocks</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">):</span>
+       <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+       <span class="n">first_channels</span> <span class="o">=</span> <span class="mi">64</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">ModuleList</span><span class="p">(</span>
+           <span class="p">[</span><span class="n">ConvBlock</span><span class="p">(</span>
+               <span class="mi">2</span> <span class="k">if</span> <span class="n">i</span><span class="o">==</span><span class="mi">0</span> <span class="k">else</span> <span class="mi">3</span><span class="p">,</span>
+               <span class="n">in_channels</span><span class="o">=</span><span class="p">(</span><span class="n">in_channels</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">first_channels</span><span class="o">*</span><span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="p">(</span><span class="n">i</span><span class="o">-</span><span class="mi">1</span><span class="p">))),</span>
+               <span class="n">out_channels</span><span class="o">=</span><span class="n">first_channels</span><span class="o">*</span><span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_blocks</span><span class="p">)]</span>
+       <span class="p">)</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">global_pool</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">AdaptiveAvgPool2d</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">cls</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">first_channels</span><span class="o">*</span><span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="p">(</span><span class="n">num_blocks</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="n">num_classes</span><span class="p">)</span>
+
+   <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+       <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span><span class="p">:</span>
+           <span class="n">x</span> <span class="o">=</span> <span class="n">block</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">global_pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">.</span><span class="n">flatten</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">cls</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="k">return</span> <span class="n">x</span>
+
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">CNN</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">out</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>  <span class="c1"># This will be the final logits over classes
+</span>
+</code></pre></div></div>
+
+<p>假设我们想要获取全局平均池化之前的最终特征图。我们可以这样做：</p>
+
+<h3 id="modify-the-forward-method">修改前向方法</h3>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+   <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span><span class="p">:</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="n">block</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="bp">self</span><span class="p">.</span><span class="n">final_feature_map</span> <span class="o">=</span> <span class="n">x</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">global_pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">.</span><span class="n">flatten</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">cls</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="k">return</span> <span class="n">x</span>
+</code></pre></div></div>
+
+<p>直接返回它：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+   <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span><span class="p">:</span>
+       <span class="n">x</span> <span class="o">=</span> <span class="n">block</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="n">final_feature_map</span> <span class="o">=</span> <span class="n">x</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">global_pool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="p">.</span><span class="n">flatten</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+   <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">cls</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+   <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">final_feature_map</span>
+</code></pre></div></div>
+<p>看起来很简单。但这里有一些缺点，都源于同一个根本问题：那就是修改源代码并不理想：</p>
+
+<ul>
+  <li>由于项目的实际考虑，修改和访问并不总是容易。</li>
+  <li>如果我们想要灵活性（开关特征提取，或者对其有变体），我们需要进一步修改源代码以支持这一点。</li>
+  <li>并非总是仅仅插入一行代码就能解决问题。想想看，按照我写的这个模块，你是如何获取中间模块中的特征图的。</li>
+  <li>总体来说，当我们实际上不需要改变模型的工作方式时，我们更愿意避免维护模型源代码的开销。</li>
+</ul>
+
+<p>当处理更大、更复杂的模型，并试图从嵌套子模块中获取特征时，这种缺点可能会变得更加棘手。</p>
+
+<h3 id="write-a-new-module-using-the-parameters-from-the-original-one">使用原始模块的参数编写一个新的模块</h3>
+
+<p>接着上面的例子，如果我们想从每个块中获取一个特征图，我们可以这样编写一个新的模块：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">CNNFeatures</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+   <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">backbone</span><span class="p">):</span>
+       <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+       <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span> <span class="o">=</span> <span class="n">backbone</span><span class="p">.</span><span class="n">blocks</span>
+
+   <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+       <span class="n">feature_maps</span> <span class="o">=</span> <span class="p">[]</span>
+       <span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="bp">self</span><span class="p">.</span><span class="n">blocks</span><span class="p">:</span>
+           <span class="n">x</span> <span class="o">=</span> <span class="n">block</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+           <span class="n">feature_maps</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+       <span class="k">return</span> <span class="n">feature_maps</span>
+
+
+<span class="n">backbone</span> <span class="o">=</span> <span class="n">CNN</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">CNNFeatures</span><span class="p">(</span><span class="n">backbone</span><span class="p">)</span>
+<span class="n">out</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>  <span class="c1"># This is now a list of Tensors, each representing a feature map
+</span></code></pre></div></div>
+
+<p>事实上，这与 TorchVision 内部用于制作其许多检测模型的方法非常相似。</p>
+
+<p>虽然这种方法解决了直接修改源代码的一些问题，但仍然存在一些主要的缺点：</p>
+
+<ul>
+  <li>只有访问顶级子模块的输出才是真正直接的。处理嵌套子模块会迅速变得复杂。</li>
+  <li>我们必须小心，不要在输入和输出之间错过任何重要操作。我们在将原始模块的精确功能转录到新模块中引入了潜在的错误。</li>
+</ul>
+
+<p>总体来说，这种方法以及最后一种方法都存在将特征提取与模型源代码本身结合起来的复杂性。的确，如果我们检查 TorchVision 模型的源代码，我们可能会怀疑一些设计选择受到了希望以这种方式用于下游任务的影响。</p>
+
+<h3 id="use-hooks">使用钩子</h3>
+
+<p>钩子使我们摆脱了编写源代码的范式，转向了指定输出的范式。考虑到我们上面的玩具 CNN 示例以及获取每个层的特征图的目标，我们可以使用如下钩子：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">CNN</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">feature_maps</span> <span class="o">=</span> <span class="p">[]</span>  <span class="c1"># This will be a list of Tensors, each representing a feature map
+</span>
+<span class="k">def</span> <span class="nf">hook_feat_map</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">out</span><span class="p">):</span>
+	<span class="n">feature_maps</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">block</span> <span class="ow">in</span> <span class="n">model</span><span class="p">.</span><span class="n">blocks</span><span class="p">:</span>
+	<span class="n">block</span><span class="p">.</span><span class="n">register_forward_hook</span><span class="p">(</span><span class="n">hook_feat_map</span><span class="p">)</span>
+
+<span class="n">out</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>  <span class="c1"># This will be the final logits over classes
+</span></code></pre></div></div>
+
+<p>现在我们对访问嵌套子模块具有完全的灵活性，我们摆脱了修改源代码的责任。但这种方法也有其自身的缺点：</p>
+
+<ul>
+  <li>我们只能将钩子应用于模块。如果我们有需要获取输出的功能操作（重塑、视图、功能非线性等），钩子无法直接应用于它们。</li>
+  <li>我们没有修改任何源代码，因此整个前向传播都会执行，无论是否有钩子。如果我们只需要访问早期特征，而不需要最终输出，这可能会导致大量的无用计算。</li>
+  <li>钩子不兼容 TorchScript。</li>
+</ul>
+
+<p>这里是对不同方法和它们的优缺点的一个总结：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>&nbsp;</th>
+      <th style="text-align: center">可以直接使用源代码，无需任何修改或重写</th>
+      <th style="text-align: center">全面的功能访问灵活性</th>
+      <th style="text-align: center">减少不必要的计算步骤</th>
+      <th style="text-align: center">支持 TorchScript</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>修改前向方法</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">技术上是的。取决于你愿意写多少代码。所以实际上，不是。</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>新模块，重用原始模块的子模块/参数</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">技术上是的。取决于你愿意写多少代码。所以实际上，不是。</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>钩子</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">主要为 YES。仅输出子模块的结果</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">NO</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>表 1：使用 PyTorch 进行特征提取的一些现有方法的优缺点</p>
+
+<p>在本文的下一段，让我们看看我们如何让 YES 全面实现。</p>
+
+<h2 id="fx-to-the-rescue">外汇救星</h2>
+
+<p>对于一些刚开始学习 Python 和编码的新手来说，此时可能出现的自然问题是：<em>“我们能不能直接指向一行代码，并告诉 Python 或 PyTorch 我们想要那行代码的结果？”</em> 对于那些已经花费更多时间编码的人来说，为什么不能这样做的原因是显而易见的：一行代码中可能发生多个操作，无论是明确写在那里，还是作为子操作隐含其中。只需以这个简单的模块为例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">MyModule</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">param</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Parameter</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">submodule</span> <span class="o">=</span> <span class="n">MySubModule</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="p">.</span><span class="n">submodule</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="p">.</span><span class="n">param</span><span class="p">).</span><span class="n">clamp</span><span class="p">(</span><span class="nb">min</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">max</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>前向方法只有一行代码，我们可以将其展开为：</p>
+
+<ol>
+  <li>将 <code class="language-plaintext highlighter-rouge">self.param</code> 添加到 <code class="language-plaintext highlighter-rouge">x</code></li>
+  <li>将 x 通过 self.submodule。这里我们需要考虑该子模块中发生的步骤。我将仅使用示例操作名称：I. submodule.op_1 II. submodule.op_2</li>
+  <li>应用钳位操作</li>
+</ol>
+
+<p>因此，即使我们指向这一行，问题随之而来：“我们想要提取输出的哪个步骤？”</p>
+
+<p><a href="https://pytorch.org/docs/stable/fx.html">FX</a> 是 PyTorch 的核心工具包，(简化地说) 它执行了我刚才提到的展开操作。它执行一种称为“符号跟踪”的操作，这意味着 Python 代码被解释并逐个操作地执行，使用一些虚拟代理来代替真实输入。引入一些术语，上述每一步都被视为一个 <strong>“节点”</strong>，连续的节点相互连接形成一个 <strong>“图”</strong>（与常见的数学概念图类似）。以下是上述“步骤”翻译成这种图的概念。</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/fx-image4.png" alt="Graphical representation of the result of symbolically tracing our example of a simple forward method." width="50%">
+	<br>图 3：符号跟踪简单前向方法结果的图形表示。</p>
+
+<p>注意，我们称之为图，而不是仅仅是一系列步骤，因为图可以分支并重新组合。想想残差块中的跳过连接。这看起来可能像：</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/fx-image5.png" alt="Graphical representation of a residual skip connection. The middle node is like the main branch of a residual block, and the final node represents the sum of the input and output of the main branch." width="25%">
+	<br>图 4：残差跳过连接的图形表示。中间节点像是残差块的主分支，最后一个节点代表主分支的输入和输出的总和。</p>
+
+<p>现在，TorchVision 的 <strong><a href="https://pytorch.org/vision/stable/feature_extraction.html#torchvision.models.feature_extraction.get_graph_node_names">get_graph_node_names</a> 函数应用 FX，如上所述，并在执行过程中，为每个节点标记一个可读的人名。让我们用上一节中的玩具 CNN 模型来试一试：</strong></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">CNN</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">torchvision.models.feature_extraction</span> <span class="kn">import</span> <span class="n">get_graph_node_names</span>
+<span class="n">nodes</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">get_graph_node_names</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+<span class="k">print</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+</code></pre></div></div>
+<p>这将导致：</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">[</span><span class="s">'x'</span><span class="p">,</span> <span class="s">'blocks.0.convs.0.0'</span><span class="p">,</span> <span class="s">'blocks.0.convs.0.1'</span><span class="p">,</span> <span class="s">'blocks.0.convs.1.0'</span><span class="p">,</span> <span class="s">'blocks.0.convs.1.1'</span><span class="p">,</span> <span class="s">'blocks.0.downsample'</span><span class="p">,</span> <span class="s">'blocks.1.convs.0.0'</span><span class="p">,</span> <span class="s">'blocks.1.convs.0.1'</span><span class="p">,</span> <span class="s">'blocks.1.convs.1.0'</span><span class="p">,</span> <span class="s">'blocks.1.convs.1.1'</span><span class="p">,</span> <span class="s">'blocks.1.convs.2.0'</span><span class="p">,</span> <span class="s">'blocks.1.convs.2.1'</span><span class="p">,</span> <span class="s">'blocks.1.downsample'</span><span class="p">,</span> <span class="s">'blocks.2.convs.0.0'</span><span class="p">,</span> <span class="s">'blocks.2.convs.0.1'</span><span class="p">,</span> <span class="s">'blocks.2.convs.1.0'</span><span class="p">,</span> <span class="s">'blocks.2.convs.1.1'</span><span class="p">,</span> <span class="s">'blocks.2.convs.2.0'</span><span class="p">,</span> <span class="s">'blocks.2.convs.2.1'</span><span class="p">,</span> <span class="s">'blocks.2.downsample'</span><span class="p">,</span> <span class="s">'blocks.3.convs.0.0'</span><span class="p">,</span> <span class="s">'blocks.3.convs.0.1'</span><span class="p">,</span> <span class="s">'blocks.3.convs.1.0'</span><span class="p">,</span> <span class="s">'blocks.3.convs.1.1'</span><span class="p">,</span> <span class="s">'blocks.3.convs.2.0'</span><span class="p">,</span> <span class="s">'blocks.3.convs.2.1'</span><span class="p">,</span> <span class="s">'blocks.3.downsample'</span><span class="p">,</span> <span class="s">'global_pool'</span><span class="p">,</span> <span class="s">'flatten'</span><span class="p">,</span> <span class="s">'cls'</span><span class="p">]</span>
+</code></pre></div></div>
+
+<p>我们可以将这些节点名称视为对感兴趣操作的分层组织“地址”。例如，'blocks.1.downsample'指的是第二个 <code class="language-plaintext highlighter-rouge">ConvBlock</code> 中的 MaxPool2d 层。</p>
+
+<p><a href="https://pytorch.org/vision/stable/feature_extraction.html#torchvision.models.feature_extraction.create_feature_extractor"><code class="language-plaintext highlighter-rouge">create_feature_extractor</code></a>，这是所有魔法发生的地方，比 <a href="https://pytorch.org/vision/stable/feature_extraction.html#torchvision.models.feature_extraction.create_feature_extractor"><strong><code class="language-plaintext highlighter-rouge">get_graph_node_names</code></strong> 多走几步。它将所需的节点名称作为输入参数之一，然后使用更多的 FX 核心功能：</a></p>
+
+<ol>
+  <li>将所需的节点分配为输出。</li>
+  <li>删除不必要的下游节点及其相关参数。</li>
+  <li>将生成的图翻译回 Python 代码。</li>
+  <li>将另一个 PyTorch 模块返回给用户。该模块的 forward 方法包含步骤 3 中的 Python 代码。</li>
+</ol>
+
+<p>作为演示，以下是我们将如何应用 <code class="language-plaintext highlighter-rouge">create_feature_extractor</code> 来从我们的玩具 CNN 模型中获取 4 个特征图</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchvision.models.feature_extraction</span> <span class="kn">import</span> <span class="n">create_feature_extractor</span>
+<span class="c1"># Confused about the node specification here?
+# We are allowed to provide truncated node names, and `create_feature_extractor`
+# will choose the last node with that prefix.
+</span><span class="n">feature_extractor</span> <span class="o">=</span> <span class="n">create_feature_extractor</span><span class="p">(</span>
+	<span class="n">model</span><span class="p">,</span> <span class="n">return_nodes</span><span class="o">=</span><span class="p">[</span><span class="s">'blocks.0'</span><span class="p">,</span> <span class="s">'blocks.1'</span><span class="p">,</span> <span class="s">'blocks.2'</span><span class="p">,</span> <span class="s">'blocks.3'</span><span class="p">])</span>
+<span class="c1"># `out` will be a dict of Tensors, each representing a feature map
+</span><span class="n">out</span> <span class="o">=</span> <span class="n">feature_extractor</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+</code></pre></div></div>
+
+<p>简单来说，FX 特征提取只是让我们能够实现一些人在刚开始编程时可能天真地希望的功能：<em>“给我这段代码的输出结果（指向屏幕）”*。</em></p>
+
+<ul class="task-list">
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled">… 不需要我们修改源代码。</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled">… 在访问任何中间转换方面提供了完全的灵活性，无论是模块的结果还是函数操作的结果</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled">...在提取特征后，会删除不必要的计算步骤</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled">...而且之前没提过，它还兼容 TorchScript！</li>
+</ul>
+
+<p>这里再次展示那张表，为 FX 特征提取添加了一行</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>&nbsp;</th>
+      <th style="text-align: center">可以直接使用源代码，无需任何修改或重写</th>
+      <th style="text-align: center">全面的功能访问灵活性</th>
+      <th style="text-align: center">减少不必要的计算步骤</th>
+      <th style="text-align: center">支持 TorchScript</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>修改前向方法</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">技术上是的。取决于你愿意写多少代码。所以实际上，不是。</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>新模块，重用原始模块的子模块/参数</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">技术上是的。取决于你愿意写多少代码。所以实际上，不是。</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>钩子</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">主要为 YES。仅输出子模块的结果</td>
+      <td style="text-align: center">NO</td>
+      <td style="text-align: center">NO</td>
+    </tr>
+  </tbody>
+  <tbody>
+    <tr>
+      <td>FX</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+      <td style="text-align: center">YES</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>表 2：表 1 的副本，增加了一行用于 FX 特征提取。FX 特征提取全面得到 YES！</p>
+
+<h2 id="current-fx-limitations">当前 FX 的限制</h2>
+
+<p>虽然我很乐意在那里结束这篇文章，但 FX 确实有一些自己的限制，归结为：</p>
+
+<ol>
+  <li>在 FX 处理解释和翻译为图的过程中，可能存在一些尚未处理的 Python 代码。</li>
+  <li>动态控制流无法用静态图来表示。</li>
+</ol>
+
+<p>当这些问题出现时，最简单的方法是将底层代码打包成一个“叶子节点”。回想一下图 3 中的示例图？从概念上讲，我们可能同意将<code class="language-plaintext highlighter-rouge">子模块</code>视为一个节点，而不是一组表示底层操作的节点。如果我们这样做，我们可以重新绘制这个图：</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/fx-image6.png" alt="The individual operations within `submodule` may (left - within red box), may be consolidated into one node (right - node #2) if we consider the `submodule` as a 'leaf' node." width="100%">
+	<br>图5：在`子模块`内部的各个操作（左 - 红色方框内），如果我们将`子模块`视为“叶子”节点，则可能（右 - 节点#2）合并成一个节点。</p>
+
+<p>如果子模块中存在一些问题代码，我们可能想要这样做，但我们没有从其中提取任何中间转换的需求。实际上，通过为 create_feature_extractor 或 get_graph_node_names 提供关键字参数就可以轻松实现这一点。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">CNN</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+<span class="n">nodes</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">get_graph_node_names</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">tracer_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s">'leaf_modules'</span><span class="p">:</span> <span class="p">[</span><span class="n">ConvBlock</span><span class="p">]})</span>
+<span class="k">print</span><span class="p">(</span><span class="n">nodes</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>输出将是：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">[</span><span class="s">'x'</span><span class="p">,</span> <span class="s">'blocks.0'</span><span class="p">,</span> <span class="s">'blocks.1'</span><span class="p">,</span> <span class="s">'blocks.2'</span><span class="p">,</span> <span class="s">'blocks.3'</span><span class="p">,</span> <span class="s">'global_pool'</span><span class="p">,</span> <span class="s">'flatten'</span><span class="p">,</span> <span class="s">'cls'</span><span class="p">]</span>
+</code></pre></div></div>
+
+<p>注意，与之前相比，任何给定 <code class="language-plaintext highlighter-rouge">ConvBlock</code> 的所有节点都合并成了一个节点。</p>
+
+<p>我们可以对函数做类似的事情。例如，Python 内置的 <code class="language-plaintext highlighter-rouge">len</code> 需要被包装，并且结果应该被当作一个叶节点处理。以下是使用核心 FX 功能实现这一点的示例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">torch</span><span class="p">.</span><span class="n">fx</span><span class="p">.</span><span class="n">wrap</span><span class="p">(</span><span class="s">'len'</span><span class="p">)</span>
+
+<span class="k">class</span> <span class="nc">MyModule</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+   <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+       <span class="n">x</span> <span class="o">+=</span> <span class="mi">1</span>
+       <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">MyModule</span><span class="p">()</span>
+<span class="n">feature_extractor</span> <span class="o">=</span> <span class="n">create_feature_extractor</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">return_nodes</span><span class="o">=</span><span class="p">[</span><span class="s">'add'</span><span class="p">])</span>
+</code></pre></div></div>
+
+<p>对于您定义的函数，您可以使用另一个关键字参数来 <code class="language-plaintext highlighter-rouge"> 创建特征提取器 </code>（细节：这里<a href="https://github.com/pytorch/pytorch/issues/62021#issue-950458396">是您可能想这样做的原因 </a>）：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">myfunc</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+   <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="k">class</span> <span class="nc">MyModule</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+   <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+       <span class="n">x</span> <span class="o">+=</span> <span class="mi">1</span>
+       <span class="n">myfunc</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">MyModule</span><span class="p">()</span>
+<span class="n">feature_extractor</span> <span class="o">=</span> <span class="n">create_feature_extractor</span><span class="p">(</span>
+   <span class="n">model</span><span class="p">,</span> <span class="n">return_nodes</span><span class="o">=</span><span class="p">[</span><span class="s">'add'</span><span class="p">],</span> <span class="n">tracer_kwargs</span><span class="o">=</span><span class="p">{</span><span class="s">'autowrap_functions'</span><span class="p">:</span> <span class="p">[</span><span class="n">myfunc</span><span class="p">]})</span>
+</code></pre></div></div>
+
+<p>注意，上述所有修复都没有涉及修改源代码。</p>
+
+<p>当然，有时您试图获取的中间转换可能就在导致问题的同一个前向方法或函数中。在这种情况下，我们不能简单地将该模块或函数视为叶子节点，因为那样我们就无法访问其中的中间转换。在这些情况下，可能需要对源代码进行一些重写。以下是一些示例（不全面）</p>
+
+<ul>
+  <li>当尝试通过带有 <code class="language-plaintext highlighter-rouge">assert</code> 语句的代码进行跟踪时，FX 将引发错误。在这种情况下，您可能需要删除该断言或将其替换为 <a href="https://pytorch.org/docs/stable/generated/torch._assert.html"><code class="language-plaintext highlighter-rouge">torch._assert</code></a>（这不是一个公开函数 - 因此请将其视为临时解决方案并谨慎使用）。</li>
+  <li>符号化追踪张量切片的内部更改是不支持的。您需要为切片创建一个新的变量，然后应用操作，最后使用连接或堆叠重建原始张量。</li>
+  <li>在静态图中表示动态控制流在逻辑上是不可能的。看看您是否可以将编码逻辑简化为非动态的内容——请参阅 FX 文档获取提示。</li>
+</ul>
+
+<p>通常，您可以查阅 FX 文档以获取有关符号追踪的<a href="https://pytorch.org/docs/stable/fx.html#limitations-of-symbolic-tracing">限制</a>和可能的解决方案的更多详细信息。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>我们快速回顾了特征提取及其原因。尽管 PyTorch 中存在进行特征提取的方法，但它们都存在相当显著的不足。我们学习了 TorchVision 的 FX 特征提取工具的工作原理以及它相较于现有方法的灵活性。虽然对于后者还有一些小问题需要解决，但我们理解了其局限性，可以根据我们的用例与其他方法的局限性进行权衡。希望将这个新工具添加到您的 PyTorch 工具箱中后，您现在可以处理大多数可能遇到的特征提取需求。</p>
+
+<p>开心编码！</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

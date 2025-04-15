@@ -1,0 +1,2162 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Efficient Large-Scale Training with Pytorch FSDP and AWS | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Cutting-edge AI models are becoming extremely large. The cost and overhead of training these models is increasing rapidly, and involves large amounts of engineering and guesswork to find the right training regime. FSDP reduces these costs significantly by enabling you to train much larger models with the same amount of resources. FSDP lowers the memory footprint on your GPUs, and is usable via a lightweight configuration that requires substantially less effort, typically with just a few lines of code.
+
+The main performance gains in FSDP come from maximizing the overlap between network communication and model computation, and eliminating the memory redundancy inherent in traditional data parallel training (DDP).  PyTorch FSDP can train models approximately 4x larger on the same server resources as DDP and 20x larger if we combine activation checkpointing and activation offloading.
+
+Since PyTorch 1.12, FSDP is now in beta status, and has added a number of new features that can be tuned to further accelerate your model training.
+
+In this series of blog posts, we will explain multiple performance optimizations you can run with FSDP to boost your distributed training speed and model sizes within the context of your available server resources.  We use the HuggingFace T5 3B, 11B and DeepVit, in fine-tuning mode, as the running examples throughout the series.
+
+As a preview of some of the optimizations discussed in this series, we show the before and after performance scaled in Flops below (Note that these results can vary based on your server resources and model architecture).
+
+
+
+
+
+ *T5 3B Performance measured on AWS A100 and A10 servers. Original with no optimizations and Tuned with the applied optimization 
+
+
+
+
+
+ *T5 11B Performance measured on A100 servers. Original with no optimizations and Tuned with the applied optimization 
+
+In this first post, we will provide a quick overview of FSDP and how it can make training large- scale AI models more efficient.  We will highlight briefly the multiple performance options available, and dive deeper into the details on these in upcoming posts.  We will then conclude with an overview on how to leverage AWS parallel cluster for large- scale training with FSDP.
+
+
+  
+   Optimization 
+   
+   T5 Model 
+   
+   Throughput Improvement 
+   
+  
+  
+   Mixed Precision
+   
+   3 B
+   
+   5x
+   
+  
+  
+   11 B
+   
+   10x
+   
+  
+  
+   Activation Checkpointing (AC)
+   
+   3 B
+   
+   10x
+   
+  
+  
+   11 B
+   
+   100x
+   
+  
+  
+   Transformer Wrapping Policy
+   
+   3 B
+   
+   2x
+   
+  
+  
+   11 B
+   
+   Unable to run the experiment without the Transformer wrapping policy.
+   
+  
+  
+   Full Shard Strategy
+   
+   3 B
+   
+   1.5x
+   
+  
+  
+   11 B
+   
+   Not able to run with Zero2
+   
+  
+
+
+Performance optimization gains on T5 models over non-optimized.
+
+In our experiments with the T5 3B model, using the  transformer wrapping policy resulted in >2x higher throughput measured in TFLOPS versus the default wrapping policy. Activation checkpointing resulted in 10x improvement by reinvesting the freed memory from the checkpoints into larger batch size. Mixed precision with BFloat16 resulted in ~5x improvement versus FP32 and finally the full sharding strategy versus zero2 (DDP)  resulted in 1.5x improvement.
+
+We ran similar experiments for a larger model, T5 11B, but the larger model size resulted in some changes to the experiment space.  Specifically, we found that two optimizations,  transformer wrapping policy and activation checkpointing, were needed to enable us to run these experiments on 3 nodes (each node had 8 A100 gpus with 80 GB of memory). With these optimizations, we could fit a batch size of 50 and get higher throughput compared to removing each one of them. Thus rather than running on/off solely for a single optimization test as with the 3B model, the larger model experiments were done with 1 of 3 optimizations turned on/off while always running the other two in order to allow a usable batch size for both test states for each item.
+
+Based on TFLOP comparisons, with the 11B model, we saw even more payoff from the optimizations.  Mixed precision(~10x improvement) and activation checkpointing (~100x improvement) had a much larger impact with the 11B model compared to the 3B parameter model. With mixed precision we could fit ~2x larger batch sizes and with activation checkpointing >15x batch sizes (from 3 with no activation checkpointing to 50 with activation checkpointing) which translated into large throughput improvements.
+
+We also have observed that for these larger models > 3B, using Zero2 sharding strategy would result in minimal room left in memory for the batch data, and had to go with very small batch sizes (e.g 1-2) that essentially makes full sharding strategy a necessity to enable fitting larger batches sizes.
+
+Note - this tutorial assumes a basic understanding of FSDP. To learn more about basics of FSDP please refer to the getting started and advanced FSDP tutorials.
+
+What is FSDP? How does it make Large-Scale Training More Efficient
+
+FSDP expands upon distributed data parallel, by parallelizing not just data, but the model parameters, the optimizer states and gradients associated with the model. Specifically - each GPU only stores a subset of the entire model and the associated subset of optimizer states and gradients.
+
+To show the evolution of distributed training, we can start from the beginning, where AI models were simply trained on a single GPU.
+
+DDP (Distributed Data Parallel) was the initial step up from training with only a single GPU, and was an effort to address the data and model size growth, where multiple GPUs each housed their own copy of the same model. The gain here is that the data for each batch could be split and processed independently on each GPU, all at the same time,thus parallelizing the processing of the data set and increasing training speed by the increasing number of GPUs. The tradeoff is the need to communicate the gradients between each GPU to synchronize the models after the backward pass.
+
+FSDP expands on scaling models by removing the redundancy of optimizer calculations and state storage, as well as gradient and memory storage of model parameters that are present in DDP (DDP = Distributed Data Parallel). This redundancy reduction, along with increased communication overlap where model parameter communication takes place at the same time as model computation, is what allows FSDP to train much larger models with the same resources as DDP.
+
+A key point is that this efficiency also allows for AI models that are larger than a single GPU to be trained. The model size available for training is now increased to the aggregate memory of all GPUs, rather than the size of a single GPU. (And as a point of note, FSDP can go beyond aggregated GPU memory by leveraging CPU memory as well, though we will not directly cover this aspect here).
+
+As discussed in a previous blog post, with DDP the largest model that we could train on 32, A100 gpus with 40 GB memory (4 nodes) was up to 3B parameters, and batch size of 128, with the help of activation checkpointing. By contrast, using FSDP we were able to train up to 81B model size, combining activation checkpointing, along with activation and parameter offloading. In another experiment, we benchmarked a 1T parameter model with FSDP using 512 gpus.
+
+
+
+
+
+For intuition on the parameter level workings of FSDP, below we show an animation detailing how the model parameters are sharded and communicated assuming a two GPU scenario and a simple 8 parameter model:
+
+
+
+
+
+Above - the animations walk through the steps involved with the initial sharding of the model amongst ranks, and we start the all_gathers and forward pass
+
+
+
+
+
+We continue through the model with the forward pass. After each FSDP unit completes, non-locally owned params are dropped to free memory, and optionally activations can be checkpointed. This continues until we finish the forward pass and compute the loss.
+
+
+
+
+
+During the backward pass, another all_gather is used to load the parameters and the gradients are computed. These gradients are then reduce_scattered so that the local owners of each param can aggregate and prepare to update the weights.
+
+
+
+
+
+Finally, each rank passes the summed gradients through the optimizer states and updates the weights to complete the mini-batch.
+
+With the model now distributed across the entire set of available GPUs, the logical question is how data moves through the model given this sharding of model parameters.
+
+This is accomplished by FSDP coordinating with all GPUs to effectively share (communicate) the respective parts of the model.  The model is decomposed into FSDP units and parameters within each unit are flattened and then sharded across all GPUs.  Within each FSDP unit, GPU’s are assigned interleaving ownership of individual model parameters.
+
+By interleaving, we mean the following - assuming 2 gpus with an id of 1 and 2, the FSDP unit ownership pattern would be [12121212],  rather than a contiguous chunk of [111222].
+
+During training, an all_gather is initiated and the locally owned model parameters within a FSDP unit are shared by the owner GPU with the other non-owners, when they need it, on a ‘just in time’ type basis. FSDP prefetches parameters to overlap all_gather communication with computation.
+
+When those requested parameters arrive, the GPU uses the delivered parameters, in combination with the parameters it already owns, to create a fully populated FSDP unit. Thus there is a moment where each GPU hits peak memory usage while holding a fully populated FSDP unit.
+
+It then processes the data through the FSDP unit, and drops the parameters it received from other GPU’s to free up memory for the next unit…the process continues over and over proceeding through the entire model to complete the forward pass.The process is then repeated (in general) for the backward pass.(note - this is a simplified version for understanding..there is additional complexity but this should help construct a basic mental model of the FSDP process).
+
+This eliminates much of the memory redundancy present in DDP, but imposes the cost of higher amounts of network communication to shuttle these requested parameters back and forth amongst all the GPUs.Overlapping the communication timing with the computation taking place is the basis of many of the performance improvements we’ll discuss in this series. The key gains are frequently based on the fact that communication can often take place at the same time as computation.As you can surmise, having high communication speed is vital for FSDP performance.
+
+How do I optimize my training with FSDP?
+
+There are four main performance improvements we will cover - the transformer wrapper, activation checkpointing, mixed precision, and selecting the proper sharding strategy. The flowchart below will help as a checklist for tuning options that we will discuss in this post.
+
+
+
+
+
+Wrapping policy - for transformers, use Transformer wrapping policy
+
+The first performance optimization is leveraging the FSDP transformer wrapper for transformer models.
+
+One of the pre-defined wrapping policy is size_based_autowrap_policy. With size_based_autowrap_policy, FSDP will traverse the module structure from bottom to top, a new FSDP unit will be created once the current unit has at least the min_num_params specified within the size policy (this defaults to 1e8, or 100M). If the module can not be created as an FSDP unit, FSDP will continue to check its parent module. This size based wrapping policy may not be ideal for some model structures, PyTorch distributed team is actively working on a new default wrapping policy in the next release which is based on size and also module execution order, users can simply tune the size and achieve the optimized performance.
+
+In the current release, you can greatly improve your performance when running Transformer models by using the ‘transformer wrapper’. You will need to provide the appropriate layer class for your model. Here, layer class is the class that houses the Multi-Head Attention and Feed Forward Network.
+
+FSDP will then form the FSDP units around the layer class rather than arbitrary breaks based on parameter size. By sharding the model around layer classes that are uniformly repeated within the transformer, FSDP can create uniform FSDP units that better balance the overlap of computation and communication. By contrast, size based wrapping can produce very uneven or skewed shards for models, which then have uneven matching of compute vs communication overlap. As discussed earlier, the main driver of FSDP high performance is the overlap of communication and computation, and hence why the Transformer wrapper provides improved performance. Note that the Transformer wrapper can also be used for non-transformer models if these models have a list of uniform layers.
+
+Let’s compare the performance difference on a T5, 3B parameter model when running under the default wrapper and the transformer wrapper.
+
+For default wrapping, we don’t need to take any action - we simply pass the model to FSDP as shown:
+
+model = FSDP(
+      model,
+      device_id=torch.cuda.current_device(),
+  )
+
+
+In this case FSDP will simply wrap the whole model in a single FSDP unit.
+
+Running on an NVIDIA A100-SXM4–40GB with 8 GPUs, we are able to reach 2.3 TFlops and 95% GPU memory utilization with a batch size of 14.
+
+However, since T5 is a transformer model, we are better served to leverage the transformer wrapper for this model.
+
+To use that, we need to isolate the layer class for the transformer, and then pass it in to create our transformer wrapper.
+
+from transformers.models.t5.modeling_t5 import T5Block
+
+
+And now we can create our Transformer wrapper:
+
+transformer_auto_wrapper_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={
+            T5Block,  # < ---- Your Transformer layer class
+        },
+    )
+
+
+With our model aware wrapper ready, we can initialize FSDP:
+
+# invoke FSDP with your transformer wrapper policy:
+model = FSDP(
+        model,
+        auto_wrap_policy=transformer_auto_wrapper_policy,
+        device_id=torch.cuda.current_device(),  # streaming init
+    )
+
+
+Running this wrapped model, we can see some substantial performance gains.We can fit nearly double the batch size, going to 28, and with better memory and communication efficiency, we see a TFlops increase to 5.07 from 2.3.
+
+Thus, we’ve increased our training throughput by over 200% (2.19x) due to providing greater model info to FSDP! The transformer wrapping policy results in more fine-grained and balanced FSDP units each holding a layer class, which leads to a more effective communication-computation overlap.
+
+
+
+
+
+Above: Graphical comparison of TFlops based on wrapper type
+
+If you are training a Transformer model, it pays to configure your training with FSDP using the transformer wrapper. For more information on how to isolate your layer class, please see our in depth video on Transformer wrapping here, where we walk through a number of transformers showing where the layer class can be found.
+
+Mixed precision - use BF16 if you have an Ampere architecture GPU
+
+FSDP supports a flexible mixed precision policy that gives you granular control over parameters, gradients and buffer data types. This lets you easily leverage BFloat16 or FP16 to increase your training speed by up to 70%.
+
+*Note that BFloat 16 is only available on Ampere type GPUs. On AWS this is available with p4dn and g5 instances.
+
+By way of comparison, we can show a 77% speed improvement when comparing fully tuned BFloat16 vs FP32 on an 8B DeepVit model.
+
+
+
+
+
+We have obtained even greater acceleration using BFloat16 in fine-tuning a 3B HuggingFace T5 model as shown in the figures below. We observed that because of the lower precision the validation loss of BFloat16 is slightly behind in the first few epochs, but it is able to catch up and results in the same final accuracy as FP32.
+
+
+
+
+
+To use mixed precision, we create a policy with our desired data types, and pass it in during the FSDP initialization.
+
+To create our policy, we need to import the MixedPrecision class, and then define our custom policy using our customized class:
+
+from torch.distributed.fsdp import MixedPrecision
+bfSixteen = MixedPrecision(
+   param_dtype=torch.bfloat16,
+   # Gradient communication precision.
+   reduce_dtype=torch.bfloat16,
+   # Buffer precision.
+   buffer_dtype=torch.bfloat16,
+)
+model = FSDP(
+       model,
+       auto_wrap_policy=transformer_auto_wrapper_policy,
+       mixed_precision=bfloatPolicy)
+
+
+You can mix and match the precision for parameters, gradients and buffers as you prefer:
+
+comboPolicy = MixedPrecision(
+        # Param precision
+        param_dtype=torch.bfloat16,
+        # Gradient communication precision.
+        reduce_dtype=torch.float32,
+        # Buffer precision.
+        buffer_dtype=torch.float32,
+    )
+
+
+For training with FP16, you will need to also use the ShardedGradScaler, which we will cover in subsequent posts. For BFloat16, it is a drop-in replacement.
+
+AnyPrecision Optimizer - going beyond mixed precision with full BF16 training
+
+Mixed precision training, both in FSDP and elsewhere, maintains the working weights in the reduced datatype (BF16 or FP16) while keeping the master weights in full FP32. The reason for the master weights in FP32 is that running in pure BF16 will result in ‘weight stagnation’, where very small weight updates are lost due to the lower precision, and the accuracy flatlines over time while FP32 weights can continue to improve from these small updates.
+
+In order to resolve this dilemma, we can use the new AnyPrecision optimizer available in TorchDistX (Torch Distributed Experimental) that allows you to successfully train and keep the master weights in pure BF16 instead of FP32. In addition, unlike the typical storage of optimizer states in FP32, AnyPrecision is able to maintain states in pure BF16 as well.
+
+AnyPrecision enables pure BF16 training by maintaining an extra buffer that tracks the precision lost during the weight updates and re-applies that during the next update…effectively resolving the weight stagnation issue without requiring FP32.
+
+As a comparison of the throughput gains available with pure BF16 training using AnyPrecision, we ran experiments using FSDP with the T5 11B model with regular FP32 training, Mixed Precision training with BF16, and pure BF16 training using the AnyPrecision optimizer on 3 nodes with A100 gpus as mentioned previously.
+
+
+
+
+
+As shown above, training with AnyPrecision and pure BF16 resulted in 2x the throughput vs Mixed Precision, and over 20x improvement vs FP32.
+
+The potential tradeoff is the impact on final accuracy - in the cases we tested, the accuracy was equal or better than FP32 due to a regularization effect from the slightly reduced precision, but your results may vary.
+
+AnyPrecision optimizer is available for you to test with here, and is a drop in replacement for AdamW optimizer.
+
+Activation checkpointing - increasing throughput by trading compute for memory
+
+
+
+
+
+FSDP supports activation checkpointing once the model has been sharded, and makes it easy to implement. The graph above shows ~4x throughput improvement using activation checkpointing.
+
+Activation checkpointing is where the intermediate activations are freed during the forward pass, and a checkpoint is left as a placeholder. This generally increases available GPU memory by over 30%.
+
+The tradeoff is that during the backward pass, these previously removed intermediate activations must be re-calculated again using information in the checkpoint (duplicate compute), but by leveraging the increased GPU memory, one can increase the batch size such that the net throughput can increase substantially.
+
+# verify we have FSDP activation support ready by importing:
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+   checkpoint_wrapper,
+   CheckpointImpl,
+   apply_activation_checkpointing_wrapper,
+)
+
+
+The steps required to implement activation checkpointing is to first import the FSDP checkpointing functions. We need declare our checkpointer wrapper type which is non-reentrant and create a check function to identify which layer to wrap as follows
+
+non_reentrant_wrapper = partial(
+    checkpoint_wrapper,
+    offload_to_cpu=False,
+    checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+)
+check_fn = lambda submodule: isinstance(submodule, T5Block)
+
+
+apply_activation_checkpointing_wrapper(
+       model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn
+   )
+
+
+Important note - this must be run after the model has been initialized with FSDP.
+
+However, hopefully you’ve seen how some initial tuning with FSDP options can have a large impact on your training performance.
+
+With that, we turn our attention from how to scale within FSDP, to how to scale your server hardware for FSDP using AWS.
+
+Large Scale Training with FSDP on AWS - For multi-node prioritize high speed network
+
+AWS provides several services that can be used to run distributed training with FSDP: Amazon EC2 Accelerated Computing instances, AWS ParallelCluster, and Amazon Sagemaker.
+
+In this series of blog posts, we used Amazon EC2 p4d instances in a single-instance multi-GPU configuration and in a multi-instance configuration using AWS ParallelCluster and SageMaker in order to run our training jobs.
+
+Here, we’ll focus specifically on AWS parallel cluster and provide an overview of how to utilize it for training purposes.
+
+AWS ParallelCluster Setup
+
+AWS ParallelCluster is an open source, cluster management tool that makes it easy for you to deploy and manage High Performance Computing (HPC) clusters on AWS.  AWS ParallelCluster uses yaml configuration files to provision all the necessary resources. It also supports multiple instance types, job submission queues, shared file systems like Amazon EFS (NFS) or Amazon FSx for Lustre, and job schedulers like AWS Batch and Slurm.
+
+
+
+
+
+Workflow on Clusters
+
+The high level idea is to have a cluster that has a head node which controls the compute nodes. The actual training job runs on the compute nodes. Overall steps to run a training job on a cluster are as follows:
+
+
+  Set up an AWS ParallelCuster (we discuss below)
+  Connect to the head node, and import the training code/ setup the environment.
+  Pull the data and place it in a shared folder that compute nodes can access (FSx Lustre drive).
+  Run the training job using a job scheduler (in this case Slurm).
+
+
+Setup AWS ParallelCuster
+
+To setup AWS ParallelCluster,
+
+
+  
+    Deploy a network stack. This step is optional since you could use your account default VPC and let AWS ParallelCluster create your subnets and security groups. However, we prefer to compartmentalize our desired network infrastructure and do this deployment via a CloudFormation stack.
+
+    Since we deploy a public and a private subnet, we want to create them into an Availability Zone that contains our target instances, in this case p4d. We consult their availability in the region we use (us-east-1) through the following AWS CLI command:
+
+    aws ec2 describe-instance-type-offerings --location-type availability-zone \ --filters Name=instance-type,Values=p4d.24xlarge --region us-east-1 --output table
+
+    We see three availability zones containing p4d instances, we pick one of them (us-east-1c, yours may be different) when deploying our network stack. This can be done with the AWS Console or the AWS CLI. In our case we use the latter as follows
+
+    aws cloudformation create-stack --stack-name VPC-Large-Scale --capabilities CAPABILITY_IAM --template-body file://VPC-Large-Scale.yaml --parameters ParameterKey=SubnetsAZ,ParameterValue=us-east-1c
+
+    CloudFormation will deploy our new VPC, subnets, security groups and endpoints on our behalf. Once done, you can retrieve the IDs of the public and private subnets by querying the stack outputs and the values PublicSubnet and PrivateSubnet.
+
+    For example, using the AWS CLI for the private subnet:
+
+    aws cloudformation describe-stacks --stack-name VPC-Large-Scale --query " stacks[0].outputs[?outputkey="='PrivateSubnet'].OutputValue&quot;" --output="" text="" create="" parallelcluster,="" the="" cluster="" configuration="" file="" specifies="" resources="" for="" our="" cluster.="" these="" include="" instance="" type="" head="" node,="" compute="" nodes,="" access="" to="" s3="" buckets,="" shared="" storage="" where="" data="" will="" be="" located.="" we="" use="" amazon="" fsx="" lustre="" that="" offers="" a="" fully="" managed="" service="" with="" lustre.="" here="" is="" an="" example="" of="" file.="" can="" aws="" parallelcluster="" cli="" please="" note="" private="" and="" public="" subnet="" ids="" need="" replaced="" by="" ones="" you="" retrieved="" earlier.="" able="" control="" using="" start,="" stop,="" pause,="" etc.="" pcluster="" create-cluster="" --cluster-name="" my-hpc-cluster="" --cluster-configuration="" cluster.yaml="" ssh="" node="" -="" once="" ready,="" connect="" protocol,="" pull="" training="" code="" place="" in="" specified="" -i="" your-key_pair="" launch="" job="" now="" have="" code,="" slurm="" training.="" script="" torchrun.="" more="" details="" on="" how="" set="" up="" out="" scope="" this="" post,="" however="" separate="" post="" it.="" what’s="" next?="" provided="" high="" level="" overview="" fsdp="" it="" efficiently="" scales="" distributed="" ai="" flowchart="" included="" help="" provide="" checklist="" review="" tuning="" options="" discussed="" such="" as="" transformer="" wrapper="" activation="" checkpointing.="" next="" posts,="" continue="" t5="" model="" go="" deeper="" into="" each="" topics="" above,="" specifically="" sharding="" strategy="" other="" optimizations="" insight="" details.="" now,="" good="" reference="" video="" tutorial="" here:="" if="" questions="" or="" find="" issue,="" authors="" less,="" hamid="" geeta="" open="" issue="" pytorch="" github.="" special="" thanks="" to:="" team,="" shen="" li,="" rohan="" varma,="" yanli="" zhao,="" andrew="" gu,="" anjali="" sridhar,="" ana="" simoes,="" pierre-yves="" aquilanti,="" sundar="" ranganathan,="" broader="" team="" supporting="" us="" providing="" infrastructure="" technical="" support="" running="" large="" scale="" experiments.="" resources:="" series="" getting="" started="" advanced="" api="" documentation="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/largeblog_index_1.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/largeblog_index_1.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Efficient Large-Scale Training with Pytorch FSDP and AWS">
+<meta property="og:description" content="Cutting-edge AI models are becoming extremely large. The cost and overhead of training these models is increasing rapidly, and involves large amounts of engineering and guesswork to find the right training regime. FSDP reduces these costs significantly by enabling you to train much larger models with the same amount of resources. FSDP lowers the memory footprint on your GPUs, and is usable via a lightweight configuration that requires substantially less effort, typically with just a few lines of code.
+
+The main performance gains in FSDP come from maximizing the overlap between network communication and model computation, and eliminating the memory redundancy inherent in traditional data parallel training (DDP).  PyTorch FSDP can train models approximately 4x larger on the same server resources as DDP and 20x larger if we combine activation checkpointing and activation offloading.
+
+Since PyTorch 1.12, FSDP is now in beta status, and has added a number of new features that can be tuned to further accelerate your model training.
+
+In this series of blog posts, we will explain multiple performance optimizations you can run with FSDP to boost your distributed training speed and model sizes within the context of your available server resources.  We use the HuggingFace T5 3B, 11B and DeepVit, in fine-tuning mode, as the running examples throughout the series.
+
+As a preview of some of the optimizations discussed in this series, we show the before and after performance scaled in Flops below (Note that these results can vary based on your server resources and model architecture).
+
+
+
+
+
+ *T5 3B Performance measured on AWS A100 and A10 servers. Original with no optimizations and Tuned with the applied optimization 
+
+
+
+
+
+ *T5 11B Performance measured on A100 servers. Original with no optimizations and Tuned with the applied optimization 
+
+In this first post, we will provide a quick overview of FSDP and how it can make training large- scale AI models more efficient.  We will highlight briefly the multiple performance options available, and dive deeper into the details on these in upcoming posts.  We will then conclude with an overview on how to leverage AWS parallel cluster for large- scale training with FSDP.
+
+
+  
+   Optimization 
+   
+   T5 Model 
+   
+   Throughput Improvement 
+   
+  
+  
+   Mixed Precision
+   
+   3 B
+   
+   5x
+   
+  
+  
+   11 B
+   
+   10x
+   
+  
+  
+   Activation Checkpointing (AC)
+   
+   3 B
+   
+   10x
+   
+  
+  
+   11 B
+   
+   100x
+   
+  
+  
+   Transformer Wrapping Policy
+   
+   3 B
+   
+   2x
+   
+  
+  
+   11 B
+   
+   Unable to run the experiment without the Transformer wrapping policy.
+   
+  
+  
+   Full Shard Strategy
+   
+   3 B
+   
+   1.5x
+   
+  
+  
+   11 B
+   
+   Not able to run with Zero2
+   
+  
+
+
+Performance optimization gains on T5 models over non-optimized.
+
+In our experiments with the T5 3B model, using the  transformer wrapping policy resulted in >2x higher throughput measured in TFLOPS versus the default wrapping policy. Activation checkpointing resulted in 10x improvement by reinvesting the freed memory from the checkpoints into larger batch size. Mixed precision with BFloat16 resulted in ~5x improvement versus FP32 and finally the full sharding strategy versus zero2 (DDP)  resulted in 1.5x improvement.
+
+We ran similar experiments for a larger model, T5 11B, but the larger model size resulted in some changes to the experiment space.  Specifically, we found that two optimizations,  transformer wrapping policy and activation checkpointing, were needed to enable us to run these experiments on 3 nodes (each node had 8 A100 gpus with 80 GB of memory). With these optimizations, we could fit a batch size of 50 and get higher throughput compared to removing each one of them. Thus rather than running on/off solely for a single optimization test as with the 3B model, the larger model experiments were done with 1 of 3 optimizations turned on/off while always running the other two in order to allow a usable batch size for both test states for each item.
+
+Based on TFLOP comparisons, with the 11B model, we saw even more payoff from the optimizations.  Mixed precision(~10x improvement) and activation checkpointing (~100x improvement) had a much larger impact with the 11B model compared to the 3B parameter model. With mixed precision we could fit ~2x larger batch sizes and with activation checkpointing >15x batch sizes (from 3 with no activation checkpointing to 50 with activation checkpointing) which translated into large throughput improvements.
+
+We also have observed that for these larger models > 3B, using Zero2 sharding strategy would result in minimal room left in memory for the batch data, and had to go with very small batch sizes (e.g 1-2) that essentially makes full sharding strategy a necessity to enable fitting larger batches sizes.
+
+Note - this tutorial assumes a basic understanding of FSDP. To learn more about basics of FSDP please refer to the getting started and advanced FSDP tutorials.
+
+What is FSDP? How does it make Large-Scale Training More Efficient
+
+FSDP expands upon distributed data parallel, by parallelizing not just data, but the model parameters, the optimizer states and gradients associated with the model. Specifically - each GPU only stores a subset of the entire model and the associated subset of optimizer states and gradients.
+
+To show the evolution of distributed training, we can start from the beginning, where AI models were simply trained on a single GPU.
+
+DDP (Distributed Data Parallel) was the initial step up from training with only a single GPU, and was an effort to address the data and model size growth, where multiple GPUs each housed their own copy of the same model. The gain here is that the data for each batch could be split and processed independently on each GPU, all at the same time,thus parallelizing the processing of the data set and increasing training speed by the increasing number of GPUs. The tradeoff is the need to communicate the gradients between each GPU to synchronize the models after the backward pass.
+
+FSDP expands on scaling models by removing the redundancy of optimizer calculations and state storage, as well as gradient and memory storage of model parameters that are present in DDP (DDP = Distributed Data Parallel). This redundancy reduction, along with increased communication overlap where model parameter communication takes place at the same time as model computation, is what allows FSDP to train much larger models with the same resources as DDP.
+
+A key point is that this efficiency also allows for AI models that are larger than a single GPU to be trained. The model size available for training is now increased to the aggregate memory of all GPUs, rather than the size of a single GPU. (And as a point of note, FSDP can go beyond aggregated GPU memory by leveraging CPU memory as well, though we will not directly cover this aspect here).
+
+As discussed in a previous blog post, with DDP the largest model that we could train on 32, A100 gpus with 40 GB memory (4 nodes) was up to 3B parameters, and batch size of 128, with the help of activation checkpointing. By contrast, using FSDP we were able to train up to 81B model size, combining activation checkpointing, along with activation and parameter offloading. In another experiment, we benchmarked a 1T parameter model with FSDP using 512 gpus.
+
+
+
+
+
+For intuition on the parameter level workings of FSDP, below we show an animation detailing how the model parameters are sharded and communicated assuming a two GPU scenario and a simple 8 parameter model:
+
+
+
+
+
+Above - the animations walk through the steps involved with the initial sharding of the model amongst ranks, and we start the all_gathers and forward pass
+
+
+
+
+
+We continue through the model with the forward pass. After each FSDP unit completes, non-locally owned params are dropped to free memory, and optionally activations can be checkpointed. This continues until we finish the forward pass and compute the loss.
+
+
+
+
+
+During the backward pass, another all_gather is used to load the parameters and the gradients are computed. These gradients are then reduce_scattered so that the local owners of each param can aggregate and prepare to update the weights.
+
+
+
+
+
+Finally, each rank passes the summed gradients through the optimizer states and updates the weights to complete the mini-batch.
+
+With the model now distributed across the entire set of available GPUs, the logical question is how data moves through the model given this sharding of model parameters.
+
+This is accomplished by FSDP coordinating with all GPUs to effectively share (communicate) the respective parts of the model.  The model is decomposed into FSDP units and parameters within each unit are flattened and then sharded across all GPUs.  Within each FSDP unit, GPU’s are assigned interleaving ownership of individual model parameters.
+
+By interleaving, we mean the following - assuming 2 gpus with an id of 1 and 2, the FSDP unit ownership pattern would be [12121212],  rather than a contiguous chunk of [111222].
+
+During training, an all_gather is initiated and the locally owned model parameters within a FSDP unit are shared by the owner GPU with the other non-owners, when they need it, on a ‘just in time’ type basis. FSDP prefetches parameters to overlap all_gather communication with computation.
+
+When those requested parameters arrive, the GPU uses the delivered parameters, in combination with the parameters it already owns, to create a fully populated FSDP unit. Thus there is a moment where each GPU hits peak memory usage while holding a fully populated FSDP unit.
+
+It then processes the data through the FSDP unit, and drops the parameters it received from other GPU’s to free up memory for the next unit…the process continues over and over proceeding through the entire model to complete the forward pass.The process is then repeated (in general) for the backward pass.(note - this is a simplified version for understanding..there is additional complexity but this should help construct a basic mental model of the FSDP process).
+
+This eliminates much of the memory redundancy present in DDP, but imposes the cost of higher amounts of network communication to shuttle these requested parameters back and forth amongst all the GPUs.Overlapping the communication timing with the computation taking place is the basis of many of the performance improvements we’ll discuss in this series. The key gains are frequently based on the fact that communication can often take place at the same time as computation.As you can surmise, having high communication speed is vital for FSDP performance.
+
+How do I optimize my training with FSDP?
+
+There are four main performance improvements we will cover - the transformer wrapper, activation checkpointing, mixed precision, and selecting the proper sharding strategy. The flowchart below will help as a checklist for tuning options that we will discuss in this post.
+
+
+
+
+
+Wrapping policy - for transformers, use Transformer wrapping policy
+
+The first performance optimization is leveraging the FSDP transformer wrapper for transformer models.
+
+One of the pre-defined wrapping policy is size_based_autowrap_policy. With size_based_autowrap_policy, FSDP will traverse the module structure from bottom to top, a new FSDP unit will be created once the current unit has at least the min_num_params specified within the size policy (this defaults to 1e8, or 100M). If the module can not be created as an FSDP unit, FSDP will continue to check its parent module. This size based wrapping policy may not be ideal for some model structures, PyTorch distributed team is actively working on a new default wrapping policy in the next release which is based on size and also module execution order, users can simply tune the size and achieve the optimized performance.
+
+In the current release, you can greatly improve your performance when running Transformer models by using the ‘transformer wrapper’. You will need to provide the appropriate layer class for your model. Here, layer class is the class that houses the Multi-Head Attention and Feed Forward Network.
+
+FSDP will then form the FSDP units around the layer class rather than arbitrary breaks based on parameter size. By sharding the model around layer classes that are uniformly repeated within the transformer, FSDP can create uniform FSDP units that better balance the overlap of computation and communication. By contrast, size based wrapping can produce very uneven or skewed shards for models, which then have uneven matching of compute vs communication overlap. As discussed earlier, the main driver of FSDP high performance is the overlap of communication and computation, and hence why the Transformer wrapper provides improved performance. Note that the Transformer wrapper can also be used for non-transformer models if these models have a list of uniform layers.
+
+Let’s compare the performance difference on a T5, 3B parameter model when running under the default wrapper and the transformer wrapper.
+
+For default wrapping, we don’t need to take any action - we simply pass the model to FSDP as shown:
+
+model = FSDP(
+      model,
+      device_id=torch.cuda.current_device(),
+  )
+
+
+In this case FSDP will simply wrap the whole model in a single FSDP unit.
+
+Running on an NVIDIA A100-SXM4–40GB with 8 GPUs, we are able to reach 2.3 TFlops and 95% GPU memory utilization with a batch size of 14.
+
+However, since T5 is a transformer model, we are better served to leverage the transformer wrapper for this model.
+
+To use that, we need to isolate the layer class for the transformer, and then pass it in to create our transformer wrapper.
+
+from transformers.models.t5.modeling_t5 import T5Block
+
+
+And now we can create our Transformer wrapper:
+
+transformer_auto_wrapper_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={
+            T5Block,  # < ---- Your Transformer layer class
+        },
+    )
+
+
+With our model aware wrapper ready, we can initialize FSDP:
+
+# invoke FSDP with your transformer wrapper policy:
+model = FSDP(
+        model,
+        auto_wrap_policy=transformer_auto_wrapper_policy,
+        device_id=torch.cuda.current_device(),  # streaming init
+    )
+
+
+Running this wrapped model, we can see some substantial performance gains.We can fit nearly double the batch size, going to 28, and with better memory and communication efficiency, we see a TFlops increase to 5.07 from 2.3.
+
+Thus, we’ve increased our training throughput by over 200% (2.19x) due to providing greater model info to FSDP! The transformer wrapping policy results in more fine-grained and balanced FSDP units each holding a layer class, which leads to a more effective communication-computation overlap.
+
+
+
+
+
+Above: Graphical comparison of TFlops based on wrapper type
+
+If you are training a Transformer model, it pays to configure your training with FSDP using the transformer wrapper. For more information on how to isolate your layer class, please see our in depth video on Transformer wrapping here, where we walk through a number of transformers showing where the layer class can be found.
+
+Mixed precision - use BF16 if you have an Ampere architecture GPU
+
+FSDP supports a flexible mixed precision policy that gives you granular control over parameters, gradients and buffer data types. This lets you easily leverage BFloat16 or FP16 to increase your training speed by up to 70%.
+
+*Note that BFloat 16 is only available on Ampere type GPUs. On AWS this is available with p4dn and g5 instances.
+
+By way of comparison, we can show a 77% speed improvement when comparing fully tuned BFloat16 vs FP32 on an 8B DeepVit model.
+
+
+
+
+
+We have obtained even greater acceleration using BFloat16 in fine-tuning a 3B HuggingFace T5 model as shown in the figures below. We observed that because of the lower precision the validation loss of BFloat16 is slightly behind in the first few epochs, but it is able to catch up and results in the same final accuracy as FP32.
+
+
+
+
+
+To use mixed precision, we create a policy with our desired data types, and pass it in during the FSDP initialization.
+
+To create our policy, we need to import the MixedPrecision class, and then define our custom policy using our customized class:
+
+from torch.distributed.fsdp import MixedPrecision
+bfSixteen = MixedPrecision(
+   param_dtype=torch.bfloat16,
+   # Gradient communication precision.
+   reduce_dtype=torch.bfloat16,
+   # Buffer precision.
+   buffer_dtype=torch.bfloat16,
+)
+model = FSDP(
+       model,
+       auto_wrap_policy=transformer_auto_wrapper_policy,
+       mixed_precision=bfloatPolicy)
+
+
+You can mix and match the precision for parameters, gradients and buffers as you prefer:
+
+comboPolicy = MixedPrecision(
+        # Param precision
+        param_dtype=torch.bfloat16,
+        # Gradient communication precision.
+        reduce_dtype=torch.float32,
+        # Buffer precision.
+        buffer_dtype=torch.float32,
+    )
+
+
+For training with FP16, you will need to also use the ShardedGradScaler, which we will cover in subsequent posts. For BFloat16, it is a drop-in replacement.
+
+AnyPrecision Optimizer - going beyond mixed precision with full BF16 training
+
+Mixed precision training, both in FSDP and elsewhere, maintains the working weights in the reduced datatype (BF16 or FP16) while keeping the master weights in full FP32. The reason for the master weights in FP32 is that running in pure BF16 will result in ‘weight stagnation’, where very small weight updates are lost due to the lower precision, and the accuracy flatlines over time while FP32 weights can continue to improve from these small updates.
+
+In order to resolve this dilemma, we can use the new AnyPrecision optimizer available in TorchDistX (Torch Distributed Experimental) that allows you to successfully train and keep the master weights in pure BF16 instead of FP32. In addition, unlike the typical storage of optimizer states in FP32, AnyPrecision is able to maintain states in pure BF16 as well.
+
+AnyPrecision enables pure BF16 training by maintaining an extra buffer that tracks the precision lost during the weight updates and re-applies that during the next update…effectively resolving the weight stagnation issue without requiring FP32.
+
+As a comparison of the throughput gains available with pure BF16 training using AnyPrecision, we ran experiments using FSDP with the T5 11B model with regular FP32 training, Mixed Precision training with BF16, and pure BF16 training using the AnyPrecision optimizer on 3 nodes with A100 gpus as mentioned previously.
+
+
+
+
+
+As shown above, training with AnyPrecision and pure BF16 resulted in 2x the throughput vs Mixed Precision, and over 20x improvement vs FP32.
+
+The potential tradeoff is the impact on final accuracy - in the cases we tested, the accuracy was equal or better than FP32 due to a regularization effect from the slightly reduced precision, but your results may vary.
+
+AnyPrecision optimizer is available for you to test with here, and is a drop in replacement for AdamW optimizer.
+
+Activation checkpointing - increasing throughput by trading compute for memory
+
+
+
+
+
+FSDP supports activation checkpointing once the model has been sharded, and makes it easy to implement. The graph above shows ~4x throughput improvement using activation checkpointing.
+
+Activation checkpointing is where the intermediate activations are freed during the forward pass, and a checkpoint is left as a placeholder. This generally increases available GPU memory by over 30%.
+
+The tradeoff is that during the backward pass, these previously removed intermediate activations must be re-calculated again using information in the checkpoint (duplicate compute), but by leveraging the increased GPU memory, one can increase the batch size such that the net throughput can increase substantially.
+
+# verify we have FSDP activation support ready by importing:
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+   checkpoint_wrapper,
+   CheckpointImpl,
+   apply_activation_checkpointing_wrapper,
+)
+
+
+The steps required to implement activation checkpointing is to first import the FSDP checkpointing functions. We need declare our checkpointer wrapper type which is non-reentrant and create a check function to identify which layer to wrap as follows
+
+non_reentrant_wrapper = partial(
+    checkpoint_wrapper,
+    offload_to_cpu=False,
+    checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+)
+check_fn = lambda submodule: isinstance(submodule, T5Block)
+
+
+apply_activation_checkpointing_wrapper(
+       model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn
+   )
+
+
+Important note - this must be run after the model has been initialized with FSDP.
+
+However, hopefully you’ve seen how some initial tuning with FSDP options can have a large impact on your training performance.
+
+With that, we turn our attention from how to scale within FSDP, to how to scale your server hardware for FSDP using AWS.
+
+Large Scale Training with FSDP on AWS - For multi-node prioritize high speed network
+
+AWS provides several services that can be used to run distributed training with FSDP: Amazon EC2 Accelerated Computing instances, AWS ParallelCluster, and Amazon Sagemaker.
+
+In this series of blog posts, we used Amazon EC2 p4d instances in a single-instance multi-GPU configuration and in a multi-instance configuration using AWS ParallelCluster and SageMaker in order to run our training jobs.
+
+Here, we’ll focus specifically on AWS parallel cluster and provide an overview of how to utilize it for training purposes.
+
+AWS ParallelCluster Setup
+
+AWS ParallelCluster is an open source, cluster management tool that makes it easy for you to deploy and manage High Performance Computing (HPC) clusters on AWS.  AWS ParallelCluster uses yaml configuration files to provision all the necessary resources. It also supports multiple instance types, job submission queues, shared file systems like Amazon EFS (NFS) or Amazon FSx for Lustre, and job schedulers like AWS Batch and Slurm.
+
+
+
+
+
+Workflow on Clusters
+
+The high level idea is to have a cluster that has a head node which controls the compute nodes. The actual training job runs on the compute nodes. Overall steps to run a training job on a cluster are as follows:
+
+
+  Set up an AWS ParallelCuster (we discuss below)
+  Connect to the head node, and import the training code/ setup the environment.
+  Pull the data and place it in a shared folder that compute nodes can access (FSx Lustre drive).
+  Run the training job using a job scheduler (in this case Slurm).
+
+
+Setup AWS ParallelCuster
+
+To setup AWS ParallelCluster,
+
+
+  
+    Deploy a network stack. This step is optional since you could use your account default VPC and let AWS ParallelCluster create your subnets and security groups. However, we prefer to compartmentalize our desired network infrastructure and do this deployment via a CloudFormation stack.
+
+    Since we deploy a public and a private subnet, we want to create them into an Availability Zone that contains our target instances, in this case p4d. We consult their availability in the region we use (us-east-1) through the following AWS CLI command:
+
+    aws ec2 describe-instance-type-offerings --location-type availability-zone \ --filters Name=instance-type,Values=p4d.24xlarge --region us-east-1 --output table
+
+    We see three availability zones containing p4d instances, we pick one of them (us-east-1c, yours may be different) when deploying our network stack. This can be done with the AWS Console or the AWS CLI. In our case we use the latter as follows
+
+    aws cloudformation create-stack --stack-name VPC-Large-Scale --capabilities CAPABILITY_IAM --template-body file://VPC-Large-Scale.yaml --parameters ParameterKey=SubnetsAZ,ParameterValue=us-east-1c
+
+    CloudFormation will deploy our new VPC, subnets, security groups and endpoints on our behalf. Once done, you can retrieve the IDs of the public and private subnets by querying the stack outputs and the values PublicSubnet and PrivateSubnet.
+
+    For example, using the AWS CLI for the private subnet:
+
+    aws cloudformation describe-stacks --stack-name VPC-Large-Scale --query " stacks[0].outputs[?outputkey="='PrivateSubnet'].OutputValue&quot;" --output="" text="" create="" parallelcluster,="" the="" cluster="" configuration="" file="" specifies="" resources="" for="" our="" cluster.="" these="" include="" instance="" type="" head="" node,="" compute="" nodes,="" access="" to="" s3="" buckets,="" shared="" storage="" where="" data="" will="" be="" located.="" we="" use="" amazon="" fsx="" lustre="" that="" offers="" a="" fully="" managed="" service="" with="" lustre.="" here="" is="" an="" example="" of="" file.="" can="" aws="" parallelcluster="" cli="" please="" note="" private="" and="" public="" subnet="" ids="" need="" replaced="" by="" ones="" you="" retrieved="" earlier.="" able="" control="" using="" start,="" stop,="" pause,="" etc.="" pcluster="" create-cluster="" --cluster-name="" my-hpc-cluster="" --cluster-configuration="" cluster.yaml="" ssh="" node="" -="" once="" ready,="" connect="" protocol,="" pull="" training="" code="" place="" in="" specified="" -i="" your-key_pair="" launch="" job="" now="" have="" code,="" slurm="" training.="" script="" torchrun.="" more="" details="" on="" how="" set="" up="" out="" scope="" this="" post,="" however="" separate="" post="" it.="" what’s="" next?="" provided="" high="" level="" overview="" fsdp="" it="" efficiently="" scales="" distributed="" ai="" flowchart="" included="" help="" provide="" checklist="" review="" tuning="" options="" discussed="" such="" as="" transformer="" wrapper="" activation="" checkpointing.="" next="" posts,="" continue="" t5="" model="" go="" deeper="" into="" each="" topics="" above,="" specifically="" sharding="" strategy="" other="" optimizations="" insight="" details.="" now,="" good="" reference="" video="" tutorial="" here:="" if="" questions="" or="" find="" issue,="" authors="" less,="" hamid="" geeta="" open="" issue="" pytorch="" github.="" special="" thanks="" to:="" team,="" shen="" li,="" rohan="" varma,="" yanli="" zhao,="" andrew="" gu,="" anjali="" sridhar,="" ana="" simoes,="" pierre-yves="" aquilanti,="" sundar="" ranganathan,="" broader="" team="" supporting="" us="" providing="" infrastructure="" technical="" support="" running="" large="" scale="" experiments.="" resources:="" series="" getting="" started="" advanced="" api="" documentation="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Efficient Large-Scale Training with Pytorch FSDP and AWS">
+<meta name="twitter:description" content="Cutting-edge AI models are becoming extremely large. The cost and overhead of training these models is increasing rapidly, and involves large amounts of engineering and guesswork to find the right training regime. FSDP reduces these costs significantly by enabling you to train much larger models with the same amount of resources. FSDP lowers the memory footprint on your GPUs, and is usable via a lightweight configuration that requires substantially less effort, typically with just a few lines of code.
+
+The main performance gains in FSDP come from maximizing the overlap between network communication and model computation, and eliminating the memory redundancy inherent in traditional data parallel training (DDP).  PyTorch FSDP can train models approximately 4x larger on the same server resources as DDP and 20x larger if we combine activation checkpointing and activation offloading.
+
+Since PyTorch 1.12, FSDP is now in beta status, and has added a number of new features that can be tuned to further accelerate your model training.
+
+In this series of blog posts, we will explain multiple performance optimizations you can run with FSDP to boost your distributed training speed and model sizes within the context of your available server resources.  We use the HuggingFace T5 3B, 11B and DeepVit, in fine-tuning mode, as the running examples throughout the series.
+
+As a preview of some of the optimizations discussed in this series, we show the before and after performance scaled in Flops below (Note that these results can vary based on your server resources and model architecture).
+
+
+
+
+
+ *T5 3B Performance measured on AWS A100 and A10 servers. Original with no optimizations and Tuned with the applied optimization 
+
+
+
+
+
+ *T5 11B Performance measured on A100 servers. Original with no optimizations and Tuned with the applied optimization 
+
+In this first post, we will provide a quick overview of FSDP and how it can make training large- scale AI models more efficient.  We will highlight briefly the multiple performance options available, and dive deeper into the details on these in upcoming posts.  We will then conclude with an overview on how to leverage AWS parallel cluster for large- scale training with FSDP.
+
+
+  
+   Optimization 
+   
+   T5 Model 
+   
+   Throughput Improvement 
+   
+  
+  
+   Mixed Precision
+   
+   3 B
+   
+   5x
+   
+  
+  
+   11 B
+   
+   10x
+   
+  
+  
+   Activation Checkpointing (AC)
+   
+   3 B
+   
+   10x
+   
+  
+  
+   11 B
+   
+   100x
+   
+  
+  
+   Transformer Wrapping Policy
+   
+   3 B
+   
+   2x
+   
+  
+  
+   11 B
+   
+   Unable to run the experiment without the Transformer wrapping policy.
+   
+  
+  
+   Full Shard Strategy
+   
+   3 B
+   
+   1.5x
+   
+  
+  
+   11 B
+   
+   Not able to run with Zero2
+   
+  
+
+
+Performance optimization gains on T5 models over non-optimized.
+
+In our experiments with the T5 3B model, using the  transformer wrapping policy resulted in >2x higher throughput measured in TFLOPS versus the default wrapping policy. Activation checkpointing resulted in 10x improvement by reinvesting the freed memory from the checkpoints into larger batch size. Mixed precision with BFloat16 resulted in ~5x improvement versus FP32 and finally the full sharding strategy versus zero2 (DDP)  resulted in 1.5x improvement.
+
+We ran similar experiments for a larger model, T5 11B, but the larger model size resulted in some changes to the experiment space.  Specifically, we found that two optimizations,  transformer wrapping policy and activation checkpointing, were needed to enable us to run these experiments on 3 nodes (each node had 8 A100 gpus with 80 GB of memory). With these optimizations, we could fit a batch size of 50 and get higher throughput compared to removing each one of them. Thus rather than running on/off solely for a single optimization test as with the 3B model, the larger model experiments were done with 1 of 3 optimizations turned on/off while always running the other two in order to allow a usable batch size for both test states for each item.
+
+Based on TFLOP comparisons, with the 11B model, we saw even more payoff from the optimizations.  Mixed precision(~10x improvement) and activation checkpointing (~100x improvement) had a much larger impact with the 11B model compared to the 3B parameter model. With mixed precision we could fit ~2x larger batch sizes and with activation checkpointing >15x batch sizes (from 3 with no activation checkpointing to 50 with activation checkpointing) which translated into large throughput improvements.
+
+We also have observed that for these larger models > 3B, using Zero2 sharding strategy would result in minimal room left in memory for the batch data, and had to go with very small batch sizes (e.g 1-2) that essentially makes full sharding strategy a necessity to enable fitting larger batches sizes.
+
+Note - this tutorial assumes a basic understanding of FSDP. To learn more about basics of FSDP please refer to the getting started and advanced FSDP tutorials.
+
+What is FSDP? How does it make Large-Scale Training More Efficient
+
+FSDP expands upon distributed data parallel, by parallelizing not just data, but the model parameters, the optimizer states and gradients associated with the model. Specifically - each GPU only stores a subset of the entire model and the associated subset of optimizer states and gradients.
+
+To show the evolution of distributed training, we can start from the beginning, where AI models were simply trained on a single GPU.
+
+DDP (Distributed Data Parallel) was the initial step up from training with only a single GPU, and was an effort to address the data and model size growth, where multiple GPUs each housed their own copy of the same model. The gain here is that the data for each batch could be split and processed independently on each GPU, all at the same time,thus parallelizing the processing of the data set and increasing training speed by the increasing number of GPUs. The tradeoff is the need to communicate the gradients between each GPU to synchronize the models after the backward pass.
+
+FSDP expands on scaling models by removing the redundancy of optimizer calculations and state storage, as well as gradient and memory storage of model parameters that are present in DDP (DDP = Distributed Data Parallel). This redundancy reduction, along with increased communication overlap where model parameter communication takes place at the same time as model computation, is what allows FSDP to train much larger models with the same resources as DDP.
+
+A key point is that this efficiency also allows for AI models that are larger than a single GPU to be trained. The model size available for training is now increased to the aggregate memory of all GPUs, rather than the size of a single GPU. (And as a point of note, FSDP can go beyond aggregated GPU memory by leveraging CPU memory as well, though we will not directly cover this aspect here).
+
+As discussed in a previous blog post, with DDP the largest model that we could train on 32, A100 gpus with 40 GB memory (4 nodes) was up to 3B parameters, and batch size of 128, with the help of activation checkpointing. By contrast, using FSDP we were able to train up to 81B model size, combining activation checkpointing, along with activation and parameter offloading. In another experiment, we benchmarked a 1T parameter model with FSDP using 512 gpus.
+
+
+
+
+
+For intuition on the parameter level workings of FSDP, below we show an animation detailing how the model parameters are sharded and communicated assuming a two GPU scenario and a simple 8 parameter model:
+
+
+
+
+
+Above - the animations walk through the steps involved with the initial sharding of the model amongst ranks, and we start the all_gathers and forward pass
+
+
+
+
+
+We continue through the model with the forward pass. After each FSDP unit completes, non-locally owned params are dropped to free memory, and optionally activations can be checkpointed. This continues until we finish the forward pass and compute the loss.
+
+
+
+
+
+During the backward pass, another all_gather is used to load the parameters and the gradients are computed. These gradients are then reduce_scattered so that the local owners of each param can aggregate and prepare to update the weights.
+
+
+
+
+
+Finally, each rank passes the summed gradients through the optimizer states and updates the weights to complete the mini-batch.
+
+With the model now distributed across the entire set of available GPUs, the logical question is how data moves through the model given this sharding of model parameters.
+
+This is accomplished by FSDP coordinating with all GPUs to effectively share (communicate) the respective parts of the model.  The model is decomposed into FSDP units and parameters within each unit are flattened and then sharded across all GPUs.  Within each FSDP unit, GPU’s are assigned interleaving ownership of individual model parameters.
+
+By interleaving, we mean the following - assuming 2 gpus with an id of 1 and 2, the FSDP unit ownership pattern would be [12121212],  rather than a contiguous chunk of [111222].
+
+During training, an all_gather is initiated and the locally owned model parameters within a FSDP unit are shared by the owner GPU with the other non-owners, when they need it, on a ‘just in time’ type basis. FSDP prefetches parameters to overlap all_gather communication with computation.
+
+When those requested parameters arrive, the GPU uses the delivered parameters, in combination with the parameters it already owns, to create a fully populated FSDP unit. Thus there is a moment where each GPU hits peak memory usage while holding a fully populated FSDP unit.
+
+It then processes the data through the FSDP unit, and drops the parameters it received from other GPU’s to free up memory for the next unit…the process continues over and over proceeding through the entire model to complete the forward pass.The process is then repeated (in general) for the backward pass.(note - this is a simplified version for understanding..there is additional complexity but this should help construct a basic mental model of the FSDP process).
+
+This eliminates much of the memory redundancy present in DDP, but imposes the cost of higher amounts of network communication to shuttle these requested parameters back and forth amongst all the GPUs.Overlapping the communication timing with the computation taking place is the basis of many of the performance improvements we’ll discuss in this series. The key gains are frequently based on the fact that communication can often take place at the same time as computation.As you can surmise, having high communication speed is vital for FSDP performance.
+
+How do I optimize my training with FSDP?
+
+There are four main performance improvements we will cover - the transformer wrapper, activation checkpointing, mixed precision, and selecting the proper sharding strategy. The flowchart below will help as a checklist for tuning options that we will discuss in this post.
+
+
+
+
+
+Wrapping policy - for transformers, use Transformer wrapping policy
+
+The first performance optimization is leveraging the FSDP transformer wrapper for transformer models.
+
+One of the pre-defined wrapping policy is size_based_autowrap_policy. With size_based_autowrap_policy, FSDP will traverse the module structure from bottom to top, a new FSDP unit will be created once the current unit has at least the min_num_params specified within the size policy (this defaults to 1e8, or 100M). If the module can not be created as an FSDP unit, FSDP will continue to check its parent module. This size based wrapping policy may not be ideal for some model structures, PyTorch distributed team is actively working on a new default wrapping policy in the next release which is based on size and also module execution order, users can simply tune the size and achieve the optimized performance.
+
+In the current release, you can greatly improve your performance when running Transformer models by using the ‘transformer wrapper’. You will need to provide the appropriate layer class for your model. Here, layer class is the class that houses the Multi-Head Attention and Feed Forward Network.
+
+FSDP will then form the FSDP units around the layer class rather than arbitrary breaks based on parameter size. By sharding the model around layer classes that are uniformly repeated within the transformer, FSDP can create uniform FSDP units that better balance the overlap of computation and communication. By contrast, size based wrapping can produce very uneven or skewed shards for models, which then have uneven matching of compute vs communication overlap. As discussed earlier, the main driver of FSDP high performance is the overlap of communication and computation, and hence why the Transformer wrapper provides improved performance. Note that the Transformer wrapper can also be used for non-transformer models if these models have a list of uniform layers.
+
+Let’s compare the performance difference on a T5, 3B parameter model when running under the default wrapper and the transformer wrapper.
+
+For default wrapping, we don’t need to take any action - we simply pass the model to FSDP as shown:
+
+model = FSDP(
+      model,
+      device_id=torch.cuda.current_device(),
+  )
+
+
+In this case FSDP will simply wrap the whole model in a single FSDP unit.
+
+Running on an NVIDIA A100-SXM4–40GB with 8 GPUs, we are able to reach 2.3 TFlops and 95% GPU memory utilization with a batch size of 14.
+
+However, since T5 is a transformer model, we are better served to leverage the transformer wrapper for this model.
+
+To use that, we need to isolate the layer class for the transformer, and then pass it in to create our transformer wrapper.
+
+from transformers.models.t5.modeling_t5 import T5Block
+
+
+And now we can create our Transformer wrapper:
+
+transformer_auto_wrapper_policy = functools.partial(
+        transformer_auto_wrap_policy,
+        transformer_layer_cls={
+            T5Block,  # < ---- Your Transformer layer class
+        },
+    )
+
+
+With our model aware wrapper ready, we can initialize FSDP:
+
+# invoke FSDP with your transformer wrapper policy:
+model = FSDP(
+        model,
+        auto_wrap_policy=transformer_auto_wrapper_policy,
+        device_id=torch.cuda.current_device(),  # streaming init
+    )
+
+
+Running this wrapped model, we can see some substantial performance gains.We can fit nearly double the batch size, going to 28, and with better memory and communication efficiency, we see a TFlops increase to 5.07 from 2.3.
+
+Thus, we’ve increased our training throughput by over 200% (2.19x) due to providing greater model info to FSDP! The transformer wrapping policy results in more fine-grained and balanced FSDP units each holding a layer class, which leads to a more effective communication-computation overlap.
+
+
+
+
+
+Above: Graphical comparison of TFlops based on wrapper type
+
+If you are training a Transformer model, it pays to configure your training with FSDP using the transformer wrapper. For more information on how to isolate your layer class, please see our in depth video on Transformer wrapping here, where we walk through a number of transformers showing where the layer class can be found.
+
+Mixed precision - use BF16 if you have an Ampere architecture GPU
+
+FSDP supports a flexible mixed precision policy that gives you granular control over parameters, gradients and buffer data types. This lets you easily leverage BFloat16 or FP16 to increase your training speed by up to 70%.
+
+*Note that BFloat 16 is only available on Ampere type GPUs. On AWS this is available with p4dn and g5 instances.
+
+By way of comparison, we can show a 77% speed improvement when comparing fully tuned BFloat16 vs FP32 on an 8B DeepVit model.
+
+
+
+
+
+We have obtained even greater acceleration using BFloat16 in fine-tuning a 3B HuggingFace T5 model as shown in the figures below. We observed that because of the lower precision the validation loss of BFloat16 is slightly behind in the first few epochs, but it is able to catch up and results in the same final accuracy as FP32.
+
+
+
+
+
+To use mixed precision, we create a policy with our desired data types, and pass it in during the FSDP initialization.
+
+To create our policy, we need to import the MixedPrecision class, and then define our custom policy using our customized class:
+
+from torch.distributed.fsdp import MixedPrecision
+bfSixteen = MixedPrecision(
+   param_dtype=torch.bfloat16,
+   # Gradient communication precision.
+   reduce_dtype=torch.bfloat16,
+   # Buffer precision.
+   buffer_dtype=torch.bfloat16,
+)
+model = FSDP(
+       model,
+       auto_wrap_policy=transformer_auto_wrapper_policy,
+       mixed_precision=bfloatPolicy)
+
+
+You can mix and match the precision for parameters, gradients and buffers as you prefer:
+
+comboPolicy = MixedPrecision(
+        # Param precision
+        param_dtype=torch.bfloat16,
+        # Gradient communication precision.
+        reduce_dtype=torch.float32,
+        # Buffer precision.
+        buffer_dtype=torch.float32,
+    )
+
+
+For training with FP16, you will need to also use the ShardedGradScaler, which we will cover in subsequent posts. For BFloat16, it is a drop-in replacement.
+
+AnyPrecision Optimizer - going beyond mixed precision with full BF16 training
+
+Mixed precision training, both in FSDP and elsewhere, maintains the working weights in the reduced datatype (BF16 or FP16) while keeping the master weights in full FP32. The reason for the master weights in FP32 is that running in pure BF16 will result in ‘weight stagnation’, where very small weight updates are lost due to the lower precision, and the accuracy flatlines over time while FP32 weights can continue to improve from these small updates.
+
+In order to resolve this dilemma, we can use the new AnyPrecision optimizer available in TorchDistX (Torch Distributed Experimental) that allows you to successfully train and keep the master weights in pure BF16 instead of FP32. In addition, unlike the typical storage of optimizer states in FP32, AnyPrecision is able to maintain states in pure BF16 as well.
+
+AnyPrecision enables pure BF16 training by maintaining an extra buffer that tracks the precision lost during the weight updates and re-applies that during the next update…effectively resolving the weight stagnation issue without requiring FP32.
+
+As a comparison of the throughput gains available with pure BF16 training using AnyPrecision, we ran experiments using FSDP with the T5 11B model with regular FP32 training, Mixed Precision training with BF16, and pure BF16 training using the AnyPrecision optimizer on 3 nodes with A100 gpus as mentioned previously.
+
+
+
+
+
+As shown above, training with AnyPrecision and pure BF16 resulted in 2x the throughput vs Mixed Precision, and over 20x improvement vs FP32.
+
+The potential tradeoff is the impact on final accuracy - in the cases we tested, the accuracy was equal or better than FP32 due to a regularization effect from the slightly reduced precision, but your results may vary.
+
+AnyPrecision optimizer is available for you to test with here, and is a drop in replacement for AdamW optimizer.
+
+Activation checkpointing - increasing throughput by trading compute for memory
+
+
+
+
+
+FSDP supports activation checkpointing once the model has been sharded, and makes it easy to implement. The graph above shows ~4x throughput improvement using activation checkpointing.
+
+Activation checkpointing is where the intermediate activations are freed during the forward pass, and a checkpoint is left as a placeholder. This generally increases available GPU memory by over 30%.
+
+The tradeoff is that during the backward pass, these previously removed intermediate activations must be re-calculated again using information in the checkpoint (duplicate compute), but by leveraging the increased GPU memory, one can increase the batch size such that the net throughput can increase substantially.
+
+# verify we have FSDP activation support ready by importing:
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+   checkpoint_wrapper,
+   CheckpointImpl,
+   apply_activation_checkpointing_wrapper,
+)
+
+
+The steps required to implement activation checkpointing is to first import the FSDP checkpointing functions. We need declare our checkpointer wrapper type which is non-reentrant and create a check function to identify which layer to wrap as follows
+
+non_reentrant_wrapper = partial(
+    checkpoint_wrapper,
+    offload_to_cpu=False,
+    checkpoint_impl=CheckpointImpl.NO_REENTRANT,
+)
+check_fn = lambda submodule: isinstance(submodule, T5Block)
+
+
+apply_activation_checkpointing_wrapper(
+       model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=check_fn
+   )
+
+
+Important note - this must be run after the model has been initialized with FSDP.
+
+However, hopefully you’ve seen how some initial tuning with FSDP options can have a large impact on your training performance.
+
+With that, we turn our attention from how to scale within FSDP, to how to scale your server hardware for FSDP using AWS.
+
+Large Scale Training with FSDP on AWS - For multi-node prioritize high speed network
+
+AWS provides several services that can be used to run distributed training with FSDP: Amazon EC2 Accelerated Computing instances, AWS ParallelCluster, and Amazon Sagemaker.
+
+In this series of blog posts, we used Amazon EC2 p4d instances in a single-instance multi-GPU configuration and in a multi-instance configuration using AWS ParallelCluster and SageMaker in order to run our training jobs.
+
+Here, we’ll focus specifically on AWS parallel cluster and provide an overview of how to utilize it for training purposes.
+
+AWS ParallelCluster Setup
+
+AWS ParallelCluster is an open source, cluster management tool that makes it easy for you to deploy and manage High Performance Computing (HPC) clusters on AWS.  AWS ParallelCluster uses yaml configuration files to provision all the necessary resources. It also supports multiple instance types, job submission queues, shared file systems like Amazon EFS (NFS) or Amazon FSx for Lustre, and job schedulers like AWS Batch and Slurm.
+
+
+
+
+
+Workflow on Clusters
+
+The high level idea is to have a cluster that has a head node which controls the compute nodes. The actual training job runs on the compute nodes. Overall steps to run a training job on a cluster are as follows:
+
+
+  Set up an AWS ParallelCuster (we discuss below)
+  Connect to the head node, and import the training code/ setup the environment.
+  Pull the data and place it in a shared folder that compute nodes can access (FSx Lustre drive).
+  Run the training job using a job scheduler (in this case Slurm).
+
+
+Setup AWS ParallelCuster
+
+To setup AWS ParallelCluster,
+
+
+  
+    Deploy a network stack. This step is optional since you could use your account default VPC and let AWS ParallelCluster create your subnets and security groups. However, we prefer to compartmentalize our desired network infrastructure and do this deployment via a CloudFormation stack.
+
+    Since we deploy a public and a private subnet, we want to create them into an Availability Zone that contains our target instances, in this case p4d. We consult their availability in the region we use (us-east-1) through the following AWS CLI command:
+
+    aws ec2 describe-instance-type-offerings --location-type availability-zone \ --filters Name=instance-type,Values=p4d.24xlarge --region us-east-1 --output table
+
+    We see three availability zones containing p4d instances, we pick one of them (us-east-1c, yours may be different) when deploying our network stack. This can be done with the AWS Console or the AWS CLI. In our case we use the latter as follows
+
+    aws cloudformation create-stack --stack-name VPC-Large-Scale --capabilities CAPABILITY_IAM --template-body file://VPC-Large-Scale.yaml --parameters ParameterKey=SubnetsAZ,ParameterValue=us-east-1c
+
+    CloudFormation will deploy our new VPC, subnets, security groups and endpoints on our behalf. Once done, you can retrieve the IDs of the public and private subnets by querying the stack outputs and the values PublicSubnet and PrivateSubnet.
+
+    For example, using the AWS CLI for the private subnet:
+
+    aws cloudformation describe-stacks --stack-name VPC-Large-Scale --query " stacks[0].outputs[?outputkey="='PrivateSubnet'].OutputValue&quot;" --output="" text="" create="" parallelcluster,="" the="" cluster="" configuration="" file="" specifies="" resources="" for="" our="" cluster.="" these="" include="" instance="" type="" head="" node,="" compute="" nodes,="" access="" to="" s3="" buckets,="" shared="" storage="" where="" data="" will="" be="" located.="" we="" use="" amazon="" fsx="" lustre="" that="" offers="" a="" fully="" managed="" service="" with="" lustre.="" here="" is="" an="" example="" of="" file.="" can="" aws="" parallelcluster="" cli="" please="" note="" private="" and="" public="" subnet="" ids="" need="" replaced="" by="" ones="" you="" retrieved="" earlier.="" able="" control="" using="" start,="" stop,="" pause,="" etc.="" pcluster="" create-cluster="" --cluster-name="" my-hpc-cluster="" --cluster-configuration="" cluster.yaml="" ssh="" node="" -="" once="" ready,="" connect="" protocol,="" pull="" training="" code="" place="" in="" specified="" -i="" your-key_pair="" launch="" job="" now="" have="" code,="" slurm="" training.="" script="" torchrun.="" more="" details="" on="" how="" set="" up="" out="" scope="" this="" post,="" however="" separate="" post="" it.="" what’s="" next?="" provided="" high="" level="" overview="" fsdp="" it="" efficiently="" scales="" distributed="" ai="" flowchart="" included="" help="" provide="" checklist="" review="" tuning="" options="" discussed="" such="" as="" transformer="" wrapper="" activation="" checkpointing.="" next="" posts,="" continue="" t5="" model="" go="" deeper="" into="" each="" topics="" above,="" specifically="" sharding="" strategy="" other="" optimizations="" insight="" details.="" now,="" good="" reference="" video="" tutorial="" here:="" if="" questions="" or="" find="" issue,="" authors="" less,="" hamid="" geeta="" open="" issue="" pytorch="" github.="" special="" thanks="" to:="" team,="" shen="" li,="" rohan="" varma,="" yanli="" zhao,="" andrew="" gu,="" anjali="" sridhar,="" ana="" simoes,="" pierre-yves="" aquilanti,="" sundar="" ranganathan,="" broader="" team="" supporting="" us="" providing="" infrastructure="" technical="" support="" running="" large="" scale="" experiments.="" resources:="" series="" getting="" started="" advanced="" api="" documentation="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年12月16日</p>
+            <h1>
+                <a class="blog-title">使用 Pytorch FSDP 和 AWS 进行高效的大规模训练</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由莱斯·赖特、哈米德·肖贾纳泽里、吉塔·乔汗合著</p>
+                    <p>最先进的 AI 模型正变得极其庞大。训练这些模型的成本和开销正在迅速增加，需要大量的工程和猜测来找到正确的训练方案。FSDP 通过允许您使用相同数量的资源训练更大的模型，显著降低了这些成本。FSDP 降低了 GPU 上的内存占用，并且可以通过轻量级的配置使用，通常只需要几行代码。</p>
+
+<p>FSDP 的主要性能提升来自于最大化网络通信和模型计算的重叠，以及消除传统数据并行训练（DDP）中固有的内存冗余。PyTorch FSDP 可以在与 DDP 相同的服务器资源上训练大约 4 倍大的模型，如果结合激活检查点和激活卸载，则可以训练大约 20 倍大的模型。</p>
+
+<p>自 PyTorch 1.12 版本以来，FSDP 现在处于测试版状态，并添加了许多新功能，可以调整以进一步加速模型训练。</p>
+
+<p>在本系列博客文章中，我们将解释您可以使用 FSDP 运行的多项性能优化，以提升您的分布式训练速度和模型大小，同时考虑到您可用的服务器资源。在本系列中，我们将使用 HuggingFace T5 3B、11B 和 DeepVit，在微调模式下作为运行示例。</p>
+
+<p>作为本系列中讨论的一些优化的预览，我们以下列出了性能的“前后”对比，以 Flops 为单位（请注意，这些结果可能因您的服务器资源和模型架构而异）。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_1.png" width="90%">
+</p>
+
+<p><i>*在 AWS A100 和 A10 服务器上测量的 T5 3B 性能。原始版本（无优化）和调整后（应用了优化）</i></p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_2.png" width="90%">
+</p>
+
+<p><i>*在 A100 服务器上测量的 T5 11B 性能。原始版本（无优化）和调整后（应用了优化）</i></p>
+
+<p>在这篇第一篇帖子中，我们将快速概述 FSDP 及其如何使大规模 AI 模型的训练更加高效。我们将简要介绍可用的多种性能选项，并在后续帖子中深入探讨这些细节。然后，我们将总结如何利用 AWS 并行集群通过 FSDP 进行大规模训练。</p>
+
+<table style="border: 1px solid black;">
+  <tbody><tr>
+   <td><strong>优化</strong>
+   </td>
+   <td><strong>T5 模型</strong>
+   </td>
+   <td><strong>吞吐量提升</strong>
+   </td>
+  </tr>
+  <tr>
+   <td rowspan="2">混合精度</td>
+   <td>3 B
+   </td>
+   <td>5倍</td>
+  </tr>
+  <tr>
+   <td>11B</td>
+   <td>10倍</td>
+  </tr>
+  <tr>
+   <td rowspan="2">激活检查点（AC）</td>
+   <td>3 B
+   </td>
+   <td>10倍</td>
+  </tr>
+  <tr>
+   <td>11B</td>
+   <td>100倍</td>
+  </tr>
+  <tr>
+   <td rowspan="2">变压器封装策略</td>
+   <td>3 B
+   </td>
+   <td>2倍</td>
+  </tr>
+  <tr>
+   <td>11B</td>
+   <td><em>无法在没有 Transformer 包装策略的情况下运行实验。</em>
+   </td>
+  </tr>
+  <tr>
+   <td rowspan="2">完整分片策略</td>
+   <td>3 B
+   </td>
+   <td>1.5倍</td>
+  </tr>
+  <tr>
+   <td>11B</td>
+   <td><em>无法与 Zero2 一起运行</em>
+   </td>
+  </tr>
+</tbody></table>
+
+<p><em>在 T5 模型上相对于非优化模型的性能优化收益</em></p>
+
+<p>在我们的 T5 3B 模型实验中，使用<a href="https://www.youtube.com/watch?v=HQeKwCsnH4k&amp;list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&amp;index=2">变换器包装策略</a>使得吞吐量在 TFLOPS 上比默认包装策略提高了 2 倍以上。<a href="https://www.youtube.com/watch?v=5B4d0FuxSQc&amp;list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&amp;index=3"> 激活检查点</a>通过将检查点释放的内存重新投资到更大的批量大小，实现了 10 倍的性能提升。<a href="https://www.youtube.com/watch?v=-caN92JtKqA&amp;list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&amp;index=4"> 混合精度</a>使用 BFloat16 比 FP32 提高了约 5 倍，最后与 zero2（DDP）相比的<a href="https://www.youtube.com/watch?v=a3iW6Cggccw&amp;list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&amp;index=5">完全分片策略</a>实现了 1.5 倍的性能提升。</p>
+
+<p>我们为更大的模型 T5 11B 进行了类似的实验，但更大的模型尺寸导致实验空间发生了一些变化。具体来说，我们发现需要两种优化，即 transformer 包装策略和激活检查点，才能使我们能够在 3 个节点上运行这些实验（每个节点有 8 个 A100 GPU 和 80 GB 的内存）。有了这些优化，我们可以将批大小设置为 50，并且与移除任何一个相比，获得更高的吞吐量。因此，与 3B 模型仅针对单个优化测试开/关运行不同，较大的模型实验是通过打开/关闭 3 个优化中的 1 个来进行的，同时始终运行另外两个，以便为每个项目的测试状态提供可用的批大小。</p>
+
+<p>基于 TFLOP 比较，使用 11B 模型，我们看到了优化带来的更多回报。混合精度（约 10 倍提升）和激活检查点（约 100 倍提升）在 11B 模型与 3B 参数模型相比，影响更大。在混合精度下，我们可以拟合约 2 倍更大的批量大小，而激活检查点则可以将批量大小提升至超过 15 倍（从没有激活检查点的 3 个增加到有激活检查点的 50 个），这转化为吞吐量的显著提升。</p>
+
+<p>我们还观察到，对于这些更大的模型（超过 3B），使用 Zero2 分片策略会导致内存中剩余空间非常有限，不得不使用非常小的批量大小（例如 1-2），这实际上使得完全分片策略成为必要，以实现更大的批量大小。</p>
+
+<p><em>注意 - 本教程假设您对 FSDP 有基本了解。要了解更多关于 FSDP 的基础知识，请参阅<a href="https://maskerprc.github.io/tutorials/intermediate/FSDP_tutorial.html">入门</a>和<a href="https://maskerprc.github.io/tutorials/intermediate/FSDP_adavnced_tutorial.html">高级 FSDP</a> 教程。</em></p>
+
+<p><strong>什么是 FSDP？它是如何使大规模训练更高效的？</strong></p>
+
+<p><strong>FSDP</strong> 对分布式数据并行进行了扩展，不仅并行化数据，还并行化模型参数、优化器状态和与模型相关的梯度。具体来说 - <strong> 每个 </strong><strong>GPU 只存储整个模型的一部分</strong><strong>以及相关的优化器状态和梯度子集。</strong></p>
+
+<p><em>要展示分布式训练的演变，我们可以从最初开始，那时 AI 模型只是在单个 GPU 上进行训练。</em></p>
+
+<p>DDP（分布式数据并行）是从仅使用单个 GPU 训练起步的初步提升，旨在解决数据和模型大小的增长问题，其中每个 GPU 都拥有相同模型的一个副本。这里的优势是每个批次的训练数据可以分割并在每个 GPU 上独立处理，所有 GPU 同时进行，从而并行化数据集的处理，并通过增加 GPU 数量来提高训练速度。缺点是在反向传播后需要在每个 GPU 之间通信梯度以同步模型。</p>
+
+<p>FSDP 通过消除优化器计算和状态存储的冗余，以及模型参数中存在的梯度内存存储，扩展了缩放模型。这种冗余减少，加上模型参数通信与模型计算同时进行的通信重叠增加，使得 FSDP 能够使用与 DDP 相同的资源训练更大的模型。</p>
+
+<p>关键点在于，这种效率还允许训练比单个 GPU 更大的 AI 模型。现在可用于训练的模型大小已增加到所有 GPU 的聚合内存，而不是单个 GPU 的大小。（顺便提一下，FSDP 可以通过利用 CPU 内存来超越聚合 GPU 内存，但这里我们不会直接涉及这一方面）。</p>
+
+<p>如前所述的博客文章中讨论的那样，使用 DDP，我们能在 32 个 A100 GPU（4 节点，40 GB 内存）上训练的最大模型参数量达到 30 亿，批大小为 128，借助激活检查点技术。相比之下，使用 FSDP，我们能够训练到 810 亿模型大小，结合了激活检查点技术、激活和参数卸载。在另一个实验中，我们使用 512 个 GPU 对 1T 参数模型进行了 FSDP 基准测试。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_3.png" width="90%">
+</p>
+
+<p>关于 FSDP 在参数层面的工作原理，以下动画展示了在双 GPU 场景和简单的 8 参数模型中，模型参数是如何分片和通信的：</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_5.gif" width="70%">
+</p>
+
+<p><em>如上图所示，动画演示了模型在各个 rank 之间进行初始分片的过程，以及我们开始执行 <code class="language-plaintext highlighter-rouge">all_gathers</code> 和前向传递。</em></p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_6.gif" width="70%">
+</p>
+
+<p><em>我们继续通过模型进行前向传递。在每个 FSDP 单元完成后，非本地拥有的参数将被丢弃以释放内存，并且可以选择性地对激活进行检查点。这个过程一直持续到完成前向传递并计算损失。</em></p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_6.5.gif" width="70%">
+</p>
+
+<p><em>在反向传播过程中，又使用了另一个 <code class="language-plaintext highlighter-rouge">all_gather</code> 来加载参数，并计算梯度。然后，这些梯度通过 <code class="language-plaintext highlighter-rouge">reduce_scattered</code> 进行聚合，以便每个参数的本地所有者可以汇总并准备更新权重。</em></p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_7.gif" width="70%">
+</p>
+
+<p><em>最后，每个进程将汇总的梯度通过优化器状态传递，以完成小批次的权重更新。</em></p>
+
+<p>现在，模型已经分布到所有可用的 GPU 上，一个逻辑问题是，在这种参数划分的情况下，数据是如何在模型中流动的。</p>
+
+<p>这是通过 FSDP 与所有 GPU 协调，有效地共享（通信）模型的不同部分来实现的。模型被分解为 FSDP 单元，每个单元内的参数被展平，然后跨所有 GPU 进行划分。在每个 FSDP 单元内，GPU 被分配交错的所有权，以管理单个模型参数。</p>
+
+<p>通过交织，我们指的是以下情况——假设有 2 个 ID 为 1 和 2 的 GPU，FSDP 单元的所有权模式将是[12121212]，而不是连续的[111222]块。</p>
+
+<p>在训练过程中，将启动一个 <code class="language-plaintext highlighter-rouge">all_gather</code> 操作，FSDP 单元内的本地拥有的模型参数将由拥有 GPU 的主 GPU 在需要时，以“即时”的方式与其他非拥有 GPU 共享。FSDP 预取参数以重叠 <code class="language-plaintext highlighter-rouge">all_gather</code> 通信与计算。</p>
+
+<p>当请求的参数到达时，GPU 将使用提供的参数，结合它已经拥有的参数，来创建一个完全填充的 FSDP 单元。因此，每个 GPU 在持有完全填充的 FSDP 单元时都会达到峰值内存使用。</p>
+
+<p>然后它通过 FSDP 单元处理数据，并丢弃从其他 GPU 接收到的参数以释放内存，为下一个单元腾出空间……这个过程反复进行，贯穿整个模型以完成正向传播。然后（通常）重复这个过程进行反向传播。（注意——这是一个为了理解而简化的版本，实际中还有额外的复杂性，但这应该有助于构建 FSDP 过程的基本思维模型。）</p>
+
+<p>这消除了 DDP 中存在的许多内存冗余，但增加了网络通信的成本，以便在所有 GPU 之间来回传输这些请求的参数。<strong> 将通信时间与正在进行的计算重叠是本系列中我们将讨论的许多性能改进的基础。</strong> 关键的收益通常基于通信可以经常与计算同时进行的事实。正如你可以推测的，<strong> 拥有高通信速度对于 FSDP 性能至关重要。</strong></p>
+
+<h3 id="how-do-i-optimize-my-training-with-fsdp"><strong>我该如何优化使用 FSDP 的训练？</strong></h3>
+
+<p>我们将介绍四个主要性能改进点——Transformer 包装器、激活检查点、混合精度以及选择合适的分片策略。下方的流程图将作为本篇博文中我们将讨论的调整选项的清单。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_8.png" width="70%">
+</p>
+
+<p><strong>包装策略 - <em> 对于 Transformer，使用 Transformer 包装策略</em></strong></p>
+
+<p>首个性能优化是利用 FSDP Transformer 包装器对 Transformer 模型进行优化。</p>
+
+<p>预定义的包装策略之一是 <code class="language-plaintext highlighter-rouge"> 基于大小的自动包装策略 </code>。使用 <code class="language-plaintext highlighter-rouge"> 基于大小的自动包装策略 </code>，FSDP 将从底部到顶部遍历模块结构，一旦当前单元的参数数量达到大小策略中指定的 <code class="language-plaintext highlighter-rouge">min_num_params</code>（默认为 1e8，即 100M），就会创建一个新的 FSDP 单元。如果无法将模块创建为 FSDP 单元，FSDP 将继续检查其父模块。这种基于大小的包装策略可能不适合某些模型结构，PyTorch 分布式团队正在积极开发下一个版本的新默认包装策略，该策略基于大小和模块执行顺序，用户可以简单地调整大小以实现优化的性能。</p>
+
+<p>在当前版本中，您可以通过使用“transformer wrapper”来显著提高运行 Transformer 模型的性能。您需要提供适合您模型的适当层类。这里的层类是包含多头注意力和前馈网络的类。</p>
+
+<p>FSDP 将围绕层类形成 FSDP 单元，而不是基于参数大小的任意断点。通过在均匀重复于 transformer 中的层类周围分片模型，FSDP 可以创建更平衡计算和通信重叠的均匀 FSDP 单元。相比之下，基于大小的包装可能会为模型产生非常不均匀或倾斜的碎片，从而导致计算与通信重叠不匹配。如前所述，FSDP 高性能的主要驱动因素是通信和计算的叠加，因此 Transformer 包装器提供了改进的性能。请注意，Transformer 包装器也可以用于非 Transformer 模型，如果这些模型有一个均匀层的列表。</p>
+
+<p>让我们比较在默认包装器和 transformer 包装器下运行 T5，3B 参数模型时的性能差异。</p>
+
+<p>对于默认包装，我们不需要采取任何行动——我们只需将模型传递给 FSDP，如下所示：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">FSDP</span><span class="p">(</span>
+      <span class="n">model</span><span class="p">,</span>
+      <span class="n">device_id</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">current_device</span><span class="p">(),</span>
+  <span class="p">)</span>
+</code></pre></div></div>
+
+<p>在这种情况下，FSDP 将简单地使用单个 FSDP 单元包装整个模型。</p>
+
+<p>在一块配备 8 个 GPU 的 NVIDIA A100-SXM4–40GB 上运行，我们能够达到 2.3 TFlops 和 95%的 GPU 内存利用率，批处理大小为 14。</p>
+
+<p>然而，由于 T5 是一个 Transformer 模型，我们最好利用这个模型的 Transformer 包装器。</p>
+
+<p>要使用它，我们需要隔离 Transformer 的层类，然后将其传递进去以创建我们的 Transformer 包装器。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">transformers.models.t5.modeling_t5</span> <span class="kn">import</span> <span class="n">T5Block</span>
+</code></pre></div></div>
+
+<p>现在我们可以创建我们的 Transformer 包装器：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">transformer_auto_wrapper_policy</span> <span class="o">=</span> <span class="n">functools</span><span class="p">.</span><span class="n">partial</span><span class="p">(</span>
+        <span class="n">transformer_auto_wrap_policy</span><span class="p">,</span>
+        <span class="n">transformer_layer_cls</span><span class="o">=</span><span class="p">{</span>
+            <span class="n">T5Block</span><span class="p">,</span>  <span class="c1"># &lt; ---- Your Transformer layer class
+</span>        <span class="p">},</span>
+    <span class="p">)</span>
+</code></pre></div></div>
+
+<p>我们的模型包装器准备就绪后，我们可以初始化 FSDP：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># invoke FSDP with your transformer wrapper policy:
+</span><span class="n">model</span> <span class="o">=</span> <span class="n">FSDP</span><span class="p">(</span>
+        <span class="n">model</span><span class="p">,</span>
+        <span class="n">auto_wrap_policy</span><span class="o">=</span><span class="n">transformer_auto_wrapper_policy</span><span class="p">,</span>
+        <span class="n">device_id</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">current_device</span><span class="p">(),</span>  <span class="c1"># streaming init
+</span>    <span class="p">)</span>
+</code></pre></div></div>
+
+<p>运行这个包装后的模型，我们可以看到一些显著的性能提升。我们可以拟合近两倍的批大小，达到 28，并且由于更好的内存和通信效率，我们看到了 TFlops 从 2.3 增加到 5.07。</p>
+
+<p>因此，由于向 FSDP 提供了更多的模型信息，我们的训练吞吐量提高了超过 200%（2.19 倍）！变压器包装策略导致 FSDP 单元更加精细和平衡，每个单元都持有一个层类，这导致了更有效的通信-计算重叠。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_9.png" width="70%">
+</p>
+
+<p><em>上图：基于包装器类型的 TFlops 图形比较</em></p>
+
+<p>如果你正在训练 Transformer 模型，使用 transformer 包装器配置你的训练以使用 FSDP 是非常有利的。有关如何隔离你的层类的详细信息，请参阅我们关于 Transformer 包装的深入视频<a href="https://www.youtube.com/watch?v=HQeKwCsnH4k">这里 </a>，我们将展示多个 Transformer，并指出层类所在的位置。</p>
+
+<p><strong>混合精度 - <em> 如果你有 Ampere 架构的 GPU，请使用 BF16</em></strong></p>
+
+<p>FSDP 支持灵活的混合精度策略，这让你可以细粒度地控制参数、梯度和缓冲区数据类型。这让你可以轻松地利用 BFloat16 或 FP16，将训练速度提高高达 70%。</p>
+
+<p>*注意，BFloat16 仅在 Ampere 类型的 GPU 上可用。在 AWS 上，这可以通过 p4dn 和 g5 实例获得。</p>
+
+<p>通过比较，我们可以展示在 8B DeepVit 模型上，经过完全调优的 BFloat16 与 FP32 相比，速度提升了 77%。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_10.png" width="70%">
+</p>
+
+<p>我们使用 BFloat16 在微调 3B HuggingFace T5 模型时获得了更大的加速，如图所示。我们观察到，由于精度较低，BFloat16 在最初的几个 epoch 中验证损失略低于 FP32，但它能够赶上并最终达到与 FP32 相同的准确率。</p>
+
+<p align="center">
+<img src="/assets/images/largeblog_index_10a.png" width="70%">
+</p>
+
+<p>要使用混合精度，我们需要创建一个包含所需数据类型的策略，并在 FSDP 初始化时传入。</p>
+
+<p>要创建我们的策略，我们需要导入 MixedPrecision 类，然后使用自定义类定义我们的自定义策略：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.distributed.fsdp</span> <span class="kn">import</span> <span class="n">MixedPrecision</span>
+<span class="n">bfSixteen</span> <span class="o">=</span> <span class="n">MixedPrecision</span><span class="p">(</span>
+   <span class="n">param_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">bfloat16</span><span class="p">,</span>
+   <span class="c1"># Gradient communication precision.
+</span>   <span class="n">reduce_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">bfloat16</span><span class="p">,</span>
+   <span class="c1"># Buffer precision.
+</span>   <span class="n">buffer_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">bfloat16</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">FSDP</span><span class="p">(</span>
+       <span class="n">model</span><span class="p">,</span>
+       <span class="n">auto_wrap_policy</span><span class="o">=</span><span class="n">transformer_auto_wrapper_policy</span><span class="p">,</span>
+       <span class="n">mixed_precision</span><span class="o">=</span><span class="n">bfloatPolicy</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>您可以根据喜好混合匹配参数、梯度和缓冲区的精度：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">comboPolicy</span> <span class="o">=</span> <span class="n">MixedPrecision</span><span class="p">(</span>
+        <span class="c1"># Param precision
+</span>        <span class="n">param_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">bfloat16</span><span class="p">,</span>
+        <span class="c1"># Gradient communication precision.
+</span>        <span class="n">reduce_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">float32</span><span class="p">,</span>
+        <span class="c1"># Buffer precision.
+</span>        <span class="n">buffer_dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">float32</span><span class="p">,</span>
+    <span class="p">)</span>
+</code></pre></div></div>
+
+<p>对于使用 FP16 进行训练，您还需要使用 ShardedGradScaler，我们将在后续文章中介绍。对于 BFloat16，它是一个即插即用的替代品。</p>
+
+<p><strong>任意精度优化器 - <em> 超越混合精度，实现全 BF16 训练</em></strong></p>
+
+<p>混合精度训练，无论是在 FSDP 还是其他地方，都保持工作权重在降低的数据类型（BF16 或 FP16）中，同时保持主权重在完整的 FP32 中。主权重使用 FP32 的原因是，纯 BF16 运行会导致“权重停滞”，由于精度较低，非常小的权重更新会丢失，并且精度随着时间的推移而平坦，而 FP32 权重可以继续从这些小的更新中改进。</p>
+
+<p>为了解决这个困境，我们可以使用 TorchDistX（Torch 分布式实验）中提供的新的 AnyPrecision 优化器，它允许您在纯 BF16 而不是 FP32 中成功训练并保持主权重。此外，与通常在 FP32 中存储优化器状态不同，AnyPrecision 还能够以纯 BF16 维护状态。</p>
+
+<p>AnyPrecision 通过维护一个额外的缓冲区来跟踪权重更新过程中丢失的精度，并在下一次更新时重新应用，从而有效地解决了权重停滞问题，而无需 FP32。</p>
+
+<p>为了比较使用 AnyPrecision 进行纯 BF16 训练的吞吐量增益，我们使用 FSDP 在 T5 11B 模型上进行了实验，包括常规 FP32 训练、混合精度训练（BF16）以及使用 AnyPrecision 优化器在 3 个节点上进行的纯 BF16 训练，如前所述。</p>
+
+<p style="text-align:center">
+<img src="/assets/images/largeblog_index_11.png" width="70%">
+</p>
+
+<p>如上图所示，使用 AnyPrecision 和纯 BF16 进行训练的吞吐量比混合精度提高了 2 倍，比 FP32 提高了 20 多倍。</p>
+
+<p>潜在的权衡是最终准确性的影响——在我们测试的案例中，由于略微降低的精度带来的正则化效应，准确度与 FP32 相当甚至更好，但您的结果可能会有所不同。</p>
+
+<p>AnyPrecision 优化器可供您测试，<a href="https://github.com/pytorch/torchdistx"> 请点击此处 </a>，并且是 AdamW 优化器的直接替代品。</p>
+
+<p><strong>激活检查点——<em> 通过牺牲计算来换取内存，从而提高吞吐量</em></strong></p>
+
+<p style="text-align:center">
+<img src="/assets/images/largeblog_index_12.png" width="70%">
+</p>
+
+<p><strong>FSDP 支持在模型分片后进行激活检查点，并且易于实现。上图显示了使用激活检查点实现的约 4 倍吞吐量提升</strong></p>
+
+<p>激活检查点是在正向传播过程中释放中间激活，并留下一个占位符。这通常可以使可用的 GPU 内存增加 30%以上。</p>
+
+<p>然而，在反向传播过程中，这些之前移除的中间激活必须再次使用检查点中的信息重新计算（重复计算），但通过利用增加的 GPU 内存，可以增加批大小，从而使网络吞吐量显著提高。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># verify we have FSDP activation support ready by importing:
+</span><span class="kn">from</span> <span class="nn">torch.distributed.algorithms._checkpoint.checkpoint_wrapper</span> <span class="kn">import</span> <span class="p">(</span>
+   <span class="n">checkpoint_wrapper</span><span class="p">,</span>
+   <span class="n">CheckpointImpl</span><span class="p">,</span>
+   <span class="n">apply_activation_checkpointing_wrapper</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div></div>
+
+<p>实现激活检查点的步骤是首先导入 FSDP 检查点函数。我们需要声明我们的检查点包装器类型，它是非可重入的，并创建一个检查函数来识别要包装的层，如下所示：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">non_reentrant_wrapper</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span>
+    <span class="n">checkpoint_wrapper</span><span class="p">,</span>
+    <span class="n">offload_to_cpu</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span>
+    <span class="n">checkpoint_impl</span><span class="o">=</span><span class="n">CheckpointImpl</span><span class="p">.</span><span class="n">NO_REENTRANT</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">check_fn</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">submodule</span><span class="p">:</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">submodule</span><span class="p">,</span> <span class="n">T5Block</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">apply_activation_checkpointing_wrapper</span><span class="p">(</span>
+       <span class="n">model</span><span class="p">,</span> <span class="n">checkpoint_wrapper_fn</span><span class="o">=</span><span class="n">non_reentrant_wrapper</span><span class="p">,</span> <span class="n">check_fn</span><span class="o">=</span><span class="n">check_fn</span>
+   <span class="p">)</span>
+</code></pre></div></div>
+
+<p><em>重要提示 - 这必须在用 FSDP 初始化模型之后运行。</em></p>
+
+<p>然而，希望你已经看到了如何通过一些初始的 FSDP 选项调整对训练性能产生重大影响。</p>
+
+<p>在此基础上，我们将注意力从如何在 FSDP 中扩展，转向如何使用 AWS 扩展你的服务器硬件以支持 FSDP。</p>
+
+<p><strong>在 AWS 上使用 FSDP 进行大规模训练 - <em> 对于多节点，优先考虑高速网络</em></strong></p>
+
+<p>AWS 提供了一些服务，可用于使用 FSDP 进行分布式训练：<a href="https://aws.amazon.com/ec2/instance-types/#Accelerated_Computing">Amazon EC2 加速计算实例 </a>、AWS <a href="https://aws.amazon.com/hpc/parallelcluster/"> 并行集群 </a> 和 Amazon <a href="https://aws.amazon.com/sagemaker/features/?nc=sn&amp;loc=2">Sagemaker</a>。</p>
+
+<p>在本系列博客文章中，我们使用了 <a href="https://aws.amazon.com/ec2/instance-types/p4/">Amazon EC2 p4d</a> 实例的单实例多 GPU 配置和多实例配置，使用 AWS <a href="https://aws.amazon.com/hpc/parallelcluster/">ParallelCluster</a> 和 SageMaker 来运行我们的训练任务。</p>
+
+<p>在这里，我们将具体关注 AWS ParallelCluster，并提供如何利用它进行训练的概述。</p>
+
+<p><strong>AWS ParallelCluster 配置</strong></p>
+
+<p>AWS ParallelCluster 是一个开源的集群管理工具，它使您能够轻松地在 AWS 上部署和管理高性能计算（HPC）集群。AWS ParallelCluster 使用 yaml 配置文件来配置所有必要的资源。它还支持多种实例类型、作业提交队列、共享文件系统如 <a href="https://aws.amazon.com/efs/?trk=3c5ce89c-8865-47a3-bec3-f6820351aa6d&amp;sc_channel=ps&amp;sc_campaign=acquisition&amp;sc_medium=ACQ-P|PS-GO|Non-Brand|Desktop|SU|Storage|Solution|US|EN|DSA&amp;ef_id=Cj0KCQjwuaiXBhCCARIsAKZLt3l6dtldpE152xuxTMa3mbUbaqtTXwsBdfDRIzCL8cw3NO5DO_y1vOgaAj1pEALw_wcB:G:s&amp;s_kwcid=AL!4422!3!579408162404!!!g!!">Amazon EFS</a>（NFS）或 <a href="https://aws.amazon.com/fsx/lustre/?refid=3c5ce89c-8865-47a3-bec3-f6820351aa6d" target="_blank">Amazon FSx for Lustre</a>，以及作业调度器如 AWS Batch 和 Slurm。</p>
+
+<p style="text-align:center">
+<img src="/assets/images/largeblog_index_13.png" width="70%">
+</p>
+
+<p><strong>集群工作流程</strong></p>
+
+<p>高级思想是拥有一个包含控制节点和计算节点的集群。实际的训练任务在计算节点上运行。在集群上运行训练任务的总体步骤如下：</p>
+
+<ol>
+  <li>设置 AWS ParallelCuster（我们将在下面讨论）</li>
+  <li>连接到控制节点，导入训练代码/设置环境。</li>
+  <li>从共享文件夹（FSx Lustre 驱动器）中拉取数据。</li>
+  <li>使用作业调度器（本例中为 Slurm）运行训练作业。</li>
+</ol>
+
+<p><strong>设置 AWS ParallelCluster。</strong></p>
+
+<p>设置 AWS ParallelCluster。</p>
+
+<ol>
+  <li>
+    <p><strong>部署网络栈。</strong> 此步骤是可选的，因为您可以使用账户默认的 VPC，并让 AWS ParallelCluster 为您创建子网和安全组。然而，我们更喜欢将所需的网络基础设施进行分区，并通过 CloudFormation 堆栈进行此部署。</p>
+
+    <p>由于我们部署了公共和私有子网，我们希望将它们创建在包含我们的目标实例的可用区中，在本例中为 p4d。我们通过以下 AWS CLI 命令咨询我们在该区域（us-east-1）的使用情况：</p>
+
+    <p><code class="language-plaintext highlighter-rouge">aws ec2 describe-instance-type-offerings --location-type availability-zone \ --filters Name=instance-type,Values=p4d.24xlarge --region us-east-1 --output table</code></p>
+
+    <p>我们看到包含 p4d 实例的三个可用区，我们在部署网络栈时选择其中一个（<code class="language-plaintext highlighter-rouge">us-east-1c</code>，您的可能不同）。这可以通过 AWS 控制台或 AWS CLI 完成。在我们的案例中，我们使用后者，如下所示</p>
+
+    <p><code class="language-plaintext highlighter-rouge">aws cloudformation create-stack --stack-name VPC-Large-Scale --capabilities CAPABILITY_IAM --template-body file://VPC-Large-Scale.yaml --parameters ParameterKey=SubnetsAZ,ParameterValue=us-east-1c</code></p>
+
+    <p>CloudFormation 将代表我们部署新的 VPC、子网、安全组和端点。完成后，您可以通过查询堆栈输出和值 <code class="language-plaintext highlighter-rouge">PublicSubnet</code> 和 <code class="language-plaintext highlighter-rouge">PrivateSubnet</code> 来检索公共和私有子网的 ID。</p>
+
+    <p>例如，使用 AWS CLI 对私有子网进行操作：</p>
+
+    <p><code class="language-plaintext highlighter-rouge">aws cloudformation describe-stacks --stack-name VPC-Large-Scale --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnet'].OutputValue" --output text</code></p>
+  </li>
+  <li>
+    <p><strong>创建 ParallelCluster，</strong> 集群配置文件指定了集群的资源。这些资源包括头节点、计算节点的实例类型、对 S3 存储桶的访问权限，以及我们的数据将存放的共享存储。我们将使用 Amazon FSx for Lustre，它提供了一种完全管理的共享存储服务，具有 <a href="https://en.wikipedia.org/wiki/Lustre_(file_system)">Lustre</a>。</p>
+
+    <p><a href="https://github.com/lessw2020/t5_11/blob/main/hpc-cluster/cluster.yaml">这里</a>是一个集群配置文件的示例。我们可以使用 AWS ParallelCluster CLI 创建集群。请注意，需要将私有和公共子网 ID 替换为您之前获取的 ID。您可以使用 AWS ParallelCluster CLI 控制集群，例如启动、停止、暂停等。</p>
+
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pcluster create-cluster --cluster-name my-hpc-cluster --cluster-configuration cluster.yaml
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p><strong>SSH 连接到头节点 -</strong> 集群准备就绪后，我们可以使用 SSH 协议连接到头节点，将我们的训练代码拉取到共享存储中，并将数据放置在集群配置文件中指定的共享存储中。</p>
+
+    <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pcluster ssh --cluster-name cluster -i your-key_pair
+</code></pre></div>    </div>
+  </li>
+  <li>
+    <p><strong>现在我们已经有了数据和训练代码，可以启动 slurm 作业进行训练了。</strong> 这里是一个 <a href="https://github.com/lessw2020/t5_11/blob/main/hpc-cluster/modified-bert.slurm"> 示例 </a> slurm 脚本，用于使用 torchrun 启动作业。</p>
+  </li>
+</ol>
+
+<p>关于如何设置集群的更多细节超出了本文的范围，但是我们将有关于它的单独文章。</p>
+
+<p><strong>接下来是什么？</strong></p>
+
+<p>通过本文，我们提供了 FSDP 的概述以及它如何高效地扩展分布式 AI 训练。附带的流程图将帮助您检查讨论过的调整选项，例如 transformer 包装器和激活检查点。</p>
+
+<p>在接下来的文章中，我们将继续探讨 T5 模型，并深入探讨上述每个主题，特别是分片策略和其他优化，以提供更多见解和细节。目前，关于分片策略的一个良好参考可以在我们的视频教程<a href="https://www.youtube.com/watch?v=a3iW6Cggccw&amp;list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&amp;index=5">这里</a>找到：</p>
+
+<p>如果您有任何问题或发现任何问题，请联系作者 <a href="https://www.linkedin.com/in/less-wright-22b59017/">Less</a>、<a href="https://www.linkedin.com/in/hamid-nazeri/">Hamid</a> 和 <a href="https://www.linkedin.com/in/geetachauhan/">Geeta</a>，或在 <a href="https://github.com/pytorch/pytorch">PyTorch github</a> 上提交问题。</p>
+
+<p><strong>特别感谢：</strong></p>
+
+<p>感谢 Pytorch 分布式团队、Shen Li、Rohan Varma、Yanli Zhao、Andrew Gu、Anjali Sridhar、Ana Simoes、Pierre-Yves Aquilanti、Sundar Ranganathan 以及更广泛的 AWS 团队对我们提供基础设施和技术支持，以运行大规模实验。</p>
+
+<p><strong>资源：</strong></p>
+
+<p><em><a href="https://www.youtube.com/playlist?list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT">FSDP 视频系列</a></em></p>
+
+<p><em><a href="https://maskerprc.github.io/tutorials/intermediate/FSDP_tutorial.html">FSDP 入门</a></em></p>
+
+<p><em><a href="https://maskerprc.github.io/tutorials/intermediate/FSDP_adavnced_tutorial.html">FSDP 高级教程</a></em></p>
+
+<p><em><a href="https://pytorch.org/docs/stable/fsdp.html?highlight=fsdp#module-torch.distributed.fsdp">API 文档</a></em></p>
+
+<style>
+
+    td{
+        border: 1px solid black;
+    }
+    
+    article.pytorch-article table tr td:first-of-type{
+        padding: 0.3125rem;
+    }
+
+    article.pytorch-article table td {
+    padding: 0.3125rem;
+    }
+}
+
+</style>
+
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

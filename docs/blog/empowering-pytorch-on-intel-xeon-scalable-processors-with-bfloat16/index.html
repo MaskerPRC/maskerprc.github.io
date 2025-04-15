@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16 | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Overview
+
+Recent years, the growing complexity of AI models have been posing requirements on hardware for more and more compute capability. Reduced precision numeric format has been proposed to address this problem. Bfloat16 is a custom 16-bit floating point format for AI which consists of one sign bit, eight exponent bits, and seven mantissa bits. With the same dynamic range as float32, bfloat16 doesn’t require a special handling such as loss scaling. Therefore, bfloat16 is a drop-in replacement for float32 when running deep neural networks for both inference and training.
+
+The 3rd Gen Intel® Xeon® Scalable processor (codenamed Cooper Lake), is the first general purpose x86 CPU with native bfloat16 support. Three new bfloat16 instructions were introduced in Intel® Advanced Vector Extensions-512 (Intel® AVX-512): VCVTNE2PS2BF16, VCVTNEPS2BF16, and VDPBF16PS. The first two instructions perform conversion from float32 to bfloat16, and the last one performs a dot product of bfloat16 pairs. Bfloat16 theoretical compute throughput is doubled over float32 on Cooper Lake. On the next generation of Intel® Xeon® Scalable Processors, bfloat16 compute throughput will be further enhanced through Advanced Matrix Extensions (Intel® AMX) instruction set extension.
+
+Intel and Meta previously collaborated to enable bfloat16 on PyTorch, and the related work was published in an earlier blog during launch of Cooper Lake. In that blog, we introduced the hardware advancement for native bfloat16 support and showcased a performance boost of 1.4x to 1.6x of bfloat16 over float32 from DLRM, ResNet-50 and ResNext-101-32x4d.
+
+In this blog, we will introduce the latest software enhancement on bfloat16 in PyTorch 1.12, which would apply to much broader scope of user scenarios and showcase even higher performance boost.
+
+Native Level Optimization on Bfloat16
+
+On PyTorch CPU bfloat16 path, the compute intensive operators, e.g., convolution, linear and bmm, use oneDNN (oneAPI Deep Neural Network Library) to achieve optimal performance on Intel CPUs with AVX512_BF16 or AMX support. The other operators,  such as tensor operators and neural network operators, are optimized at PyTorch native level. We have enlarged bfloat16 kernel level optimizations to majority of operators on dense tensors, both inference and training applicable (sparse tensor bfloat16 support will be covered in future work), specifically:
+
+
+  Bfloat16 vectorization: Bfloat16 is stored as unsigned 16-bit integer, which requires it to be casted to float32 for arithmetic operations such as add, mul, etc. Specifically, each bfloat16 vector will be converted to two float32 vectors, processed accordingly and then converted back. While for non-arithmetic operations such as cat, copy, etc., it is a straight memory copy and no data type conversion will be involved.
+  Bfloat16 reduction: Reduction on bfloat16 data uses float32 as accumulation type to guarantee numerical stability, e.g., sum, BatchNorm2d, MaxPool2d, etc.
+  Channels Last optimization: For vision models, Channels Last is the preferable memory format over Channels First from performance perspective. We have implemented fully optimized CPU kernels for all the commonly used CV modules on channels last memory format, taking care of both float32 and bfloat16.
+
+
+Run Bfloat16 with Auto Mixed Precision
+
+To run model on bfloat16, typically user can either explicitly convert the data and model to bfloat16, for example:
+
+# with explicit conversion
+input = input.to(dtype=torch.bfloat16)
+model = model.to(dtype=torch.bfloat16)
+
+
+or utilize torch.amp (Automatic Mixed Precision) package. The autocast instance serves as context managers or decorators that allow regions of your script to run in mixed precision, for example:
+
+# with AMP
+with torch.autocast(device_type=" cpu",="" dtype="torch.bfloat16):" output="model(input)" generally,="" the="" explicit="" conversion="" approach="" and="" amp="" have="" similar="" performance.="" even="" though,="" we="" recommend="" run="" bfloat16="" models="" with="" amp,="" because:="" better="" user="" experience="" automatic="" fallback:="" if="" your="" script="" includes="" operators="" that="" don’t="" support,="" autocast="" will="" implicitly="" convert="" them="" back="" to="" float32="" while="" converted="" model="" give="" a="" runtime="" error.="" mixed="" data="" type="" for="" activation="" parameters:="" unlike="" which="" converts="" all="" parameters="" bfloat16,="" mode="" in="" type.="" be="" specific,="" input="" kept="" parameters,="" e.g.,="" weight="" bias,="" float32.="" of="" help="" improve="" performance="" maintaining="" accuracy.="" gains="" benchmarked="" inference="" torchvision="" on="" intel®="" xeon®="" platinum="" 8380h="" cpu="" @="" 2.90ghz="" (codenamed="" cooper="" lake),="" single="" instance="" per="" socket="" (batch="" size="2" x="" number="" physical="" cores).="" results="" show="" has="" 1.4x="" 2.2x="" gain="" over="" boost="" primarily="" comes="" from="" 3="" aspects:="" compute="" intensive="" take="" advantage="" new="" native="" instruction="" vdpbf16ps="" doubles="" hardware="" throughput.="" only="" half="" memory="" footprint="" float32,="" so="" theoretically="" bandwidth="" twice="" faster.="" channels="" last,="" intentionally="" keep="" same="" parallelization="" scheme="" format="" aware="" (can’t="" do="" this="" first="" though),="" increases="" locality="" when="" passing="" each="" layer’s="" next.="" basically,="" it="" keeps="" closer="" cores="" would="" reside="" cache="" anyway.="" higher="" hit="" rate="" compared="" such="" scenarios="" due="" smaller="" footprint.="" conclusion="" &amp;="" future="" work="" blog,="" introduced="" recent="" software="" optimizations="" pytorch="" 1.12.="" 3rd="" gen="" scalable="" processor="" models.="" further="" improvement="" is="" expected="" next="" generation="" processors="" amx="" support.="" though="" blog="" collected="" models,="" benefit="" broad="" across="" topologies.="" continue="" extend="" optimization="" effort="" broader="" scope="" future!="" acknowledgement="" presented="" joint="" meta="" intel="" team.="" special="" thanks="" vitaly="" fedyunin="" wei="" who="" spent="" precious="" time="" gave="" substantial="" assistance!="" together="" made="" one="" more="" step="" path="" improving="" eco="" system.="" reference="" numerical="" https:="" pytorch.org="" docs="" master="" amp.html#torch.autocast="" facebook="" accelerate="" deep="" learning="" boost’s="" capability="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/\assets\images\empowering-pytorch-on-intel-xeon-scalable-processors-with-bfloat16.png">
+  <meta name="twitter:image" content="http://localhost:4000/\assets\images\empowering-pytorch-on-intel-xeon-scalable-processors-with-bfloat16.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16">
+<meta property="og:description" content="Overview
+
+Recent years, the growing complexity of AI models have been posing requirements on hardware for more and more compute capability. Reduced precision numeric format has been proposed to address this problem. Bfloat16 is a custom 16-bit floating point format for AI which consists of one sign bit, eight exponent bits, and seven mantissa bits. With the same dynamic range as float32, bfloat16 doesn’t require a special handling such as loss scaling. Therefore, bfloat16 is a drop-in replacement for float32 when running deep neural networks for both inference and training.
+
+The 3rd Gen Intel® Xeon® Scalable processor (codenamed Cooper Lake), is the first general purpose x86 CPU with native bfloat16 support. Three new bfloat16 instructions were introduced in Intel® Advanced Vector Extensions-512 (Intel® AVX-512): VCVTNE2PS2BF16, VCVTNEPS2BF16, and VDPBF16PS. The first two instructions perform conversion from float32 to bfloat16, and the last one performs a dot product of bfloat16 pairs. Bfloat16 theoretical compute throughput is doubled over float32 on Cooper Lake. On the next generation of Intel® Xeon® Scalable Processors, bfloat16 compute throughput will be further enhanced through Advanced Matrix Extensions (Intel® AMX) instruction set extension.
+
+Intel and Meta previously collaborated to enable bfloat16 on PyTorch, and the related work was published in an earlier blog during launch of Cooper Lake. In that blog, we introduced the hardware advancement for native bfloat16 support and showcased a performance boost of 1.4x to 1.6x of bfloat16 over float32 from DLRM, ResNet-50 and ResNext-101-32x4d.
+
+In this blog, we will introduce the latest software enhancement on bfloat16 in PyTorch 1.12, which would apply to much broader scope of user scenarios and showcase even higher performance boost.
+
+Native Level Optimization on Bfloat16
+
+On PyTorch CPU bfloat16 path, the compute intensive operators, e.g., convolution, linear and bmm, use oneDNN (oneAPI Deep Neural Network Library) to achieve optimal performance on Intel CPUs with AVX512_BF16 or AMX support. The other operators,  such as tensor operators and neural network operators, are optimized at PyTorch native level. We have enlarged bfloat16 kernel level optimizations to majority of operators on dense tensors, both inference and training applicable (sparse tensor bfloat16 support will be covered in future work), specifically:
+
+
+  Bfloat16 vectorization: Bfloat16 is stored as unsigned 16-bit integer, which requires it to be casted to float32 for arithmetic operations such as add, mul, etc. Specifically, each bfloat16 vector will be converted to two float32 vectors, processed accordingly and then converted back. While for non-arithmetic operations such as cat, copy, etc., it is a straight memory copy and no data type conversion will be involved.
+  Bfloat16 reduction: Reduction on bfloat16 data uses float32 as accumulation type to guarantee numerical stability, e.g., sum, BatchNorm2d, MaxPool2d, etc.
+  Channels Last optimization: For vision models, Channels Last is the preferable memory format over Channels First from performance perspective. We have implemented fully optimized CPU kernels for all the commonly used CV modules on channels last memory format, taking care of both float32 and bfloat16.
+
+
+Run Bfloat16 with Auto Mixed Precision
+
+To run model on bfloat16, typically user can either explicitly convert the data and model to bfloat16, for example:
+
+# with explicit conversion
+input = input.to(dtype=torch.bfloat16)
+model = model.to(dtype=torch.bfloat16)
+
+
+or utilize torch.amp (Automatic Mixed Precision) package. The autocast instance serves as context managers or decorators that allow regions of your script to run in mixed precision, for example:
+
+# with AMP
+with torch.autocast(device_type=" cpu",="" dtype="torch.bfloat16):" output="model(input)" generally,="" the="" explicit="" conversion="" approach="" and="" amp="" have="" similar="" performance.="" even="" though,="" we="" recommend="" run="" bfloat16="" models="" with="" amp,="" because:="" better="" user="" experience="" automatic="" fallback:="" if="" your="" script="" includes="" operators="" that="" don’t="" support,="" autocast="" will="" implicitly="" convert="" them="" back="" to="" float32="" while="" converted="" model="" give="" a="" runtime="" error.="" mixed="" data="" type="" for="" activation="" parameters:="" unlike="" which="" converts="" all="" parameters="" bfloat16,="" mode="" in="" type.="" be="" specific,="" input="" kept="" parameters,="" e.g.,="" weight="" bias,="" float32.="" of="" help="" improve="" performance="" maintaining="" accuracy.="" gains="" benchmarked="" inference="" torchvision="" on="" intel®="" xeon®="" platinum="" 8380h="" cpu="" @="" 2.90ghz="" (codenamed="" cooper="" lake),="" single="" instance="" per="" socket="" (batch="" size="2" x="" number="" physical="" cores).="" results="" show="" has="" 1.4x="" 2.2x="" gain="" over="" boost="" primarily="" comes="" from="" 3="" aspects:="" compute="" intensive="" take="" advantage="" new="" native="" instruction="" vdpbf16ps="" doubles="" hardware="" throughput.="" only="" half="" memory="" footprint="" float32,="" so="" theoretically="" bandwidth="" twice="" faster.="" channels="" last,="" intentionally="" keep="" same="" parallelization="" scheme="" format="" aware="" (can’t="" do="" this="" first="" though),="" increases="" locality="" when="" passing="" each="" layer’s="" next.="" basically,="" it="" keeps="" closer="" cores="" would="" reside="" cache="" anyway.="" higher="" hit="" rate="" compared="" such="" scenarios="" due="" smaller="" footprint.="" conclusion="" &amp;="" future="" work="" blog,="" introduced="" recent="" software="" optimizations="" pytorch="" 1.12.="" 3rd="" gen="" scalable="" processor="" models.="" further="" improvement="" is="" expected="" next="" generation="" processors="" amx="" support.="" though="" blog="" collected="" models,="" benefit="" broad="" across="" topologies.="" continue="" extend="" optimization="" effort="" broader="" scope="" future!="" acknowledgement="" presented="" joint="" meta="" intel="" team.="" special="" thanks="" vitaly="" fedyunin="" wei="" who="" spent="" precious="" time="" gave="" substantial="" assistance!="" together="" made="" one="" more="" step="" path="" improving="" eco="" system.="" reference="" numerical="" https:="" pytorch.org="" docs="" master="" amp.html#torch.autocast="" facebook="" accelerate="" deep="" learning="" boost’s="" capability="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16">
+<meta name="twitter:description" content="Overview
+
+Recent years, the growing complexity of AI models have been posing requirements on hardware for more and more compute capability. Reduced precision numeric format has been proposed to address this problem. Bfloat16 is a custom 16-bit floating point format for AI which consists of one sign bit, eight exponent bits, and seven mantissa bits. With the same dynamic range as float32, bfloat16 doesn’t require a special handling such as loss scaling. Therefore, bfloat16 is a drop-in replacement for float32 when running deep neural networks for both inference and training.
+
+The 3rd Gen Intel® Xeon® Scalable processor (codenamed Cooper Lake), is the first general purpose x86 CPU with native bfloat16 support. Three new bfloat16 instructions were introduced in Intel® Advanced Vector Extensions-512 (Intel® AVX-512): VCVTNE2PS2BF16, VCVTNEPS2BF16, and VDPBF16PS. The first two instructions perform conversion from float32 to bfloat16, and the last one performs a dot product of bfloat16 pairs. Bfloat16 theoretical compute throughput is doubled over float32 on Cooper Lake. On the next generation of Intel® Xeon® Scalable Processors, bfloat16 compute throughput will be further enhanced through Advanced Matrix Extensions (Intel® AMX) instruction set extension.
+
+Intel and Meta previously collaborated to enable bfloat16 on PyTorch, and the related work was published in an earlier blog during launch of Cooper Lake. In that blog, we introduced the hardware advancement for native bfloat16 support and showcased a performance boost of 1.4x to 1.6x of bfloat16 over float32 from DLRM, ResNet-50 and ResNext-101-32x4d.
+
+In this blog, we will introduce the latest software enhancement on bfloat16 in PyTorch 1.12, which would apply to much broader scope of user scenarios and showcase even higher performance boost.
+
+Native Level Optimization on Bfloat16
+
+On PyTorch CPU bfloat16 path, the compute intensive operators, e.g., convolution, linear and bmm, use oneDNN (oneAPI Deep Neural Network Library) to achieve optimal performance on Intel CPUs with AVX512_BF16 or AMX support. The other operators,  such as tensor operators and neural network operators, are optimized at PyTorch native level. We have enlarged bfloat16 kernel level optimizations to majority of operators on dense tensors, both inference and training applicable (sparse tensor bfloat16 support will be covered in future work), specifically:
+
+
+  Bfloat16 vectorization: Bfloat16 is stored as unsigned 16-bit integer, which requires it to be casted to float32 for arithmetic operations such as add, mul, etc. Specifically, each bfloat16 vector will be converted to two float32 vectors, processed accordingly and then converted back. While for non-arithmetic operations such as cat, copy, etc., it is a straight memory copy and no data type conversion will be involved.
+  Bfloat16 reduction: Reduction on bfloat16 data uses float32 as accumulation type to guarantee numerical stability, e.g., sum, BatchNorm2d, MaxPool2d, etc.
+  Channels Last optimization: For vision models, Channels Last is the preferable memory format over Channels First from performance perspective. We have implemented fully optimized CPU kernels for all the commonly used CV modules on channels last memory format, taking care of both float32 and bfloat16.
+
+
+Run Bfloat16 with Auto Mixed Precision
+
+To run model on bfloat16, typically user can either explicitly convert the data and model to bfloat16, for example:
+
+# with explicit conversion
+input = input.to(dtype=torch.bfloat16)
+model = model.to(dtype=torch.bfloat16)
+
+
+or utilize torch.amp (Automatic Mixed Precision) package. The autocast instance serves as context managers or decorators that allow regions of your script to run in mixed precision, for example:
+
+# with AMP
+with torch.autocast(device_type=" cpu",="" dtype="torch.bfloat16):" output="model(input)" generally,="" the="" explicit="" conversion="" approach="" and="" amp="" have="" similar="" performance.="" even="" though,="" we="" recommend="" run="" bfloat16="" models="" with="" amp,="" because:="" better="" user="" experience="" automatic="" fallback:="" if="" your="" script="" includes="" operators="" that="" don’t="" support,="" autocast="" will="" implicitly="" convert="" them="" back="" to="" float32="" while="" converted="" model="" give="" a="" runtime="" error.="" mixed="" data="" type="" for="" activation="" parameters:="" unlike="" which="" converts="" all="" parameters="" bfloat16,="" mode="" in="" type.="" be="" specific,="" input="" kept="" parameters,="" e.g.,="" weight="" bias,="" float32.="" of="" help="" improve="" performance="" maintaining="" accuracy.="" gains="" benchmarked="" inference="" torchvision="" on="" intel®="" xeon®="" platinum="" 8380h="" cpu="" @="" 2.90ghz="" (codenamed="" cooper="" lake),="" single="" instance="" per="" socket="" (batch="" size="2" x="" number="" physical="" cores).="" results="" show="" has="" 1.4x="" 2.2x="" gain="" over="" boost="" primarily="" comes="" from="" 3="" aspects:="" compute="" intensive="" take="" advantage="" new="" native="" instruction="" vdpbf16ps="" doubles="" hardware="" throughput.="" only="" half="" memory="" footprint="" float32,="" so="" theoretically="" bandwidth="" twice="" faster.="" channels="" last,="" intentionally="" keep="" same="" parallelization="" scheme="" format="" aware="" (can’t="" do="" this="" first="" though),="" increases="" locality="" when="" passing="" each="" layer’s="" next.="" basically,="" it="" keeps="" closer="" cores="" would="" reside="" cache="" anyway.="" higher="" hit="" rate="" compared="" such="" scenarios="" due="" smaller="" footprint.="" conclusion="" &amp;="" future="" work="" blog,="" introduced="" recent="" software="" optimizations="" pytorch="" 1.12.="" 3rd="" gen="" scalable="" processor="" models.="" further="" improvement="" is="" expected="" next="" generation="" processors="" amx="" support.="" though="" blog="" collected="" models,="" benefit="" broad="" across="" topologies.="" continue="" extend="" optimization="" effort="" broader="" scope="" future!="" acknowledgement="" presented="" joint="" meta="" intel="" team.="" special="" thanks="" vitaly="" fedyunin="" wei="" who="" spent="" precious="" time="" gave="" substantial="" assistance!="" together="" made="" one="" more="" step="" path="" improving="" eco="" system.="" reference="" numerical="" https:="" pytorch.org="" docs="" master="" amp.html#torch.autocast="" facebook="" accelerate="" deep="" learning="" boost’s="" capability="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年8月16日</p>
+            <h1>
+                <a class="blog-title">在 Intel® Xeon® 可扩展处理器上赋能 PyTorch 使用 Bfloat16</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 马明飞（英特尔），维塔利·费季努宁（Meta），魏伟（Meta）著</p>
+                    <h2 id="overview">概述</h2>
+
+<p>近年来，人工智能模型日益复杂，对硬件的计算能力提出了更高的要求。为了解决这个问题，提出了降低精度的数值格式。Bfloat16 是一种针对人工智能的定制 16 位浮点格式，它包含一个符号位、八个指数位和七个尾数位。与 float32 具有相同的动态范围，bfloat16 在运行深度神经网络进行推理和训练时不需要特殊处理，如损失缩放。因此，bfloat16 可以直接替换 float32。</p>
+
+<p>第三代英特尔® 至强® 可扩展处理器（代号 Cooper Lake），是首款具有原生 bfloat16 支持的通用 x86 CPU。在英特尔® 高级矢量扩展 512（英特尔® AVX-512）中引入了三个新的 bfloat16 指令：VCVTNE2PS2BF16、VCVTNEPS2BF16 和 VDPBF16PS。前两个指令执行从 float32 到 bfloat16 的转换，最后一个指令执行 bfloat16 对的点积。在 Cooper Lake 上，bfloat16 的理论计算吞吐量是 float32 的两倍。在下一代英特尔® 至强® 可扩展处理器上，将通过高级矩阵扩展（英特尔® AMX）指令集扩展进一步增强 bfloat16 的计算吞吐量。</p>
+
+<p>英特尔和 Meta 之前合作，使 PyTorch 支持 bfloat16，相关工作在 Cooper Lake 发布期间的一篇<a href="https://community.intel.com/t5/Blogs/Tech-Innovation/Artificial-Intelligence-AI/Intel-and-Facebook-Accelerate-PyTorch-Performance-with-3rd-Gen/post/1335659">博客</a>中发表。在该博客中，我们介绍了对原生 bfloat16 支持的硬件进步，并展示了 DLRM、ResNet-50 和 ResNext-101-32x4d 在 bfloat16 上相对于 float32 的性能提升 1.4 倍至 1.6 倍。</p>
+
+<p>在这篇博客中，我们将介绍 PyTorch 1.12 中 bfloat16 的最新软件增强功能，这将适用于更广泛的用户场景，并展示更高的性能提升。</p>
+
+<h2 id="native-level-optimization-on-bfloat16">Bfloat16 的本地级优化</h2>
+
+<p>在 PyTorch CPU bfloat16 路径上，计算密集型算子，例如卷积、线性运算和 bmm，使用 oneDNN（oneAPI 深度神经网络库）在支持 AVX512_BF16 或 AMX 的 Intel CPU 上实现最佳性能。其他算子，如张量算子和神经网络算子，在 PyTorch 本地级别进行优化。我们已经将 bfloat16 内核级优化扩展到大多数密集张量算子，适用于推理和训练（稀疏张量 bfloat16 支持将在未来的工作中涵盖），具体如下：</p>
+
+<ul>
+  <li><strong>Bfloat16 向量化 </strong>：Bfloat16 以无符号 16 位整数形式存储，在进行加、乘等算术运算时需要将其转换为 float32。具体来说，每个 bfloat16 向量将被转换为两个 float32 向量，相应处理后再转换回来。而对于 cat、copy 等非算术运算，则是直接进行内存复制，不涉及数据类型转换。</li>
+  <li><strong>Bfloat16 降维 </strong>：对 bfloat16 数据的降维操作使用 float32 作为累加类型以保证数值稳定性，例如 sum、BatchNorm2d、MaxPool2d 等。</li>
+  <li><strong>通道最后优化 </strong>：从性能角度来看，对于视觉模型，Channels Last 比 Channels First 更优。我们为所有常用的 CV 模块在通道最后内存格式上实现了完全优化的 CPU 内核，同时考虑了 float32 和 bfloat16。</li>
+</ul>
+
+<h2 id="run-bfloat16-with-auto-mixed-precision">使用自动混合精度运行 Bfloat16</h2>
+
+<p>要在 bfloat16 上运行模型，通常用户可以选择显式地将数据和模型转换为 bfloat16，例如：</p>
+
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">#</span><span class="w"> </span>with explicit conversion
+<span class="go">input = input.to(dtype=torch.bfloat16)
+model = model.to(dtype=torch.bfloat16)
+</span></code></pre></div></div>
+
+<p>或者使用 torch.amp（自动混合精度）包。autocast 实例充当上下文管理器或装饰器，允许您的脚本部分以混合精度运行，例如：</p>
+
+<div class="language-console highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="gp">#</span><span class="w"> </span>with AMP
+<span class="go">with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+    output = model(input)
+</span></code></pre></div></div>
+
+<p>通常，显式转换方法和 AMP 方法具有相似的性能。尽管如此，我们建议使用 AMP 运行 bfloat16 模型，因为：</p>
+
+<ul>
+  <li>
+    <p><strong>更好的用户体验，自动回退 </strong>：如果您的脚本中包含不支持 bfloat16 的操作符，autocast 会隐式地将它们转换回 float32，而显式转换的模型将给出运行时错误。</p>
+  </li>
+  <li>
+    <p><strong>激活和参数的混合数据类型 </strong>：与将所有模型参数显式转换为 bfloat16 不同，AMP 模式将在混合数据类型下运行。具体来说，输入/输出将保持为 bfloat16，而参数（例如，权重/偏置）将保持为 float32。激活和参数的混合数据类型将有助于提高性能，同时保持准确性。</p>
+  </li>
+</ul>
+
+<h2 id="performance-gains">性能提升</h2>
+
+<p>我们在 Intel® Xeon® Platinum 8380H CPU @ 2.90GHz（代号 Cooper Lake）上对 TorchVision 模型的推理性能进行了基准测试，每个插槽实例一个（批大小=2 x 物理核心数）。结果显示，bfloat16 相对于 float32 具有 1.4 倍到 2.2 倍的性能提升。</p>
+
+<p align="center">
+  <img src="\assets\images\empowering-pytorch-on-intel-xeon-scalable-processors-with-bfloat16.png" width="100%">
+</p>
+
+<h2 id="the-performance-boost-of-bfloat16-over-float32-primarily-comes-from-3-aspects">bfloat16 相对于 float32 的性能提升主要来自以下三个方面：</h2>
+
+<ul>
+  <li>计算密集型算子利用了新的 bfloat16 原生指令 VDPBF16PS，将硬件计算吞吐量翻倍。</li>
+  <li>Bfloat16 的内存占用只有 float32 的一半，因此理论上内存带宽密集型的操作将快两倍。</li>
+  <li>在通道最后，我们故意为所有内存格式感知操作保持相同的并行化方案（在通道第一中无法这样做），这增加了将每一层的输出传递到下一层时的数据局部性。基本上，它将数据保持得更接近 CPU 核心，而数据本来就会驻留在缓存中。在这种情况下，由于内存占用更小，bfloat16 的缓存命中率将比 float32 更高。</li>
+</ul>
+
+<h2 id="conclusion--future-work">结论与未来工作</h2>
+
+<p>在这篇博客中，我们介绍了 PyTorch 1.12 中引入的 bfloat16 软件优化的最新进展。在 3 代英特尔® 至强® 可扩展处理器上的结果表明，bfloat16 在 TorchVision 模型上比 float32 有 1.4 倍到 2.2 倍的性能提升。预计在支持 AMX 指令的下一代英特尔® 至强® 可扩展处理器上会有进一步的改进。尽管本博客的性能数据是通过 TorchVision 模型收集的，但这一好处适用于所有拓扑结构。我们还将继续扩大 bfloat16 优化工作的范围，在未来涵盖更广泛的领域！</p>
+
+<h2 id="acknowledgement">致谢</h2>
+
+<p>本博客中展示的结果是 Meta 和 Intel PyTorch 团队共同努力的结果。特别感谢 Meta 的 Vitaly Fedyunin 和 Wei Wei，他们花费宝贵的时间并给予了实质性的帮助！我们一起在改善 PyTorch CPU 生态系统之路上迈出了新的一步！</p>
+
+<h2 id="reference">参考文献</h2>
+
+<ul>
+  <li><a href="https://cloud.google.com/tpu/docs/bfloat16?hl=en">bfloat16 数值格式</a></li>
+  <li><a href="https://pytorch.org/docs/master/amp.html#torch.autocast">https://pytorch.org/docs/master/amp.html#torch.autocast</a></li>
+  <li><a href="https://community.intel.com/t5/Blogs/Tech-Innovation/Artificial-Intelligence-AI/Intel-and-Facebook-Accelerate-PyTorch-Performance-with-3rd-Gen/post/1335659">英特尔和 Facebook 利用 3 代英特尔® 至强® 处理器和英特尔® 深度学习加速的新 BFloat16 功能提升 PyTorch 性能</a></li>
+</ul>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

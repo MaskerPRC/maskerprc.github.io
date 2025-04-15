@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Deep Learning Energy Measurement and Optimization | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="
+
+This post is authored by Jae-Won Chung, a PhD student at the University of Michigan and the lead of the ML.ENERGY Initiative.
+
+Deep learning consumes quite a bit of energy. For instance, training a single 200B LLM on AWS p4d instances consumed around 11.9 GWh (source: CIDR 2024 keynote), which is an amount that can single-handedly power more than a thousand average US households for a year.
+
+Zeus is an open-source toolbox for measuring and optimizing the energy consumption of deep learning workloads. Our goal is to make energy optimization based on accurate measurements as easy as possible for diverse deep learning workloads and setups by offering composable tools with minimal assumptions.
+
+Zeus largely provides two types of tools:
+
+
+  Programmatic and command line GPU energy measurement tools
+  Several energy optimization tools that find the best ML and/or GPU configurations
+
+
+Zeus can benefit those who would like to
+
+
+  measure and optimize their electricity cost
+  reduce heat dissipation from their GPUs (by lowering power draw)
+  report energy usage from research and development
+  reduce carbon footprint from electricity usage
+
+
+Part 1: Measuring Energy
+
+Just like performance optimization, accurate measurement is the basis of effective energy optimization. Popular proxies for estimating power consumption like the maximum power draw of the hardware can sometimes be vastly off compared to actual measurement.
+
+To make energy measurement as easy and transparent as possible, the core utility Zeus offers is the ZeusMonitor class. Let’s take a look at the actual snippet:
+
+from zeus.monitor import ZeusMonitor
+
+# All four GPUs are measured simultaneously.
+monitor = ZeusMonitor(gpu_indices=[0,1,2,3])
+
+# Measure total time and energy within the window.
+monitor.begin_window(" training")="" for="" e="" in="" range(100):="" #="" measurement="" windows="" can="" arbitrarily="" be="" overlapped.="" monitor.begin_window("epoch")="" x,="" y="" train_dataloader:="" y_hat="model(x)" loss="criterion(y," y_hat)="" loss.backward()="" optim.step()="" print(f"epoch="" {e}:="" {measurement.time}="" s,="" {measurement.total_energy}="" j")="" print(f"entire="" training:="" what="" you="" see="" above="" is="" a="" typical="" pytorch="" training="" loop="" which="" uses="" four="" gpus="" data="" parallel="" training.="" inside,="" we="" created="" an="" instance="" of="" zeusmonitor="" and="" passed="" list="" gpu="" indices="" to="" monitor.="" then,="" using="" the="" monitor,="" measure="" time="" energy="" consumption="" arbitrary="" execution="" within="" script="" by="" pairing="" calls="" begin_window="" end_window.="" multiple="" overlap="" nest="" ways="" without="" affecting="" each,="" as="" long="" their="" names="" are="" different.="" adds="" very="" little="" overhead="" –="" typically="" single="" digit="" milliseconds="" around="" window.="" this="" allows="" used="" various="" applications.="" instance:="" ml.energy="" leaderboard:="" first="" open-source="" benchmark="" on="" how="" much="" llm="" text="" generation="" consumes.="" colosseum:="" online="" service="" that="" lets="" users="" compare="" responses="" side-by-side="" based="" response="" quality="" consumption.="" our="" blog="" post="" deeper="" technical="" dive="" into="" accurate="" measurement.="" part="" 2:="" optimizing="" let="" me="" introduce="" two="" optimizers="" provided="" zeus.="" globalpowerlimitoptimizer="" allow="" configure="" its="" maximum="" power="" draw,="" called="" limit.="" typically,="" lower="" gpu’s="" limit="" from="" default="" maximum,="" computation="" may="" get="" slightly="" slower,="" but="" you’ll="" save="" disproportionately="" more="" energy.="" zeus="" automatically="" finds="" optimal="" globally="" across="" all="" gpus.="" zeus.monitor="" import="" zeus.optimizer.power_limit="" optimizer="" measures="" through="" zeusmonitor.="" monitor="ZeusMonitor(gpu_indices=[0,1,2,3])" plo="GlobalPowerLimitOptimizer(monitor)" plo.on_epoch_begin()="" plo.on_step_begin()="" plo.on_step_end()="" plo.on_epoch_end()="" familiar="" loop,="" have="" instantiated="" it="" zeusmonitor,="" sees="" just="" need="" know="" about="" progress="" (step="" epoch="" boundaries),="" will="" transparently="" do="" necessary="" profiling="" converge="" if="" you’re="" huggingface="" trainer="" or="" sfttrainer,="" integration="" even="" easier:="" hfglobalpowerlimitoptimizer="" actually="" auto-detects="" cuda_visible_devices.="" pl_optimizer="HFGlobalPowerLimitOptimizer(monitor)" pass="" callback.="" also="" works="" sfttrainer.="" model="model," train_dataset="train_dataset," ...,="" callbacks="[pl_optimizer]," )="" wraps="" so="" detects="" step="" boundaries.="" example="" integrations="" here,="" including="" running="" gemma="" 7b="" supervised="" fine-tuning="" with="" qlora.="" now,="" integrate="" optimizer,="" limit?="" different="" preferences="" regarding="" trading="" off="" energy,="" specify="" optimumselector="" (basically="" strategy="" pattern)="" express="" needs.="" built-in="" strategies="" selecting="" (="" globalpowerlimitoptimizer,="" time,="" maxslowdownconstraint,="" minimize="" while="" tolerating="" at="" most="" 10%="" slowdown.="" maxslowdownconstraint(factor="1.1)," some="" include="" “minimize="" time”="" (time,="" might="" still="" reduce="" since="" workloads="" exhibit="" almost="" no="" slowdown="" limits),="" energy”="" (energy),="" “somewhere="" between”="" (zeuscost),="" given="" slowdown”="" (maxslowdownconstraint).="" create="" own="" optimum="" selectors="" needed.="" pipelinefrequencyoptimizer="" pipeline="" frequency="" research="" paper="" perseus,="" latest="" work="" optimization="" large="" training,="" like="" gpt-3.="" perseus="" negligible="" throughput="" degradation.="" we’ll="" briefly="" talk="" how.="" visualization="" one="" iteration="" stage="" parallelism="" 1f1b="" schedule.="" each="" box="" either="" forward="" backward="" computation,="" colored="" key="" observation="" here="" when="" models="" partitioned="" stages,="" it’s="" difficult="" slice="" them="" perfectly="" equal="" sizes.="" leads="" boxes="" varying="" widths="" therefore="" idle="" between="" boxes.="" would="" notice="" those="" smaller="" run="" slower="" than="" wider="" overall="" critical="" path="" (blue="" line)="" not="" change="" all.="" that’s="" does.="" profiling,="" identifies="" figures="" out="" precise="" amount="" minimizes="" done="" correctly,="" computations="" slowed="" down="" consume="" less="" &amp;="" does="" change.="" guide="" started="" perseus!="" final="" words="" who="" on-premise="" compute,="" resulting="" electricity="" bill="" something="" easily="" overlooked.="" larger="" scale,="" bills,="" center="" delivery.="" thousands="" clusters,="" finding="" stable,="" affordable,="" sustainable="" sources="" centers="" becoming="" increasingly="" challenging.="" average="" consumption,="" help="" delivery="" challenge.="" zeus,="" hope="" take="" towards="" deep="" learning="" optimization.="" wondering="" where="" go="" here?="" couple="" helpful="" links:="" homepage="" documentation="" github="" repository="" usage="" examples="" initiative="" (i.e.,="" people="" building="" zeus)="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Deep Learning Energy Measurement and Optimization">
+<meta property="og:description" content="
+
+This post is authored by Jae-Won Chung, a PhD student at the University of Michigan and the lead of the ML.ENERGY Initiative.
+
+Deep learning consumes quite a bit of energy. For instance, training a single 200B LLM on AWS p4d instances consumed around 11.9 GWh (source: CIDR 2024 keynote), which is an amount that can single-handedly power more than a thousand average US households for a year.
+
+Zeus is an open-source toolbox for measuring and optimizing the energy consumption of deep learning workloads. Our goal is to make energy optimization based on accurate measurements as easy as possible for diverse deep learning workloads and setups by offering composable tools with minimal assumptions.
+
+Zeus largely provides two types of tools:
+
+
+  Programmatic and command line GPU energy measurement tools
+  Several energy optimization tools that find the best ML and/or GPU configurations
+
+
+Zeus can benefit those who would like to
+
+
+  measure and optimize their electricity cost
+  reduce heat dissipation from their GPUs (by lowering power draw)
+  report energy usage from research and development
+  reduce carbon footprint from electricity usage
+
+
+Part 1: Measuring Energy
+
+Just like performance optimization, accurate measurement is the basis of effective energy optimization. Popular proxies for estimating power consumption like the maximum power draw of the hardware can sometimes be vastly off compared to actual measurement.
+
+To make energy measurement as easy and transparent as possible, the core utility Zeus offers is the ZeusMonitor class. Let’s take a look at the actual snippet:
+
+from zeus.monitor import ZeusMonitor
+
+# All four GPUs are measured simultaneously.
+monitor = ZeusMonitor(gpu_indices=[0,1,2,3])
+
+# Measure total time and energy within the window.
+monitor.begin_window(" training")="" for="" e="" in="" range(100):="" #="" measurement="" windows="" can="" arbitrarily="" be="" overlapped.="" monitor.begin_window("epoch")="" x,="" y="" train_dataloader:="" y_hat="model(x)" loss="criterion(y," y_hat)="" loss.backward()="" optim.step()="" print(f"epoch="" {e}:="" {measurement.time}="" s,="" {measurement.total_energy}="" j")="" print(f"entire="" training:="" what="" you="" see="" above="" is="" a="" typical="" pytorch="" training="" loop="" which="" uses="" four="" gpus="" data="" parallel="" training.="" inside,="" we="" created="" an="" instance="" of="" zeusmonitor="" and="" passed="" list="" gpu="" indices="" to="" monitor.="" then,="" using="" the="" monitor,="" measure="" time="" energy="" consumption="" arbitrary="" execution="" within="" script="" by="" pairing="" calls="" begin_window="" end_window.="" multiple="" overlap="" nest="" ways="" without="" affecting="" each,="" as="" long="" their="" names="" are="" different.="" adds="" very="" little="" overhead="" –="" typically="" single="" digit="" milliseconds="" around="" window.="" this="" allows="" used="" various="" applications.="" instance:="" ml.energy="" leaderboard:="" first="" open-source="" benchmark="" on="" how="" much="" llm="" text="" generation="" consumes.="" colosseum:="" online="" service="" that="" lets="" users="" compare="" responses="" side-by-side="" based="" response="" quality="" consumption.="" our="" blog="" post="" deeper="" technical="" dive="" into="" accurate="" measurement.="" part="" 2:="" optimizing="" let="" me="" introduce="" two="" optimizers="" provided="" zeus.="" globalpowerlimitoptimizer="" allow="" configure="" its="" maximum="" power="" draw,="" called="" limit.="" typically,="" lower="" gpu’s="" limit="" from="" default="" maximum,="" computation="" may="" get="" slightly="" slower,="" but="" you’ll="" save="" disproportionately="" more="" energy.="" zeus="" automatically="" finds="" optimal="" globally="" across="" all="" gpus.="" zeus.monitor="" import="" zeus.optimizer.power_limit="" optimizer="" measures="" through="" zeusmonitor.="" monitor="ZeusMonitor(gpu_indices=[0,1,2,3])" plo="GlobalPowerLimitOptimizer(monitor)" plo.on_epoch_begin()="" plo.on_step_begin()="" plo.on_step_end()="" plo.on_epoch_end()="" familiar="" loop,="" have="" instantiated="" it="" zeusmonitor,="" sees="" just="" need="" know="" about="" progress="" (step="" epoch="" boundaries),="" will="" transparently="" do="" necessary="" profiling="" converge="" if="" you’re="" huggingface="" trainer="" or="" sfttrainer,="" integration="" even="" easier:="" hfglobalpowerlimitoptimizer="" actually="" auto-detects="" cuda_visible_devices.="" pl_optimizer="HFGlobalPowerLimitOptimizer(monitor)" pass="" callback.="" also="" works="" sfttrainer.="" model="model," train_dataset="train_dataset," ...,="" callbacks="[pl_optimizer]," )="" wraps="" so="" detects="" step="" boundaries.="" example="" integrations="" here,="" including="" running="" gemma="" 7b="" supervised="" fine-tuning="" with="" qlora.="" now,="" integrate="" optimizer,="" limit?="" different="" preferences="" regarding="" trading="" off="" energy,="" specify="" optimumselector="" (basically="" strategy="" pattern)="" express="" needs.="" built-in="" strategies="" selecting="" (="" globalpowerlimitoptimizer,="" time,="" maxslowdownconstraint,="" minimize="" while="" tolerating="" at="" most="" 10%="" slowdown.="" maxslowdownconstraint(factor="1.1)," some="" include="" “minimize="" time”="" (time,="" might="" still="" reduce="" since="" workloads="" exhibit="" almost="" no="" slowdown="" limits),="" energy”="" (energy),="" “somewhere="" between”="" (zeuscost),="" given="" slowdown”="" (maxslowdownconstraint).="" create="" own="" optimum="" selectors="" needed.="" pipelinefrequencyoptimizer="" pipeline="" frequency="" research="" paper="" perseus,="" latest="" work="" optimization="" large="" training,="" like="" gpt-3.="" perseus="" negligible="" throughput="" degradation.="" we’ll="" briefly="" talk="" how.="" visualization="" one="" iteration="" stage="" parallelism="" 1f1b="" schedule.="" each="" box="" either="" forward="" backward="" computation,="" colored="" key="" observation="" here="" when="" models="" partitioned="" stages,="" it’s="" difficult="" slice="" them="" perfectly="" equal="" sizes.="" leads="" boxes="" varying="" widths="" therefore="" idle="" between="" boxes.="" would="" notice="" those="" smaller="" run="" slower="" than="" wider="" overall="" critical="" path="" (blue="" line)="" not="" change="" all.="" that’s="" does.="" profiling,="" identifies="" figures="" out="" precise="" amount="" minimizes="" done="" correctly,="" computations="" slowed="" down="" consume="" less="" &amp;="" does="" change.="" guide="" started="" perseus!="" final="" words="" who="" on-premise="" compute,="" resulting="" electricity="" bill="" something="" easily="" overlooked.="" larger="" scale,="" bills,="" center="" delivery.="" thousands="" clusters,="" finding="" stable,="" affordable,="" sustainable="" sources="" centers="" becoming="" increasingly="" challenging.="" average="" consumption,="" help="" delivery="" challenge.="" zeus,="" hope="" take="" towards="" deep="" learning="" optimization.="" wondering="" where="" go="" here?="" couple="" helpful="" links:="" homepage="" documentation="" github="" repository="" usage="" examples="" initiative="" (i.e.,="" people="" building="" zeus)="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Deep Learning Energy Measurement and Optimization">
+<meta name="twitter:description" content="
+
+This post is authored by Jae-Won Chung, a PhD student at the University of Michigan and the lead of the ML.ENERGY Initiative.
+
+Deep learning consumes quite a bit of energy. For instance, training a single 200B LLM on AWS p4d instances consumed around 11.9 GWh (source: CIDR 2024 keynote), which is an amount that can single-handedly power more than a thousand average US households for a year.
+
+Zeus is an open-source toolbox for measuring and optimizing the energy consumption of deep learning workloads. Our goal is to make energy optimization based on accurate measurements as easy as possible for diverse deep learning workloads and setups by offering composable tools with minimal assumptions.
+
+Zeus largely provides two types of tools:
+
+
+  Programmatic and command line GPU energy measurement tools
+  Several energy optimization tools that find the best ML and/or GPU configurations
+
+
+Zeus can benefit those who would like to
+
+
+  measure and optimize their electricity cost
+  reduce heat dissipation from their GPUs (by lowering power draw)
+  report energy usage from research and development
+  reduce carbon footprint from electricity usage
+
+
+Part 1: Measuring Energy
+
+Just like performance optimization, accurate measurement is the basis of effective energy optimization. Popular proxies for estimating power consumption like the maximum power draw of the hardware can sometimes be vastly off compared to actual measurement.
+
+To make energy measurement as easy and transparent as possible, the core utility Zeus offers is the ZeusMonitor class. Let’s take a look at the actual snippet:
+
+from zeus.monitor import ZeusMonitor
+
+# All four GPUs are measured simultaneously.
+monitor = ZeusMonitor(gpu_indices=[0,1,2,3])
+
+# Measure total time and energy within the window.
+monitor.begin_window(" training")="" for="" e="" in="" range(100):="" #="" measurement="" windows="" can="" arbitrarily="" be="" overlapped.="" monitor.begin_window("epoch")="" x,="" y="" train_dataloader:="" y_hat="model(x)" loss="criterion(y," y_hat)="" loss.backward()="" optim.step()="" print(f"epoch="" {e}:="" {measurement.time}="" s,="" {measurement.total_energy}="" j")="" print(f"entire="" training:="" what="" you="" see="" above="" is="" a="" typical="" pytorch="" training="" loop="" which="" uses="" four="" gpus="" data="" parallel="" training.="" inside,="" we="" created="" an="" instance="" of="" zeusmonitor="" and="" passed="" list="" gpu="" indices="" to="" monitor.="" then,="" using="" the="" monitor,="" measure="" time="" energy="" consumption="" arbitrary="" execution="" within="" script="" by="" pairing="" calls="" begin_window="" end_window.="" multiple="" overlap="" nest="" ways="" without="" affecting="" each,="" as="" long="" their="" names="" are="" different.="" adds="" very="" little="" overhead="" –="" typically="" single="" digit="" milliseconds="" around="" window.="" this="" allows="" used="" various="" applications.="" instance:="" ml.energy="" leaderboard:="" first="" open-source="" benchmark="" on="" how="" much="" llm="" text="" generation="" consumes.="" colosseum:="" online="" service="" that="" lets="" users="" compare="" responses="" side-by-side="" based="" response="" quality="" consumption.="" our="" blog="" post="" deeper="" technical="" dive="" into="" accurate="" measurement.="" part="" 2:="" optimizing="" let="" me="" introduce="" two="" optimizers="" provided="" zeus.="" globalpowerlimitoptimizer="" allow="" configure="" its="" maximum="" power="" draw,="" called="" limit.="" typically,="" lower="" gpu’s="" limit="" from="" default="" maximum,="" computation="" may="" get="" slightly="" slower,="" but="" you’ll="" save="" disproportionately="" more="" energy.="" zeus="" automatically="" finds="" optimal="" globally="" across="" all="" gpus.="" zeus.monitor="" import="" zeus.optimizer.power_limit="" optimizer="" measures="" through="" zeusmonitor.="" monitor="ZeusMonitor(gpu_indices=[0,1,2,3])" plo="GlobalPowerLimitOptimizer(monitor)" plo.on_epoch_begin()="" plo.on_step_begin()="" plo.on_step_end()="" plo.on_epoch_end()="" familiar="" loop,="" have="" instantiated="" it="" zeusmonitor,="" sees="" just="" need="" know="" about="" progress="" (step="" epoch="" boundaries),="" will="" transparently="" do="" necessary="" profiling="" converge="" if="" you’re="" huggingface="" trainer="" or="" sfttrainer,="" integration="" even="" easier:="" hfglobalpowerlimitoptimizer="" actually="" auto-detects="" cuda_visible_devices.="" pl_optimizer="HFGlobalPowerLimitOptimizer(monitor)" pass="" callback.="" also="" works="" sfttrainer.="" model="model," train_dataset="train_dataset," ...,="" callbacks="[pl_optimizer]," )="" wraps="" so="" detects="" step="" boundaries.="" example="" integrations="" here,="" including="" running="" gemma="" 7b="" supervised="" fine-tuning="" with="" qlora.="" now,="" integrate="" optimizer,="" limit?="" different="" preferences="" regarding="" trading="" off="" energy,="" specify="" optimumselector="" (basically="" strategy="" pattern)="" express="" needs.="" built-in="" strategies="" selecting="" (="" globalpowerlimitoptimizer,="" time,="" maxslowdownconstraint,="" minimize="" while="" tolerating="" at="" most="" 10%="" slowdown.="" maxslowdownconstraint(factor="1.1)," some="" include="" “minimize="" time”="" (time,="" might="" still="" reduce="" since="" workloads="" exhibit="" almost="" no="" slowdown="" limits),="" energy”="" (energy),="" “somewhere="" between”="" (zeuscost),="" given="" slowdown”="" (maxslowdownconstraint).="" create="" own="" optimum="" selectors="" needed.="" pipelinefrequencyoptimizer="" pipeline="" frequency="" research="" paper="" perseus,="" latest="" work="" optimization="" large="" training,="" like="" gpt-3.="" perseus="" negligible="" throughput="" degradation.="" we’ll="" briefly="" talk="" how.="" visualization="" one="" iteration="" stage="" parallelism="" 1f1b="" schedule.="" each="" box="" either="" forward="" backward="" computation,="" colored="" key="" observation="" here="" when="" models="" partitioned="" stages,="" it’s="" difficult="" slice="" them="" perfectly="" equal="" sizes.="" leads="" boxes="" varying="" widths="" therefore="" idle="" between="" boxes.="" would="" notice="" those="" smaller="" run="" slower="" than="" wider="" overall="" critical="" path="" (blue="" line)="" not="" change="" all.="" that’s="" does.="" profiling,="" identifies="" figures="" out="" precise="" amount="" minimizes="" done="" correctly,="" computations="" slowed="" down="" consume="" less="" &amp;="" does="" change.="" guide="" started="" perseus!="" final="" words="" who="" on-premise="" compute,="" resulting="" electricity="" bill="" something="" easily="" overlooked.="" larger="" scale,="" bills,="" center="" delivery.="" thousands="" clusters,="" finding="" stable,="" affordable,="" sustainable="" sources="" centers="" becoming="" increasingly="" challenging.="" average="" consumption,="" help="" delivery="" challenge.="" zeus,="" hope="" take="" towards="" deep="" learning="" optimization.="" wondering="" where="" go="" here?="" couple="" helpful="" links:="" homepage="" documentation="" github="" repository="" usage="" examples="" initiative="" (i.e.,="" people="" building="" zeus)="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中有什么新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年5月11日</p>
+            <h1>
+                <a class="blog-title">深度学习能耗测量与优化</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由崔在元著</p>
+                    <p><img src="/assets/images/zeus/fig1.png" alt="Zeus logo" style="width:100%;display: block; max-width: 400px; margin-right: auto; margin-left: auto"></p>
+
+<p><em>本帖由<a href="https://jaewonchung.me/about">崔在元</a>撰写，他是密歇根大学的博士生，同时也是 <a href="https://ml.energy">ML.ENERGY 创新计划</a>的负责人。</em></p>
+
+<p>深度学习消耗大量能源。例如，在 AWS p4d 实例上训练单个 200B LLM消耗了大约 11.9 GWh（来源：<a href="https://mvdirona.com/jrh/talksandpapers/JamesHamiltonCIDR2024.pdf">CIDR 2024 主旨演讲 </a>），这个数字可以单独为超过一千个<a href="https://www.eia.gov/tools/faqs/faq.php?id=97&amp;t=3">平均美国家庭</a>供电一年。</p>
+
+<p><a href="https://github.com/ml-energy/zeus">宙斯</a>是一个开源工具箱，用于测量和优化深度学习任务的能源消耗。我们的目标是使基于准确测量的能源优化对各种深度学习任务和配置尽可能容易，通过提供可组合的工具和最小假设来实现。</p>
+
+<p>宙斯主要提供两种工具：</p>
+
+<ol>
+  <li>程序化和命令行 GPU 能耗<strong>测量工具</strong></li>
+  <li>几款寻找最佳机器学习和/或 GPU 配置的能耗<strong>优化工具</strong></li>
+</ol>
+
+<p>宙斯可以造福那些希望的人</p>
+
+<ul>
+  <li>测量和优化他们的电费</li>
+  <li>通过降低功耗来减少 GPU 的散热</li>
+  <li>报告研发部门的能源消耗</li>
+  <li>减少电力使用带来的碳足迹</li>
+</ul>
+
+<h2 id="part-1-measuring-energy">第1部分：测量能量</h2>
+
+<p>就像性能优化一样，准确的测量是有效能量优化的基础。像硬件最大功耗这样的流行功耗估计代理有时与实际测量相差甚远。</p>
+
+<p>为了使能量测量尽可能简单和透明，Zeus 核心工具提供的功能是 <code class="language-plaintext highlighter-rouge">ZeusMonitor</code> 类。让我们看看实际的代码片段：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">zeus.monitor</span> <span class="kn">import</span> <span class="n">ZeusMonitor</span>
+
+<span class="c1"># All four GPUs are measured simultaneously.
+</span><span class="n">monitor</span> <span class="o">=</span> <span class="n">ZeusMonitor</span><span class="p">(</span><span class="n">gpu_indices</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+
+<span class="c1"># Measure total time and energy within the window.
+</span><span class="n">monitor</span><span class="p">.</span><span class="n">begin_window</span><span class="p">(</span><span class="s">"training"</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">100</span><span class="p">):</span>
+
+    <span class="c1"># Measurement windows can arbitrarily be overlapped.
+</span>    <span class="n">monitor</span><span class="p">.</span><span class="n">begin_window</span><span class="p">(</span><span class="s">"epoch"</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">train_dataloader</span><span class="p">:</span>
+        <span class="n">y_hat</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">y_hat</span><span class="p">)</span>
+        <span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+        <span class="n">optim</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+    <span class="n">measurement</span> <span class="o">=</span> <span class="n">monitor</span><span class="p">.</span><span class="n">end_window</span><span class="p">(</span><span class="s">"epoch"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"Epoch </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="n">measurement</span><span class="p">.</span><span class="n">time</span><span class="si">}</span><span class="s"> s, </span><span class="si">{</span><span class="n">measurement</span><span class="p">.</span><span class="n">total_energy</span><span class="si">}</span><span class="s"> J"</span><span class="p">)</span>
+
+<span class="n">measurement</span> <span class="o">=</span> <span class="n">monitor</span><span class="p">.</span><span class="n">end_window</span><span class="p">(</span><span class="s">"training"</span><span class="p">)</span>
+<span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"Entire training: </span><span class="si">{</span><span class="n">measurement</span><span class="p">.</span><span class="n">time</span><span class="si">}</span><span class="s"> s, </span><span class="si">{</span><span class="n">measurement</span><span class="p">.</span><span class="n">total_energy</span><span class="si">}</span><span class="s"> J"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>上面的代码是一个典型的 PyTorch 训练循环，它使用四个 GPU 进行数据并行训练。在循环内部，我们创建了一个 <code class="language-plaintext highlighter-rouge">ZeusMonitor</code> 实例，并传入了一个要监控的 GPU 索引列表。然后，通过使用监控器，我们可以通过调用 <code class="language-plaintext highlighter-rouge">begin_window</code> 和 <code class="language-plaintext highlighter-rouge">end_window</code> 来测量训练脚本中任意执行<em>窗口</em>的时间和能耗。多个窗口可以以任意方式重叠和嵌套，只要它们的名称不同，就不会影响各自的测量。</p>
+
+<p><code class="language-plaintext highlighter-rouge">ZeusMonitor</code> 添加的额外开销非常小——通常只有个位数毫秒——在窗口周围。这使得 <code class="language-plaintext highlighter-rouge">ZeusMonitor</code> 可以在各种应用中使用。例如：</p>
+
+<ul>
+  <li><a href="https://ml.energy/leaderboard">ML.ENERGY 领跑榜 </a>：关于 LLM 文本生成消耗多少能量的第一个开源基准。</li>
+  <li><a href="https://ml.energy/leaderboard">ML.ENERGY 环球竞技场 </a>：一个在线服务，允许用户根据响应质量 <em> 和 </em> 能耗将 LLM 响应并排比较。</li>
+</ul>
+
+<p>查看我们的 <a href="https://ml.energy/blog/energy/measurement/measuring-gpu-energy-best-practices/"> 博客文章 </a>，深入了解准确 GPU 能量测量的技术细节。</p>
+
+<h2 id="part-2-optimizing-energy">第2部分：优化能源</h2>
+
+<p>让我向您介绍宙斯提供的两个能源优化器。</p>
+
+<h3 id="globalpowerlimitoptimizer">GlobalPowerLimitOptimizer</h3>
+
+<p>GPU 允许用户配置其最大功耗，称为<em>功耗限制 </em>。通常，当您将 GPU 的功耗限制从默认最大值降低时，计算可能会略微变慢，但您将节省不成比例的更多能源。宙斯中的 <code class="language-plaintext highlighter-rouge">GlobalPowerLimitOptimizer</code> 会自动在全球范围内为所有 GPU 找到最佳的功耗限制。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">zeus.monitor</span> <span class="kn">import</span> <span class="n">ZeusMonitor</span>
+<span class="kn">from</span> <span class="nn">zeus.optimizer.power_limit</span> <span class="kn">import</span> <span class="n">GlobalPowerLimitOptimizer</span>
+
+<span class="c1"># The optimizer measures time and energy through the ZeusMonitor.
+</span><span class="n">monitor</span> <span class="o">=</span> <span class="n">ZeusMonitor</span><span class="p">(</span><span class="n">gpu_indices</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+<span class="n">plo</span> <span class="o">=</span> <span class="n">GlobalPowerLimitOptimizer</span><span class="p">(</span><span class="n">monitor</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">100</span><span class="p">):</span>
+    <span class="n">plo</span><span class="p">.</span><span class="n">on_epoch_begin</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">train_dataloader</span><span class="p">:</span>
+        <span class="n">plo</span><span class="p">.</span><span class="n">on_step_begin</span><span class="p">()</span>
+
+        <span class="n">y_hat</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">y_hat</span><span class="p">)</span>
+        <span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+        <span class="n">optim</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+
+        <span class="n">plo</span><span class="p">.</span><span class="n">on_step_end</span><span class="p">()</span>
+    <span class="n">plo</span><span class="p">.</span><span class="n">on_epoch_end</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>在我们熟悉的 PyTorch 训练循环中，我们已经实例化了 <code class="language-plaintext highlighter-rouge">GlobalPowerLimitOptimizer</code>，并通过它传递了一个 <code class="language-plaintext highlighter-rouge">ZeusMonitor</code> 的实例，这样优化器就可以看到 GPU 了。然后，我们只需要让优化器知道训练进度（步数和 epoch 边界），优化器就会透明地完成所有必要的性能分析，并收敛到最优的功率限制。</p>
+
+<p>如果你使用的是 HuggingFace 的 <a href="https://huggingface.co/docs/transformers/main_classes/trainer">Trainer</a> 或 <a href="https://huggingface.co/docs/trl/main/en/sft_trainer">SFTTrainer</a>，集成甚至更简单：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">zeus.monitor</span> <span class="kn">import</span> <span class="n">ZeusMonitor</span>
+<span class="kn">from</span> <span class="nn">zeus.optimizer.power_limit</span> <span class="kn">import</span> <span class="n">HFGlobalPowerLimitOptimizer</span>
+
+<span class="c1"># ZeusMonitor actually auto-detects CUDA_VISIBLE_DEVICES.
+</span><span class="n">monitor</span> <span class="o">=</span> <span class="n">ZeusMonitor</span><span class="p">()</span>
+<span class="n">pl_optimizer</span> <span class="o">=</span> <span class="n">HFGlobalPowerLimitOptimizer</span><span class="p">(</span><span class="n">monitor</span><span class="p">)</span>
+
+<span class="c1"># Pass in the optimizer as a Trainer callback. Also works for SFTTrainer.
+</span><span class="n">trainer</span> <span class="o">=</span> <span class="n">Trainer</span><span class="p">(</span>
+    <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+    <span class="n">train_dataset</span><span class="o">=</span><span class="n">train_dataset</span><span class="p">,</span>
+    <span class="p">...,</span>
+    <span class="n">callbacks</span><span class="o">=</span><span class="p">[</span><span class="n">pl_optimizer</span><span class="p">],</span>
+<span class="p">)</span>
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">HFGlobalPowerLimitOptimizer</code> 包装了 <code class="language-plaintext highlighter-rouge">GlobalPowerLimitOptimizer</code>，以便自动检测步数和 epoch 边界。我们在这里有示例集成<a href="https://github.com/ml-energy/zeus/tree/master/examples/huggingface">示例 </a>，包括使用 QLoRA 运行 Gemma 7B 监督微调。</p>
+
+<p>现在，我们知道了如何集成优化器，但什么是<em>最优</em>的功率限制？我们知道不同的用户在权衡时间和能源方面可能有不同的偏好，因此我们允许用户指定一个 <code class="language-plaintext highlighter-rouge">OptimumSelector</code>（基本上是<a href="https://en.wikipedia.org/wiki/Strategy_pattern">策略模式 </a>）来表达他们的需求。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Built-in strategies for selecting the optimal power limit.
+</span><span class="kn">from</span> <span class="nn">zeus.optimizer.power_limit</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">GlobalPowerLimitOptimizer</span><span class="p">,</span>
+    <span class="n">Time</span><span class="p">,</span>
+    <span class="n">Energy</span><span class="p">,</span>
+    <span class="n">MaxSlowdownConstraint</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># Minimize energy while tolerating at most 10% slowdown.
+</span><span class="n">plo</span> <span class="o">=</span> <span class="n">GlobalPowerLimitOptimizer</span><span class="p">(</span>
+    <span class="n">monitor</span><span class="p">,</span>
+    <span class="n">MaxSlowdownConstraint</span><span class="p">(</span><span class="n">factor</span><span class="o">=</span><span class="mf">1.1</span><span class="p">),</span>
+<span class="p">)</span>
+
+</code></pre></div></div>
+
+<p>一些内置策略包括“最小化时间”（<a href="https://ml.energy/zeus/reference/optimizer/power_limit/#zeus.optimizer.power_limit.Time"> 时间 </a>，这可能会降低默认的功率限制，因为某些工作负载即使在较低的功率限制下几乎没有任何减速），“最小化能量”（<a href="https://ml.energy/zeus/reference/optimizer/power_limit/#zeus.optimizer.power_limit.Energy"> 能量 </a>），“介于两者之间”（<a href="https://ml.energy/zeus/reference/optimizer/power_limit/#zeus.optimizer.power_limit.ZeusCost">ZeusCost</a>），以及“在最大减速限制下最小化能量”（<a href="https://ml.energy/zeus/reference/optimizer/power_limit/#zeus.optimizer.power_limit.MaxSlowdownConstraint">MaxSlowdownConstraint</a>）。用户还可以根据需要创建自己的最佳选择器。</p>
+
+<h3 id="pipelinefrequencyoptimizer">管道频率优化器</h3>
+
+<p>基于我们的研究论文 <a href="https://ml.energy/zeus/research_overview/perseus">Perseus</a> 的管道频率优化器，是我们针对大型模型训练（如 GPT-3）的最新能源优化工作。Perseus 可以在不降低或几乎不降低训练吞吐量的情况下减少大型模型训练的能耗。我们将简要介绍其方法。</p>
+
+<p><img src="/assets/images/zeus/fig2.png" alt="one iteration of training with four stage pipeline parallelism" style="width:100%;"></p>
+
+<p>上图是使用 1F1B 调度运行四个阶段的<em>管道并行</em>的一次训练迭代的可视化。每个框代表前向或反向计算，并用其功耗着色。</p>
+
+<p>这里的关键观察结果是，当模型被划分为流水线阶段时，很难将它们完美地分割成相等的尺寸。这导致前后箱宽度不一，因此箱之间的计算<em>空闲时间</em>不同。您会注意到，那些较小的箱子可以比较宽的箱子运行得略慢，但整体关键路径（蓝色线）不会发生任何变化。</p>
+
+<p><img src="/assets/images/zeus/fig3.png" alt="one iteration of training with four stage pipeline parallelism" style="width:100%;"></p>
+
+<p>这正是 Perseus 自动完成的。基于分析，它识别出不在关键路径上的计算箱，并计算出每个箱子的精确减速量，以最小化能耗。当正确执行时，减速的计算将消耗更少的电力和能源，但整个流水线的迭代时间不会改变。</p>
+
+<p>想要开始使用 Perseus，请参阅<a href="https://ml.energy/zeus/optimize/pipeline_frequency_optimizer/">我们的指南 </a>！</p>
+
+<h2 id="final-words">最后的话</h2>
+
+<p>对于那些运行自己的本地计算的用户来说，能源消耗以及随之而来的电费并不是可以轻易忽视的问题。从更大的规模来看，能源消耗不仅仅是电费问题，还包括数据中心电力供应。随着成千上万的 GPU 在集群中运行，寻找稳定、经济、可持续的电力来源来为数据中心供电正变得越来越具有挑战性 <a href="https://www.cbre.com/insights/reports/north-america-data-center-trends-h1-2023">。</a> 找到降低能源消耗的方法，其效果超过放缓，可以降低平均功耗，从而有助于解决电力供应问题。</p>
+
+<p>我们希望通过 Zeus 迈出深度学习能源测量和优化的第一步。</p>
+
+<p>想知道接下来该怎么做？以下是一些有用的链接：</p>
+
+<ul>
+  <li><a href="https://ml.energy/zeus">Zeus 主页/文档</a></li>
+  <li><a href="https://github.com/ml-energy/zeus">狄俄斯 GitHub 仓库</a></li>
+  <li><a href="https://github.com/ml-energy/zeus/tree/master/examples">狄俄斯使用和集成示例</a></li>
+  <li><a href="https://ml.energy">ML.能源倡议 </a>（即构建狄俄斯的人们）</li>
+</ul>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

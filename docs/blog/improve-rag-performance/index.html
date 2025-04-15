@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Improve RAG performance with torch.compile on AWS Graviton Processors | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Large Language Models (LLMs) are trained on vast volumes of data and use billions of parameters to support tasks like answering questions, translating languages, and completing sentences. There are a few challenges when working with LLMs such as domain knowledge gaps, factuality issues, and hallucination, which affect their reliability especially for the fields that require high levels of accuracy, such as healthcare, law, or engineering. Retrieval Augmented Generation (RAG) provides a solution to mitigate some of these issues by augmenting LLMs with a specific domain or an organization’s internal knowledge base, without the need to retrain the model.
+
+The RAG knowledge source is generally business specific databases which are typically deployed on general-purpose CPU infrastructure. So, deploying RAG on general-purpose CPU infrastructure alongside related business services is both efficient and cost-effective. With this motivation, we evaluated RAG deployment on AWS Graviton based Amazon EC2 instances which have been delivering up to 40% price-performance advantage compared to comparable instances for the majority of the workloads including databases, in-memory caches, big data analytics, media codecs, gaming servers, and machine learning inference.
+
+In the past we published a few blog posts on how PyTorch was optimized for AWS Graviton processors to accelerate ML Inference performance for both eager mode (blog) and torch.compile mode (blog). In this blog we cover how to deploy a typical RAG workload using PyTorch and torch.compile, how we improved its performance up to 1.7x for embedding model and 1.3x for RAG query on AWS Graviton3-based m7g.xlarge instance compared to the default PyTorch “eager mode”, and finally a few recommendations that you can apply for your RAG use cases.
+
+How to Optimize RAG?
+
+Without RAG, the LLM takes the user input and creates a response based on information it was trained on (what it already knows). With RAG, an information retrieval component is introduced that utilizes the user input to first pull information from a new data source. The user query and the relevant information are both given to the LLM. The LLM uses the new knowledge and its training data to create better responses. The following diagram shows the conceptual flow of using RAG with LLMs.
+
+
+
+Image 1: Conceptual flow of using RAG with LLMs
+
+Source: https://aws.amazon.com/what-is/retrieval-augmented-generation/
+
+Embedding model
+
+At the core of RAG is an embedding model that takes the text data and converts into a vector representation. These vectors are then stored in a vector db. When a user makes a query, the query is first converted to a vector and the RAG does a similarity search on the vector db. Hence, the first step in optimizing RAG performance is optimizing an embedding model’s inference performance. We used the AWS Graviton3-based m7g.xlarge instance and the HuggingFace sentence-transformer embedding model for the optimization work. Here is a sample script for profiling the HuggingFace sentence-transformer embedding model inference with PyTorch Eager mode.
+
+import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+from transformers import AutoModel, AutoTokenizer
+
+model_name = " sentence-transformers="" all-mpnet-base-v2"="" input_text="[&quot;This" is="" an="" example="" sentence",="" "each="" sentence="" converted"]="" model="AutoModel.from_pretrained(model_name)" tokenizer="AutoTokenizer.from_pretrained(model_name)" encoded_input="tokenizer(" input_text,="" padding="True," truncation="True," return_tensors="pt" )="" warmup,="" actual="100," 100="" model.eval()="" with="" torch.no_grad():="" #="" warmup="" for="" i="" in="" range(warmup):="" embeddings="model(**encoded_input)" profile(activities="[ProfilerActivity.CPU])" as="" prof:="" record_function("model_inference"):="" range(actual):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" eager="" mode="" since="" pytorch="" was="" already="" optimized="" on="" aws="" graviton="" processors="" the="" following="" runtime="" environment="" settings,="" we="" included="" them="" baseline="" and="" measured="" performance.="" please="" refer="" to="" 2.0="" inference="" more="" details="" how="" processors.="" enable="" fast="" math="" gemm="" kernels,="" accelerate="" fp32="" bfloat16="" export="" dnnl_default_fpmath_mode="BF16" linux="" transparent="" huge="" page="" (thp)="" allocations,="" reduce="" tensor="" memory="" allocation="" latency="" thp_mem_alloc_enable="1" set="" lru="" cache="" capacity="" primitives="" avoid="" redundant="" allocations="" lru_cache_capacity="1024" ---------------------------="" ------------="" self="" cpu="" %="" total="" time="" avg="" of="" calls="" aten::addmm="" 61.01%="" 2.638s="" 62.49%="" 2.702s="" 370.197us="" 7300="" model_inference="" 12.01%="" 519.161ms="" 100.00%="" 4.324s="" 1="" aten::bmm="" 6.25%="" 270.084ms="" 11.96%="" 517.089ms="" 215.454us="" 2400="" aten::select="" 3.98%="" 172.165ms="" 5.34%="" 230.863ms="" 1.331us="" 173500="" aten::copy_="" 2.11%="" 91.133ms="" 6.200us="" 14700="" total:="" table="" 1:="" profiler="" output="" huggingface="" sentence-transformer="" embedding="" graviton3-based="" m7g.xlarge="" instance="" next,="" added="" torch.compile,="" weights="" pre-packing,="" torch.inference_mode="" observed="" around="" 1.7x="" performance="" improvement.="" section="" talks="" about="" each="" these="" optimizations="" resulting="" speedup.="" torch.compile="" contrast="" mode,="" pre-compiles="" entire="" into="" a="" single="" graph="" manner="" that’s="" running="" given="" hardware.="" accelerated="" features="" invoke="" shown="" snippet="" trigger="" dynamo="" compilation="" model.="" this="" resulted="" 1.04x="" improvement="" from="" baseline.="" ----------------------------="" 64.46%="" 2.675s="" 66.66%="" 2.766s="" 378.905us="" torch-compiled="" region="" 19.76%="" 820.085ms="" 99.04%="" 4.109s="" 41.094ms="" 6.66%="" 276.216ms="" 12.52%="" 519.527ms="" 216.470us="" 164.991ms="" 5.41%="" 224.488ms="" 1.299us="" 172800="" aten::as_strided="" 1.66%="" 69.039ms="" 0.383us="" 180100="" 4.149s="" 2:="" pre-packing="" opens="" up="" opportunities="" like="" format="" that="" suitable="" hardware="" during="" compilation,="" thus="" improving="" config="" pre-packing.="" 1.69x="" import="" torch._inductor.config="" config.cpp.weight_prepack="True" config.freezing="True" -----------------------------="" mkldnn::_linear_pointwise="" 39.10%="" 994.821ms="" 41.50%="" 1.056s="" 144.628us="" 35.12%="" 893.675ms="" 98.42%="" 2.504s="" 25.043ms="" 10.96%="" 278.859ms="" 21.66%="" 551.073ms="" 229.614us="" 7.34%="" 186.838ms="" 9.98%="" 253.840ms="" 1.469us="" 2.63%="" 67.002ms="" 0.388us="" 2.544s="" 3:="" additionally,="" use="" torch.inference_mode()="" get="" savings="" turning="" off="" version="" control="" tensors="" view="" tracking="" tensors.="" documentation="" details.="" torch.inference_mode():="" instead="" 38.92%="" 987.276ms="" 41.17%="" 1.044s="" 143.056us="" 34.92%="" 885.895ms="" 98.45%="" 2.498s="" 24.975ms="" 11.25%="" 285.292ms="" 22.22%="" 563.594ms="" 234.831us="" 7.74%="" 196.223ms="" 10.22%="" 259.251ms="" 1.500us="" 2.48%="" 63.027ms="" 0.365us="" 2.537s="" 4:="" inference_mode="" shows="" incremental="" improvements="" achieved="" standalone="" inference.="" optimization="" level="" (in="" sec)="" over="" (baseline)="" 0.04324="" na="" 0.04149="" 0.02544="" 0.02537="" 1.70x="" script="" updated="" previously="" discussed="" included.="" are="" highlighted="" green.="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" transformers="" autotokenizer,="" automodel="" model_name="sentence-transformers/all-mpnet-base-v2" sentence',="" 'each="" converted']="" ,="" #instead="" torch.no_grad()="" end-to-end="" rag="" scenario="" after="" optimizing="" inference,="" started="" based="" setup,="" mainly="" validate="" functionality="" backend.="" built="" solution="" huggingfaceembeddings="" langchain_community.embeddings,="" code="" snippet.="" langchain_community.embeddings="" langchain_community.vectorstores="" faiss="" langchain.text_splitter="" recursivecharactertextsplitter="" langchain_community.document_loaders.recursive_url_loader="" recursiveurlloader="" langchain.prompts="" prompttemplate="" langchain_core.prompts="" format_document="" bs4="" beautifulsoup="" soup="" url="https://pytorch.org/blog/pytorch2-5/" chunk_size="1000" chunk_overlap="0" embedding_model="sentence-transformers/all-mpnet-base-v2" n="5" question="What's new in PyTorch 2.5?" typing="" any,="" list="" loader="RecursiveUrlLoader(" max_depth="3," extractor="lambda" x:="" soup(x,="" "html.parser").text="" docs="loader.load()" split="" document="" chunks="" specified="" chunk="" size="" text_splitter="RecursiveCharacterTextSplitter(chunk_size=chunk_size," all_splits="text_splitter.split_documents(docs)" store="" vector="" specific="" vectorstore="FAISS.from_documents(all_splits," model)="" searchdocs="vectorstore.similarity_search(question," k="N)" start="time.time()" end="time.time()" print(f"time="" {(end-start)="" actual}="" seconds")="" doc_prompt="PromptTemplate.from_template(&quot;{page_content}&quot;)" context="" i,="" doc="" enumerate(searchdocs):="" +="f&quot;\n{format_document(doc," doc_prompt)}\n"="" our="" goal="" optimize="" case="" gave="" however,="" didn’t="" work="" out="" box="" scenario.="" what="" challenges="" solutions="" achieve="" similar="" gains="" scenario?="" challenge="" handle="" there="" no="" way="" instantiated="" huggingfaceembeddings,="" wrapper="" class="" doesn’t="" provide="" compile="" apis.="" so,="" application="" process.="" implemented="" custom="" so="" can="" maintained="" immediate="" or="" at="" later="" stage.="" this,="" were="" able="" hence="" compilation.="" customembedding(huggingfaceembeddings):="" def="" __init__(self,="" **kwargs:="" any):="" """initialize="" sentence_transformer."""="" super().__init__(**kwargs)="" load="" hub="" self.client="AutoModel.from_pretrained(self.model_name)" config:="" arbitrary_types_allowed="True" embed_documents(self,="" texts:="" list[str])="" -&gt;="" list[list[float]]:="" """compute="" using="" transformer="" args:="" texts="" embed.="" returns:="" embeddings,="" one="" text.="" """="" x.replace("\n",="" "="" "),="" texts))="" tokenize="" sentences="" **encoded_input,="" output_hidden_states="True" return="" embeddings.tolist()="" model.client="torch.compile(model.client)" triggering="" typical="" where="" frozen="" gradient="" calculations="" disabled,="" inductor="" (the="" compiler="" backend="" used="" cpus)="" invokes="" rewrite="" performant="" operators,="" operator="" fusion,="" though="" see="" generic="" it="" failed="" additional="" fx="" passes="" inductor.="" two="" main="" reasons="" not="" passes:="" (1)="" no_grad()="" inference_mode()="" detect="" frozen;="" (2)="" hit="" limitation="" framework,="" where,="" if="" no_grad="" just="" beginning="" compiled="" region,="" wouldn’t="" be="" while="" invoking="" because="" would="" have="" by="" then.="" github="" issue="" moving="" within="" class.="" happened="" expected="" 1.3x="" when="" profiled="" stable="" pass="" versions.="" extra="" previous="" fixes,="" query="" lookup="" improved,="" but="" execution="" benchmarking="" script.="" root-caused="" further="" deep="" diving="" revealed="" batch="" mismatch="" between="" word="" stages.="" example,="" script,="" database="" vectorized="" stored="" db,="" 16,="" shapes="" 16xnxk.="" whereas,="" usually="" request="" shape="" 1xnxk.="" (dimension="" “0”="" tensors)="" triggered="" recompilation="" confirmed="" logging:="" torch_logs="recompiles" python="" rag_compile.py="" v1103="" 02:48:08.805986="" 34281="" site-packages="" _dynamo="" guards.py:2813]="" [0="" 1]="" [__recompiles]="" recompiling="" function="" forward="" models="" mpnet="" modeling_mpnet.py:502="" guard="" failure(s):="" -="" 0="" 0:="" 'l['input_ids']'="" index="" 0.="" provides="" decorator="" mark="" dimension="" dynamic="" specify="" value="" same,="" re-compilation="" triggered.="" specifying="" input_ids="" attention_mask="" dynamic,="" “1”="" allowed="" (as="" snippet),="" should="" avoided="" compilations.="" torch._dynamo.decorators.mark_unbacked(encoded_input['input_ids'],="" 0)="" torch._dynamo.mark_dynamic(encoded_input['input_ids'],="" 1)="" torch._dynamo.decorators.mark_unbacked(encoded_input['attention_mask'],="" torch._dynamo.mark_dynamic(encoded_input['attention_mask'],="" marking="" particular="" case.="" moreover,="" created="" breaks.="" some="" iterations="" hide="" latency,="" steady="" state.="" good="" news="" that,="" practice,="" only="" first="" query,="" might="" affect="" production="" fixed.="" aot="" (a="" new="" feature="" pytorch)="" addresses="" warm="" torch.compile.="" follow-up="" blog="" will="" address="" challenges.="" apply="" end-end="" improve="" mode.="" deployment="" detailed="" guide="" deploy="" graviton-based="" amazon="" ec2="" instances="" conjunction="" llama="" torchserve="" found="" website.="" conclusion="" blog,="" covered="" instances.="" also="" shared="" faced,="" bring="" those="" case,="" speedups.="" hope="" you="" give="" try!="" need="" any="" support="" ml="" software="" graviton,="" open="" technical="" github.="" express="" gratitude="" eli="" uriegas="" making="" post="" happen.="" authors="" sunita="" nadampalli="" principal="" engineer="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" development="" delivering="" high-performance="" sustainable="" socs="" arm="" isa.="" ankith="" gunapal="" partner="" meta="" (pytorch).="" he="" customer="" support,="" evangelizing="" &amp;="" release="" engineering="" torchserve.="" solving="" problems="" serving.="" enjoys="" distilling="" technically="" complex="" material="" user="" friendly="" format.="" hamid="" shojanazeri="" frameworks="" team="" meta.="" building="" scalable="" specializes="" working="" tackle="" large-scale="" distributed="" training,="" serving,="" optimization.="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Improve RAG performance with torch.compile on AWS Graviton Processors">
+<meta property="og:description" content="Large Language Models (LLMs) are trained on vast volumes of data and use billions of parameters to support tasks like answering questions, translating languages, and completing sentences. There are a few challenges when working with LLMs such as domain knowledge gaps, factuality issues, and hallucination, which affect their reliability especially for the fields that require high levels of accuracy, such as healthcare, law, or engineering. Retrieval Augmented Generation (RAG) provides a solution to mitigate some of these issues by augmenting LLMs with a specific domain or an organization’s internal knowledge base, without the need to retrain the model.
+
+The RAG knowledge source is generally business specific databases which are typically deployed on general-purpose CPU infrastructure. So, deploying RAG on general-purpose CPU infrastructure alongside related business services is both efficient and cost-effective. With this motivation, we evaluated RAG deployment on AWS Graviton based Amazon EC2 instances which have been delivering up to 40% price-performance advantage compared to comparable instances for the majority of the workloads including databases, in-memory caches, big data analytics, media codecs, gaming servers, and machine learning inference.
+
+In the past we published a few blog posts on how PyTorch was optimized for AWS Graviton processors to accelerate ML Inference performance for both eager mode (blog) and torch.compile mode (blog). In this blog we cover how to deploy a typical RAG workload using PyTorch and torch.compile, how we improved its performance up to 1.7x for embedding model and 1.3x for RAG query on AWS Graviton3-based m7g.xlarge instance compared to the default PyTorch “eager mode”, and finally a few recommendations that you can apply for your RAG use cases.
+
+How to Optimize RAG?
+
+Without RAG, the LLM takes the user input and creates a response based on information it was trained on (what it already knows). With RAG, an information retrieval component is introduced that utilizes the user input to first pull information from a new data source. The user query and the relevant information are both given to the LLM. The LLM uses the new knowledge and its training data to create better responses. The following diagram shows the conceptual flow of using RAG with LLMs.
+
+
+
+Image 1: Conceptual flow of using RAG with LLMs
+
+Source: https://aws.amazon.com/what-is/retrieval-augmented-generation/
+
+Embedding model
+
+At the core of RAG is an embedding model that takes the text data and converts into a vector representation. These vectors are then stored in a vector db. When a user makes a query, the query is first converted to a vector and the RAG does a similarity search on the vector db. Hence, the first step in optimizing RAG performance is optimizing an embedding model’s inference performance. We used the AWS Graviton3-based m7g.xlarge instance and the HuggingFace sentence-transformer embedding model for the optimization work. Here is a sample script for profiling the HuggingFace sentence-transformer embedding model inference with PyTorch Eager mode.
+
+import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+from transformers import AutoModel, AutoTokenizer
+
+model_name = " sentence-transformers="" all-mpnet-base-v2"="" input_text="[&quot;This" is="" an="" example="" sentence",="" "each="" sentence="" converted"]="" model="AutoModel.from_pretrained(model_name)" tokenizer="AutoTokenizer.from_pretrained(model_name)" encoded_input="tokenizer(" input_text,="" padding="True," truncation="True," return_tensors="pt" )="" warmup,="" actual="100," 100="" model.eval()="" with="" torch.no_grad():="" #="" warmup="" for="" i="" in="" range(warmup):="" embeddings="model(**encoded_input)" profile(activities="[ProfilerActivity.CPU])" as="" prof:="" record_function("model_inference"):="" range(actual):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" eager="" mode="" since="" pytorch="" was="" already="" optimized="" on="" aws="" graviton="" processors="" the="" following="" runtime="" environment="" settings,="" we="" included="" them="" baseline="" and="" measured="" performance.="" please="" refer="" to="" 2.0="" inference="" more="" details="" how="" processors.="" enable="" fast="" math="" gemm="" kernels,="" accelerate="" fp32="" bfloat16="" export="" dnnl_default_fpmath_mode="BF16" linux="" transparent="" huge="" page="" (thp)="" allocations,="" reduce="" tensor="" memory="" allocation="" latency="" thp_mem_alloc_enable="1" set="" lru="" cache="" capacity="" primitives="" avoid="" redundant="" allocations="" lru_cache_capacity="1024" ---------------------------="" ------------="" name="" self="" cpu="" %="" total="" time="" avg="" of="" calls="" aten::addmm="" 61.01%="" 2.638s="" 62.49%="" 2.702s="" 370.197us="" 7300="" model_inference="" 12.01%="" 519.161ms="" 100.00%="" 4.324s="" 1="" aten::bmm="" 6.25%="" 270.084ms="" 11.96%="" 517.089ms="" 215.454us="" 2400="" aten::select="" 3.98%="" 172.165ms="" 5.34%="" 230.863ms="" 1.331us="" 173500="" aten::copy_="" 2.11%="" 91.133ms="" 6.200us="" 14700="" total:="" table="" 1:="" profiler="" output="" huggingface="" sentence-transformer="" embedding="" graviton3-based="" m7g.xlarge="" instance="" next,="" added="" torch.compile,="" weights="" pre-packing,="" torch.inference_mode="" observed="" around="" 1.7x="" performance="" improvement.="" section="" talks="" about="" each="" these="" optimizations="" resulting="" speedup.="" torch.compile="" contrast="" mode,="" pre-compiles="" entire="" into="" a="" single="" graph="" manner="" that’s="" running="" given="" hardware.="" accelerated="" features="" invoke="" shown="" snippet="" trigger="" dynamo="" compilation="" model.="" this="" resulted="" 1.04x="" improvement="" from="" baseline.="" ----------------------------="" 64.46%="" 2.675s="" 66.66%="" 2.766s="" 378.905us="" torch-compiled="" region="" 19.76%="" 820.085ms="" 99.04%="" 4.109s="" 41.094ms="" 6.66%="" 276.216ms="" 12.52%="" 519.527ms="" 216.470us="" 164.991ms="" 5.41%="" 224.488ms="" 1.299us="" 172800="" aten::as_strided="" 1.66%="" 69.039ms="" 0.383us="" 180100="" 4.149s="" 2:="" pre-packing="" opens="" up="" opportunities="" like="" format="" that="" suitable="" hardware="" during="" compilation,="" thus="" improving="" config="" pre-packing.="" 1.69x="" import="" torch._inductor.config="" config.cpp.weight_prepack="True" config.freezing="True" -----------------------------="" mkldnn::_linear_pointwise="" 39.10%="" 994.821ms="" 41.50%="" 1.056s="" 144.628us="" 35.12%="" 893.675ms="" 98.42%="" 2.504s="" 25.043ms="" 10.96%="" 278.859ms="" 21.66%="" 551.073ms="" 229.614us="" 7.34%="" 186.838ms="" 9.98%="" 253.840ms="" 1.469us="" 2.63%="" 67.002ms="" 0.388us="" 2.544s="" 3:="" additionally,="" use="" torch.inference_mode()="" get="" savings="" turning="" off="" version="" control="" tensors="" view="" tracking="" tensors.="" documentation="" details.="" torch.inference_mode():="" instead="" 38.92%="" 987.276ms="" 41.17%="" 1.044s="" 143.056us="" 34.92%="" 885.895ms="" 98.45%="" 2.498s="" 24.975ms="" 11.25%="" 285.292ms="" 22.22%="" 563.594ms="" 234.831us="" 7.74%="" 196.223ms="" 10.22%="" 259.251ms="" 1.500us="" 2.48%="" 63.027ms="" 0.365us="" 2.537s="" 4:="" inference_mode="" shows="" incremental="" improvements="" achieved="" standalone="" inference.="" optimization="" level="" (in="" sec)="" over="" (baseline)="" 0.04324="" na="" 0.04149="" 0.02544="" 0.02537="" 1.70x="" script="" updated="" previously="" discussed="" included.="" are="" highlighted="" green.="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" transformers="" autotokenizer,="" automodel="" model_name="sentence-transformers/all-mpnet-base-v2" sentence',="" 'each="" converted']="" ,="" #instead="" torch.no_grad()="" end-to-end="" rag="" scenario="" after="" optimizing="" inference,="" started="" based="" setup,="" mainly="" validate="" functionality="" backend.="" built="" solution="" huggingfaceembeddings="" langchain_community.embeddings,="" code="" snippet.="" langchain_community.embeddings="" langchain_community.vectorstores="" faiss="" langchain.text_splitter="" recursivecharactertextsplitter="" langchain_community.document_loaders.recursive_url_loader="" recursiveurlloader="" langchain.prompts="" prompttemplate="" langchain_core.prompts="" format_document="" bs4="" beautifulsoup="" soup="" url="https://pytorch.org/blog/pytorch2-5/" chunk_size="1000" chunk_overlap="0" embedding_model="sentence-transformers/all-mpnet-base-v2" n="5" question="What's new in PyTorch 2.5?" typing="" any,="" list="" loader="RecursiveUrlLoader(" max_depth="3," extractor="lambda" x:="" soup(x,="" "html.parser").text="" docs="loader.load()" split="" document="" chunks="" specified="" chunk="" size="" text_splitter="RecursiveCharacterTextSplitter(chunk_size=chunk_size," all_splits="text_splitter.split_documents(docs)" store="" vector="" specific="" vectorstore="FAISS.from_documents(all_splits," model)="" searchdocs="vectorstore.similarity_search(question," k="N)" start="time.time()" end="time.time()" print(f"time="" {(end-start)="" actual}="" seconds")="" doc_prompt="PromptTemplate.from_template(&quot;{page_content}&quot;)" context="" i,="" doc="" enumerate(searchdocs):="" +="f&quot;\n{format_document(doc," doc_prompt)}\n"="" our="" goal="" optimize="" case="" gave="" however,="" didn’t="" work="" out="" box="" scenario.="" what="" challenges="" solutions="" achieve="" similar="" gains="" scenario?="" challenge="" handle="" there="" no="" way="" instantiated="" huggingfaceembeddings,="" wrapper="" class="" doesn’t="" provide="" compile="" apis.="" so,="" application="" process.="" implemented="" custom="" so="" can="" maintained="" immediate="" or="" at="" later="" stage.="" this,="" were="" able="" hence="" compilation.="" customembedding(huggingfaceembeddings):="" def="" __init__(self,="" **kwargs:="" any):="" """initialize="" sentence_transformer."""="" super().__init__(**kwargs)="" load="" hub="" self.client="AutoModel.from_pretrained(self.model_name)" config:="" arbitrary_types_allowed="True" embed_documents(self,="" texts:="" list[str])="" -&gt;="" list[list[float]]:="" """compute="" using="" transformer="" args:="" texts="" embed.="" returns:="" embeddings,="" one="" text.="" """="" x.replace("\n",="" "="" "),="" texts))="" tokenize="" sentences="" **encoded_input,="" output_hidden_states="True" return="" embeddings.tolist()="" model.client="torch.compile(model.client)" triggering="" typical="" where="" frozen="" gradient="" calculations="" disabled,="" inductor="" (the="" compiler="" backend="" used="" cpus)="" invokes="" rewrite="" performant="" operators,="" operator="" fusion,="" though="" see="" generic="" it="" failed="" additional="" fx="" passes="" inductor.="" two="" main="" reasons="" not="" passes:="" (1)="" no_grad()="" inference_mode()="" detect="" frozen;="" (2)="" hit="" limitation="" framework,="" where,="" if="" no_grad="" just="" beginning="" compiled="" region,="" wouldn’t="" be="" while="" invoking="" because="" would="" have="" by="" then.="" github="" issue="" moving="" within="" class.="" happened="" expected="" 1.3x="" when="" profiled="" stable="" pass="" versions.="" extra="" previous="" fixes,="" query="" lookup="" improved,="" but="" execution="" benchmarking="" script.="" root-caused="" further="" deep="" diving="" revealed="" batch="" mismatch="" between="" word="" stages.="" example,="" script,="" database="" vectorized="" stored="" db,="" 16,="" shapes="" 16xnxk.="" whereas,="" usually="" request="" shape="" 1xnxk.="" (dimension="" “0”="" tensors)="" triggered="" recompilation="" confirmed="" logging:="" torch_logs="recompiles" python="" rag_compile.py="" v1103="" 02:48:08.805986="" 34281="" site-packages="" _dynamo="" guards.py:2813]="" [0="" 1]="" [__recompiles]="" recompiling="" function="" forward="" models="" mpnet="" modeling_mpnet.py:502="" guard="" failure(s):="" -="" 0="" 0:="" 'l['input_ids']'="" index="" 0.="" provides="" decorator="" mark="" dimension="" dynamic="" specify="" value="" same,="" re-compilation="" triggered.="" specifying="" input_ids="" attention_mask="" dynamic,="" “1”="" allowed="" (as="" snippet),="" should="" avoided="" compilations.="" torch._dynamo.decorators.mark_unbacked(encoded_input['input_ids'],="" 0)="" torch._dynamo.mark_dynamic(encoded_input['input_ids'],="" 1)="" torch._dynamo.decorators.mark_unbacked(encoded_input['attention_mask'],="" torch._dynamo.mark_dynamic(encoded_input['attention_mask'],="" marking="" particular="" case.="" moreover,="" created="" breaks.="" some="" iterations="" hide="" latency,="" steady="" state.="" good="" news="" that,="" practice,="" only="" first="" query,="" might="" affect="" production="" fixed.="" aot="" (a="" new="" feature="" pytorch)="" addresses="" warm="" torch.compile.="" follow-up="" blog="" will="" address="" challenges.="" apply="" end-end="" improve="" mode.="" deployment="" detailed="" guide="" deploy="" graviton-based="" amazon="" ec2="" instances="" conjunction="" llama="" torchserve="" found="" website.="" conclusion="" blog,="" covered="" instances.="" also="" shared="" faced,="" bring="" those="" case,="" speedups.="" hope="" you="" give="" try!="" need="" any="" support="" ml="" software="" graviton,="" open="" technical="" github.="" express="" gratitude="" eli="" uriegas="" making="" post="" happen.="" authors="" sunita="" nadampalli="" principal="" engineer="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" development="" delivering="" high-performance="" sustainable="" socs="" arm="" isa.="" ankith="" gunapal="" partner="" meta="" (pytorch).="" he="" customer="" support,="" evangelizing="" &amp;="" release="" engineering="" torchserve.="" solving="" problems="" serving.="" enjoys="" distilling="" technically="" complex="" material="" user="" friendly="" format.="" hamid="" shojanazeri="" frameworks="" team="" meta.="" building="" scalable="" specializes="" working="" tackle="" large-scale="" distributed="" training,="" serving,="" optimization.="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Improve RAG performance with torch.compile on AWS Graviton Processors">
+<meta name="twitter:description" content="Large Language Models (LLMs) are trained on vast volumes of data and use billions of parameters to support tasks like answering questions, translating languages, and completing sentences. There are a few challenges when working with LLMs such as domain knowledge gaps, factuality issues, and hallucination, which affect their reliability especially for the fields that require high levels of accuracy, such as healthcare, law, or engineering. Retrieval Augmented Generation (RAG) provides a solution to mitigate some of these issues by augmenting LLMs with a specific domain or an organization’s internal knowledge base, without the need to retrain the model.
+
+The RAG knowledge source is generally business specific databases which are typically deployed on general-purpose CPU infrastructure. So, deploying RAG on general-purpose CPU infrastructure alongside related business services is both efficient and cost-effective. With this motivation, we evaluated RAG deployment on AWS Graviton based Amazon EC2 instances which have been delivering up to 40% price-performance advantage compared to comparable instances for the majority of the workloads including databases, in-memory caches, big data analytics, media codecs, gaming servers, and machine learning inference.
+
+In the past we published a few blog posts on how PyTorch was optimized for AWS Graviton processors to accelerate ML Inference performance for both eager mode (blog) and torch.compile mode (blog). In this blog we cover how to deploy a typical RAG workload using PyTorch and torch.compile, how we improved its performance up to 1.7x for embedding model and 1.3x for RAG query on AWS Graviton3-based m7g.xlarge instance compared to the default PyTorch “eager mode”, and finally a few recommendations that you can apply for your RAG use cases.
+
+How to Optimize RAG?
+
+Without RAG, the LLM takes the user input and creates a response based on information it was trained on (what it already knows). With RAG, an information retrieval component is introduced that utilizes the user input to first pull information from a new data source. The user query and the relevant information are both given to the LLM. The LLM uses the new knowledge and its training data to create better responses. The following diagram shows the conceptual flow of using RAG with LLMs.
+
+
+
+Image 1: Conceptual flow of using RAG with LLMs
+
+Source: https://aws.amazon.com/what-is/retrieval-augmented-generation/
+
+Embedding model
+
+At the core of RAG is an embedding model that takes the text data and converts into a vector representation. These vectors are then stored in a vector db. When a user makes a query, the query is first converted to a vector and the RAG does a similarity search on the vector db. Hence, the first step in optimizing RAG performance is optimizing an embedding model’s inference performance. We used the AWS Graviton3-based m7g.xlarge instance and the HuggingFace sentence-transformer embedding model for the optimization work. Here is a sample script for profiling the HuggingFace sentence-transformer embedding model inference with PyTorch Eager mode.
+
+import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+from transformers import AutoModel, AutoTokenizer
+
+model_name = " sentence-transformers="" all-mpnet-base-v2"="" input_text="[&quot;This" is="" an="" example="" sentence",="" "each="" sentence="" converted"]="" model="AutoModel.from_pretrained(model_name)" tokenizer="AutoTokenizer.from_pretrained(model_name)" encoded_input="tokenizer(" input_text,="" padding="True," truncation="True," return_tensors="pt" )="" warmup,="" actual="100," 100="" model.eval()="" with="" torch.no_grad():="" #="" warmup="" for="" i="" in="" range(warmup):="" embeddings="model(**encoded_input)" profile(activities="[ProfilerActivity.CPU])" as="" prof:="" record_function("model_inference"):="" range(actual):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" eager="" mode="" since="" pytorch="" was="" already="" optimized="" on="" aws="" graviton="" processors="" the="" following="" runtime="" environment="" settings,="" we="" included="" them="" baseline="" and="" measured="" performance.="" please="" refer="" to="" 2.0="" inference="" more="" details="" how="" processors.="" enable="" fast="" math="" gemm="" kernels,="" accelerate="" fp32="" bfloat16="" export="" dnnl_default_fpmath_mode="BF16" linux="" transparent="" huge="" page="" (thp)="" allocations,="" reduce="" tensor="" memory="" allocation="" latency="" thp_mem_alloc_enable="1" set="" lru="" cache="" capacity="" primitives="" avoid="" redundant="" allocations="" lru_cache_capacity="1024" ---------------------------="" ------------="" self="" cpu="" %="" total="" time="" avg="" of="" calls="" aten::addmm="" 61.01%="" 2.638s="" 62.49%="" 2.702s="" 370.197us="" 7300="" model_inference="" 12.01%="" 519.161ms="" 100.00%="" 4.324s="" 1="" aten::bmm="" 6.25%="" 270.084ms="" 11.96%="" 517.089ms="" 215.454us="" 2400="" aten::select="" 3.98%="" 172.165ms="" 5.34%="" 230.863ms="" 1.331us="" 173500="" aten::copy_="" 2.11%="" 91.133ms="" 6.200us="" 14700="" total:="" table="" 1:="" profiler="" output="" huggingface="" sentence-transformer="" embedding="" graviton3-based="" m7g.xlarge="" instance="" next,="" added="" torch.compile,="" weights="" pre-packing,="" torch.inference_mode="" observed="" around="" 1.7x="" performance="" improvement.="" section="" talks="" about="" each="" these="" optimizations="" resulting="" speedup.="" torch.compile="" contrast="" mode,="" pre-compiles="" entire="" into="" a="" single="" graph="" manner="" that’s="" running="" given="" hardware.="" accelerated="" features="" invoke="" shown="" snippet="" trigger="" dynamo="" compilation="" model.="" this="" resulted="" 1.04x="" improvement="" from="" baseline.="" ----------------------------="" 64.46%="" 2.675s="" 66.66%="" 2.766s="" 378.905us="" torch-compiled="" region="" 19.76%="" 820.085ms="" 99.04%="" 4.109s="" 41.094ms="" 6.66%="" 276.216ms="" 12.52%="" 519.527ms="" 216.470us="" 164.991ms="" 5.41%="" 224.488ms="" 1.299us="" 172800="" aten::as_strided="" 1.66%="" 69.039ms="" 0.383us="" 180100="" 4.149s="" 2:="" pre-packing="" opens="" up="" opportunities="" like="" format="" that="" suitable="" hardware="" during="" compilation,="" thus="" improving="" config="" pre-packing.="" 1.69x="" import="" torch._inductor.config="" config.cpp.weight_prepack="True" config.freezing="True" -----------------------------="" mkldnn::_linear_pointwise="" 39.10%="" 994.821ms="" 41.50%="" 1.056s="" 144.628us="" 35.12%="" 893.675ms="" 98.42%="" 2.504s="" 25.043ms="" 10.96%="" 278.859ms="" 21.66%="" 551.073ms="" 229.614us="" 7.34%="" 186.838ms="" 9.98%="" 253.840ms="" 1.469us="" 2.63%="" 67.002ms="" 0.388us="" 2.544s="" 3:="" additionally,="" use="" torch.inference_mode()="" get="" savings="" turning="" off="" version="" control="" tensors="" view="" tracking="" tensors.="" documentation="" details.="" torch.inference_mode():="" instead="" 38.92%="" 987.276ms="" 41.17%="" 1.044s="" 143.056us="" 34.92%="" 885.895ms="" 98.45%="" 2.498s="" 24.975ms="" 11.25%="" 285.292ms="" 22.22%="" 563.594ms="" 234.831us="" 7.74%="" 196.223ms="" 10.22%="" 259.251ms="" 1.500us="" 2.48%="" 63.027ms="" 0.365us="" 2.537s="" 4:="" inference_mode="" shows="" incremental="" improvements="" achieved="" standalone="" inference.="" optimization="" level="" (in="" sec)="" over="" (baseline)="" 0.04324="" na="" 0.04149="" 0.02544="" 0.02537="" 1.70x="" script="" updated="" previously="" discussed="" included.="" are="" highlighted="" green.="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" transformers="" autotokenizer,="" automodel="" model_name="sentence-transformers/all-mpnet-base-v2" sentence',="" 'each="" converted']="" ,="" #instead="" torch.no_grad()="" end-to-end="" rag="" scenario="" after="" optimizing="" inference,="" started="" based="" setup,="" mainly="" validate="" functionality="" backend.="" built="" solution="" huggingfaceembeddings="" langchain_community.embeddings,="" code="" snippet.="" langchain_community.embeddings="" langchain_community.vectorstores="" faiss="" langchain.text_splitter="" recursivecharactertextsplitter="" langchain_community.document_loaders.recursive_url_loader="" recursiveurlloader="" langchain.prompts="" prompttemplate="" langchain_core.prompts="" format_document="" bs4="" beautifulsoup="" soup="" url="https://pytorch.org/blog/pytorch2-5/" chunk_size="1000" chunk_overlap="0" embedding_model="sentence-transformers/all-mpnet-base-v2" n="5" question="What's new in PyTorch 2.5?" typing="" any,="" list="" loader="RecursiveUrlLoader(" max_depth="3," extractor="lambda" x:="" soup(x,="" "html.parser").text="" docs="loader.load()" split="" document="" chunks="" specified="" chunk="" size="" text_splitter="RecursiveCharacterTextSplitter(chunk_size=chunk_size," all_splits="text_splitter.split_documents(docs)" store="" vector="" specific="" vectorstore="FAISS.from_documents(all_splits," model)="" searchdocs="vectorstore.similarity_search(question," k="N)" start="time.time()" end="time.time()" print(f"time="" {(end-start)="" actual}="" seconds")="" doc_prompt="PromptTemplate.from_template(&quot;{page_content}&quot;)" context="" i,="" doc="" enumerate(searchdocs):="" +="f&quot;\n{format_document(doc," doc_prompt)}\n"="" our="" goal="" optimize="" case="" gave="" however,="" didn’t="" work="" out="" box="" scenario.="" what="" challenges="" solutions="" achieve="" similar="" gains="" scenario?="" challenge="" handle="" there="" no="" way="" instantiated="" huggingfaceembeddings,="" wrapper="" class="" doesn’t="" provide="" compile="" apis.="" so,="" application="" process.="" implemented="" custom="" so="" can="" maintained="" immediate="" or="" at="" later="" stage.="" this,="" were="" able="" hence="" compilation.="" customembedding(huggingfaceembeddings):="" def="" __init__(self,="" **kwargs:="" any):="" """initialize="" sentence_transformer."""="" super().__init__(**kwargs)="" load="" hub="" self.client="AutoModel.from_pretrained(self.model_name)" config:="" arbitrary_types_allowed="True" embed_documents(self,="" texts:="" list[str])="" -&gt;="" list[list[float]]:="" """compute="" using="" transformer="" args:="" texts="" embed.="" returns:="" embeddings,="" one="" text.="" """="" x.replace("\n",="" "="" "),="" texts))="" tokenize="" sentences="" **encoded_input,="" output_hidden_states="True" return="" embeddings.tolist()="" model.client="torch.compile(model.client)" triggering="" typical="" where="" frozen="" gradient="" calculations="" disabled,="" inductor="" (the="" compiler="" backend="" used="" cpus)="" invokes="" rewrite="" performant="" operators,="" operator="" fusion,="" though="" see="" generic="" it="" failed="" additional="" fx="" passes="" inductor.="" two="" main="" reasons="" not="" passes:="" (1)="" no_grad()="" inference_mode()="" detect="" frozen;="" (2)="" hit="" limitation="" framework,="" where,="" if="" no_grad="" just="" beginning="" compiled="" region,="" wouldn’t="" be="" while="" invoking="" because="" would="" have="" by="" then.="" github="" issue="" moving="" within="" class.="" happened="" expected="" 1.3x="" when="" profiled="" stable="" pass="" versions.="" extra="" previous="" fixes,="" query="" lookup="" improved,="" but="" execution="" benchmarking="" script.="" root-caused="" further="" deep="" diving="" revealed="" batch="" mismatch="" between="" word="" stages.="" example,="" script,="" database="" vectorized="" stored="" db,="" 16,="" shapes="" 16xnxk.="" whereas,="" usually="" request="" shape="" 1xnxk.="" (dimension="" “0”="" tensors)="" triggered="" recompilation="" confirmed="" logging:="" torch_logs="recompiles" python="" rag_compile.py="" v1103="" 02:48:08.805986="" 34281="" site-packages="" _dynamo="" guards.py:2813]="" [0="" 1]="" [__recompiles]="" recompiling="" function="" forward="" models="" mpnet="" modeling_mpnet.py:502="" guard="" failure(s):="" -="" 0="" 0:="" 'l['input_ids']'="" index="" 0.="" provides="" decorator="" mark="" dimension="" dynamic="" specify="" value="" same,="" re-compilation="" triggered.="" specifying="" input_ids="" attention_mask="" dynamic,="" “1”="" allowed="" (as="" snippet),="" should="" avoided="" compilations.="" torch._dynamo.decorators.mark_unbacked(encoded_input['input_ids'],="" 0)="" torch._dynamo.mark_dynamic(encoded_input['input_ids'],="" 1)="" torch._dynamo.decorators.mark_unbacked(encoded_input['attention_mask'],="" torch._dynamo.mark_dynamic(encoded_input['attention_mask'],="" marking="" particular="" case.="" moreover,="" created="" breaks.="" some="" iterations="" hide="" latency,="" steady="" state.="" good="" news="" that,="" practice,="" only="" first="" query,="" might="" affect="" production="" fixed.="" aot="" (a="" new="" feature="" pytorch)="" addresses="" warm="" torch.compile.="" follow-up="" blog="" will="" address="" challenges.="" apply="" end-end="" improve="" mode.="" deployment="" detailed="" guide="" deploy="" graviton-based="" amazon="" ec2="" instances="" conjunction="" llama="" torchserve="" found="" website.="" conclusion="" blog,="" covered="" instances.="" also="" shared="" faced,="" bring="" those="" case,="" speedups.="" hope="" you="" give="" try!="" need="" any="" support="" ml="" software="" graviton,="" open="" technical="" github.="" express="" gratitude="" eli="" uriegas="" making="" post="" happen.="" authors="" sunita="" nadampalli="" principal="" engineer="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" development="" delivering="" high-performance="" sustainable="" socs="" arm="" isa.="" ankith="" gunapal="" partner="" meta="" (pytorch).="" he="" customer="" support,="" evangelizing="" &amp;="" release="" engineering="" torchserve.="" solving="" problems="" serving.="" enjoys="" distilling="" technically="" complex="" material="" user="" friendly="" format.="" hamid="" shojanazeri="" frameworks="" team="" meta.="" building="" scalable="" specializes="" working="" tackle="" large-scale="" distributed="" training,="" serving,="" optimization.="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年12月20日</p>
+            <h1>
+                <a class="blog-title">在 AWS Graviton 处理器上使用 torch.compile 提高 RAG 性能</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Sunita Nadampalli（AWS）、Ankith Gunapal（Meta）、Hamid Shojanazeri（Meta）撰写</p>
+                    <p>大型语言模型（LLMs）在大量数据上训练，并使用数十亿参数来支持回答问题、翻译语言和完成句子等任务。在使用LLMs时存在一些挑战，例如领域知识差距、事实性问题以及幻觉，这些问题影响了它们的可靠性，尤其是在需要高度准确性的领域，如医疗保健、法律或工程。检索增强生成（RAG）通过在不重新训练模型的情况下，将特定领域或组织内部知识库增强到LLMs中，从而提供了一种缓解这些问题的解决方案。</p>
+
+<p>RAG 知识源通常是特定于业务的数据库，通常部署在通用 CPU 基础设施上。因此，在通用 CPU 基础设施上部署 RAG 以及相关的业务服务既高效又经济。基于这种动机，我们评估了在基于 <a href="https://aws.amazon.com/ec2/graviton/">AWS Graviton</a> 的 Amazon EC2 实例上部署 RAG，这些实例与大多数工作负载（包括数据库、内存缓存、大数据分析、媒体编解码器、游戏服务器和机器学习推理）的类似实例相比，提供了高达 <a href="https://aws.amazon.com/ec2/graviton/getting-started/">40%的价格性能优势。</a></p>
+
+<p>过去我们发布了几篇关于如何优化 PyTorch 以适应 AWS Graviton 处理器以加速 ML 推理性能的博客文章，包括急切模式（<a href="https://pytorch.org/blog/optimized-pytorch-w-graviton/"> 博客 </a>）和 <code class="language-plaintext highlighter-rouge">torch.compile</code> 模式（<a href="https://pytorch.org/blog/accelerated-pytorch-inference/"> 博客 </a>）。在这篇博客中，我们介绍了如何使用 PyTorch 和 <code class="language-plaintext highlighter-rouge">torch.compile</code> 部署典型的 RAG 工作负载，以及我们如何将其性能提升至 <strong>1.7 倍 </strong>（对于嵌入模型）和 <strong>1.3 倍 </strong>（对于 RAG 查询）在基于 AWS Graviton3 的 m7g.xlarge 实例上，与默认的 PyTorch“急切模式”相比，并最后提供了一些你可以应用于你的 RAG 用例的建议。</p>
+
+<h2 id="how-to-optimize-rag">如何优化 RAG？</h2>
+
+<p>没有 RAG，LLM根据它训练过的信息（它已经知道的信息）接收用户输入并创建响应。有了 RAG，引入了一个信息检索组件，它利用用户输入首先从新的数据源中提取信息。用户查询和相关信息都提供给LLM。LLM利用新的知识和其训练数据来创建更好的响应。以下图表显示了使用LLMs结合 RAG 的概念流程。</p>
+
+<p><img src="/assets/images/improve-rag-performance.png" alt="Image 1: Conceptual flow of using RAG with LLMs" style="width:100%"></p>
+
+<p><strong>图像 1</strong>：使用 RAG 的概念流程 LLMs</p>
+
+<p>来源：<a href="https://aws.amazon.com/what-is/retrieval-augmented-generation/">https://aws.amazon.com/what-is/retrieval-augmented-generation/</a></p>
+
+<h3 id="embedding-model">嵌入模型</h3>
+
+<p>RAG 的核心是一个嵌入模型，它将文本数据转换为向量表示。这些向量随后存储在向量数据库中。当用户进行查询时，查询首先被转换为向量，然后 RAG 在向量数据库上执行相似度搜索。因此，优化 RAG 性能的第一步是优化嵌入模型的推理性能。我们使用了基于 AWS Graviton3 的 m7g.xlarge 实例和 HuggingFace sentence-transformer 嵌入模型进行优化工作。以下是使用 PyTorch Eager 模式对 HuggingFace sentence-transformer 嵌入模型推理进行性能分析的示例脚本。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
+from torch.profiler import profile, ProfilerActivity, record_function
+from transformers import AutoModel, AutoTokenizer
+
+model_name = "sentence-transformers/all-mpnet-base-v2"
+input_text = ["This is an example sentence", "Each sentence is converted"]
+
+model = AutoModel.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+encoded_input = tokenizer(
+    input_text, padding=True, truncation=True, return_tensors="pt"
+)
+
+warmup, actual = 100, 100
+model.eval()
+
+with torch.no_grad():
+    # warmup
+    for i in range(warmup):
+        embeddings = model(**encoded_input)
+
+    with profile(activities=[ProfilerActivity.CPU]) as prof:
+        with record_function("model_inference"):
+            for i in range(actual):
+                embeddings = model(**encoded_input)
+        print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+</code></pre></div></div>
+
+<h4 id="eager-mode">主动模式</h4>
+
+<p>由于 PyTorch 主动模式已在 AWS Graviton 处理器上进行了优化，并设置了以下运行环境配置，因此我们将其包含在基线中，并测量了以下性能。请参阅<a href="https://pytorch.org/blog/optimized-pytorch-w-graviton/">使用 AWS Graviton 处理器优化 PyTorch 2.0 推理</a>以获取有关如何在 AWS Graviton 处理器上优化 PyTorch 主动模式的更多详细信息。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Enable the fast math GEMM kernels, to accelerate fp32 inference with bfloat16 gemm
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+
+# Enable Linux Transparent Huge Page (THP) allocations,
+# to reduce the tensor memory allocation latency
+export THP_MEM_ALLOC_ENABLE=1
+
+# Set LRU Cache capacity to cache the primitives and avoid redundant
+# memory allocations
+export LRU_CACHE_CAPACITY=1024
+</code></pre></div></div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                       Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                aten::addmm        61.01%        2.638s        62.49%        2.702s     370.197us          7300  
+            model_inference        12.01%     519.161ms       100.00%        4.324s        4.324s             1  
+                  aten::bmm         6.25%     270.084ms        11.96%     517.089ms     215.454us          2400  
+               aten::select         3.98%     172.165ms         5.34%     230.863ms       1.331us        173500  
+                aten::copy_         2.11%      91.133ms         2.11%      91.133ms       6.200us         14700   
+---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 4.324s
+</code></pre></div></div>
+
+<p><strong>表 1：</strong> 在基于 AWS Graviton3 的 m7g.xlarge 实例上使用 PyTorch 主动模式对 HuggingFace sentence-transformer 嵌入模型进行推理的 Profiler 输出</p>
+
+<p>接下来，我们添加了 <code class="language-plaintext highlighter-rouge">torch.compile</code>、<a href="https://pytorch.org/blog/accelerated-pytorch-inference/#technical-deep-dive-what-are-the-challenges-and-optimization-details"> 权重预打包</a>和 <code class="language-plaintext highlighter-rouge">torch.inference_mode</code>，并观察到大约 1.7 倍的性能提升。以下部分将讨论这些优化以及带来的速度提升。</p>
+
+<h4 id="torchcompile">torch.compile</h4>
+
+<p>与急切模式不同，<code class="language-plaintext highlighter-rouge">torch.compile</code> 以一种针对给定硬件优化的方式将整个模型预编译成一个单一的图。请参阅<a href="https://pytorch.org/blog/accelerated-pytorch-inference/">在 AWS Graviton 处理器上使用 torch.compile 加速 PyTorch 推理</a>以获取有关 <code class="language-plaintext highlighter-rouge">torch.compile</code> 功能和我们在 AWS Graviton 处理器上如何优化它们的更多详细信息。按照以下代码片段调用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 以触发模型的 PyTorch 动态编译。这使性能从基线提高了约 1.04 倍。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model = torch.compile(model)
+
+----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                        Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                 aten::addmm        64.46%        2.675s        66.66%        2.766s     378.905us          7300  
+       Torch-Compiled Region        19.76%     820.085ms        99.04%        4.109s      41.094ms           100  
+                   aten::bmm         6.66%     276.216ms        12.52%     519.527ms     216.470us          2400  
+                aten::select         3.98%     164.991ms         5.41%     224.488ms       1.299us        172800  
+            aten::as_strided         1.66%      69.039ms         1.66%      69.039ms       0.383us        180100  
+----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 4.149s
+</code></pre></div></div>
+
+<p><strong>表 2：</strong> 在基于 AWS Graviton3 的 m7g.xlarge 实例上使用 torch.compile 模式对 HuggingFace sentence-transformer 嵌入模型推理的 Profiler 输出</p>
+
+<h4 id="weights-pre-packing">权重预打包</h4>
+
+<p><code class="language-plaintext highlighter-rouge">torch.compile</code> 在模型编译期间将模型权重打包成更适合给定硬件的格式，从而提高了性能。设置以下配置以触发权重预打包。这使性能从基线提高了约 1.69 倍。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch._inductor.config as config
+config.cpp.weight_prepack=True
+config.freezing=True
+</code></pre></div></div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                         Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+    mkldnn::_linear_pointwise        39.10%     994.821ms        41.50%        1.056s     144.628us          7300  
+        Torch-Compiled Region        35.12%     893.675ms        98.42%        2.504s      25.043ms           100  
+                    aten::bmm        10.96%     278.859ms        21.66%     551.073ms     229.614us          2400  
+                 aten::select         7.34%     186.838ms         9.98%     253.840ms       1.469us        172800  
+             aten::as_strided         2.63%      67.002ms         2.63%      67.002ms       0.388us        172800   
+-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 2.544s
+</code></pre></div></div>
+
+<p><strong>表 3：</strong> HuggingFace sentence-transformer 嵌入模型在 AWS Graviton3 基于的 m7g.xlarge 实例上进行的推理输出，使用 torch.compile 和权重预打包</p>
+
+<h4 id="torchinference_mode">torch.inference_mode</h4>
+
+<p>此外，使用 <code class="language-plaintext highlighter-rouge">torch.inference_mode()</code> 来从关闭张量的版本控制和视图跟踪中节省资源。请参阅 PyTorch<a href="https://pytorch.org/docs/stable/generated/torch.autograd.grad_mode.inference_mode.html"> 文档</a>获取更多详细信息。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>with torch.inference_mode():
+# instead of
+with torch.no_grad():
+</code></pre></div></div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                         Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+    mkldnn::_linear_pointwise        38.92%     987.276ms        41.17%        1.044s     143.056us          7300  
+        Torch-Compiled Region        34.92%     885.895ms        98.45%        2.498s      24.975ms           100  
+                    aten::bmm        11.25%     285.292ms        22.22%     563.594ms     234.831us          2400  
+                 aten::select         7.74%     196.223ms        10.22%     259.251ms       1.500us        172800  
+             aten::as_strided         2.48%      63.027ms         2.48%      63.027ms       0.365us        172800  
+-----------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 2.537s
+</code></pre></div></div>
+
+<p><strong>表 4：</strong> HuggingFace sentence-transformer 嵌入模型在 AWS Graviton3 基于的 m7g.xlarge 实例上进行的推理输出，使用 torch.compile、权重预打包和 inference_mode</p>
+
+<p>以下表格显示了独立嵌入模型推理所实现的增量性能提升。</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td><strong>优化级别</strong>
+   </td>
+   <td><strong>测量到的延迟（以秒为单位）</strong>
+   </td>
+   <td><strong>相比基线提升</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>PyTorch eager mode（基线）</td>
+   <td>0.04324
+   </td>
+   <td>NA
+   </td>
+  </tr>
+  <tr>
+   <td>torch.compile
+   </td>
+   <td>0.04149
+   </td>
+   <td>1.04倍</td>
+  </tr>
+  <tr>
+   <td>权重预打包</td>
+   <td>0.02544
+   </td>
+   <td>1.69倍</td>
+  </tr>
+  <tr>
+   <td>torch.inference_mode
+   </td>
+   <td>0.02537
+   </td>
+   <td>1.70x
+   </td>
+  </tr>
+</tbody></table>
+
+<p>以下脚本是一个更新后的示例，用于嵌入模型推理，其中包含了之前讨论的优化。优化内容以绿色突出显示。</p>
+
+<div class="code-block">
+<pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">import torch
+从 torch.profiler 导入 profile、record_function、ProfilerActivity
+从 transformers 导入 AutoTokenizer、AutoModel
+<span style="color: green;">从 torch._inductor.config 导入 config</span>
+<span style="color: green;">config.cpp.weight_prepack=True</span>
+<span style="color: green;">config.freezing=True</span>
+
+模型名称 = "sentence-transformers/all-mpnet-base-v2"
+输入文本 = ['这是示例句子', '每个句子都被转换']
+
+模型 = AutoModel.from_pretrained(模型名称)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+encoded_input = tokenizer(input_text, padding=True, truncation=True, return_tensors='pt')
+
+warmup, actual = 100, 100
+model.eval()
+<span style="color: green;">model = torch.compile(model)</span>
+
+<span style="color: green;">with torch.inference_mode():</span>
+#代替 with torch.no_grad()
+# 预热
+for i in range(warmup):
+embeddings = model(**encoded_input)
+
+with profile(activities=[ProfilerActivity.CPU]) as prof:
+with record_function("model_inference"):
+for i in range(actual)
+embeddings = model(**encoded_input)
+打印 prof.key_averages().table(sort_by="self_cpu_time_total")</font></font></font></pre>
+</div>
+
+<h3 id="end-to-end-rag-scenario-on-cpu">基于 CPU 的端到端 RAG 场景</h3>
+
+<p>在优化嵌入模型推理后，我们开始使用基于 PyTorch eager 模式的 RAG 配置，主要是为了在 CPU 后端验证其功能。我们使用 <a href="https://api.python.langchain.com/en/latest/embeddings/langchain_community.embeddings.huggingface.HuggingFaceEmbeddings.html"> HuggingFaceEmbeddings</a> 从 <code class="language-plaintext highlighter-rouge">langchain_community.embeddings</code> 构建了 RAG 解决方案，如下代码片段所示。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders.recursive_url_loader import RecursiveUrlLoader
+from langchain.prompts import PromptTemplate
+from langchain_core.prompts import format_document
+from bs4 import BeautifulSoup as Soup
+import torch
+
+url =  "https://pytorch.org/blog/pytorch2-5/"
+chunk_size = 1000
+chunk_overlap = 0
+embedding_model = "sentence-transformers/all-mpnet-base-v2"
+N = 5
+
+question = "What's new in PyTorch 2.5?"
+
+from transformers import AutoTokenizer, AutoModel
+from typing import Any, List
+
+loader = RecursiveUrlLoader(
+            url=url, max_depth=3, extractor=lambda x: Soup(x, "html.parser").text
+        )       
+docs = loader.load()
+
+# Split the document into chunks with a specified chunk size
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+all_splits = text_splitter.split_documents(docs)
+
+# Store the document into a vector store with a specific embedding model
+model = HuggingFaceEmbeddings(model_name=embedding_model)
+
+warmup , actual = 100, 100
+
+with torch.inference_mode():
+    vectorstore = FAISS.from_documents(all_splits, model)
+
+    for i in range(warmup):
+        searchDocs = vectorstore.similarity_search(question, k=N)
+
+    import time
+
+    start = time.time()
+    for i in range(actual):
+        searchDocs = vectorstore.similarity_search(question, k=N)
+    end = time.time()
+    print(f"Time for 1 inference is {(end-start)/actual} seconds")
+
+    doc_prompt = PromptTemplate.from_template("{page_content}")
+    context = ""
+    for i, doc in enumerate(searchDocs):
+        context += f"\n{format_document(doc, doc_prompt)}\n"
+</code></pre></div></div>
+
+<p>接下来，我们的目标是使用 torch.compile 和权重预打包优化端到端 RAG 用例，这为独立的嵌入模型推理带来了 1.7 倍的改进。然而，这些优化并没有直接适用于 RAG 场景。</p>
+
+<h3 id="what-are-the-challenges-and-solutions-to-achieve-similar-gains-in-an-end-to-end-rag-scenario">在端到端 RAG 场景中实现类似增益的挑战和解决方案是什么？</h3>
+
+<h4 id="challenge-1-model-handle">挑战1：模型处理</h4>
+
+<p>无法获取使用 <code class="language-plaintext highlighter-rouge">HuggingFaceEmbeddings</code> 实例化的模型句柄，包装类也不提供编译 API。因此，我们的应用程序无法调用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 来触发 PyTorch 的动态编译过程。</p>
+
+<h4 id="solution">解决方案</h4>
+
+<p>我们实现了自定义嵌入类，以便获取模型句柄。这样，我们可以从 <code class="language-plaintext highlighter-rouge">sentence-transformers</code> 实例化嵌入模型，并保留句柄以进行即时编译或稍后编译。有了这个，我们能够触发 <code class="language-plaintext highlighter-rouge">torch.compile</code> 并因此启动动态编译。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>class CustomEmbedding(HuggingFaceEmbeddings):
+    
+    def __init__(self, **kwargs: Any):
+        """Initialize the sentence_transformer."""
+        super().__init__(**kwargs)
+
+        # Load model from HuggingFace Hub
+        self.client = AutoModel.from_pretrained(self.model_name)
+    class Config:
+        arbitrary_types_allowed = True
+
+
+    
+    def embed_documents(self, texts: List[str]) -&gt; List[List[float]]:
+        """Compute doc embeddings using a HuggingFace transformer model.
+        Args:
+            texts: The list of texts to embed.
+        Returns:
+            List of embeddings, one for each text.
+        """
+
+        texts = list(map(lambda x: x.replace("\n", " "), texts))
+
+        # Tokenize sentences
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        encoded_input = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+        
+        embeddings = self.client(
+           **encoded_input, output_hidden_states=True
+        )
+        embeddings = embeddings.pooler_output.detach().numpy()
+
+        return embeddings.tolist()
+
+# instead of model = HuggingFaceEmbeddings(model_name=embedding_model)
+model = CustomEmbedding(model_name=embedding_model)
+
+# torch.compile the model
+model.client = torch.compile(model.client)
+</code></pre></div></div>
+
+<h4 id="challenge-2-triggering-the-optimization">挑战2：触发优化</h4>
+
+<p>对于一个典型的推理场景，其中图被冻结且梯度计算被禁用，Torch inductor（我们用于 CPU 的后端编译器）会调用硬件特定的优化，如将图重写为更高效的算子、算子融合和权重预打包。尽管 Torch dynamo 能够看到模型并触发通用编译，但它未能触发 Torch inductor 中的这些额外的 Fx 传递。</p>
+
+<p>火炬电感器未触发优化传递的两个主要原因：（1）应用程序未为 torch 电感器设置 <code class="language-plaintext highlighter-rouge">no_grad()</code> 或 <code class="language-plaintext highlighter-rouge">inference_mode()</code>，使其能够检测到图已冻结；以及（2）我们在 torch.compile 框架中遇到了限制，如果在编译区域的开始处设置了 <code class="language-plaintext highlighter-rouge">no_grad</code>，那么在调用电感器 <code class="language-plaintext highlighter-rouge">Fx</code> 传递时，torch.compile 无法检测到它，因为它那时还没有遇到 <code class="language-plaintext highlighter-rouge">no_grad</code> 区域。请参阅<a href="https://github.com/pytorch/pytorch/issues/125474">此 GitHub 问题</a>获取更多详细信息。</p>
+
+<h4 id="solution-1">解决方案</h4>
+
+<p>我们通过将 <code class="language-plaintext highlighter-rouge">no_grad()</code> 上下文从模型类内部移动到应用程序代码中，来解决这个问题。这样，模型编译按预期进行，并在对稳定推理传递进行性能分析时，与急切和编译版本相比，实现了大约 1.3 倍的性能提升。</p>
+
+<h4 id="challenge-3-extra-compilation">挑战3：额外编译</h4>
+
+<p>通过之前的修复，查询查找推理性能得到了提升，但基准测试脚本的总体执行时间并没有。我们将其归因于 RAG 推理期间模型的冗余编译。进一步深入调查发现，这是因为词嵌入和 RAG 查询阶段之间的批量大小不匹配。例如，在我们的基准测试脚本中，当数据库被矢量化并存储在向量数据库中时，我们使用了 16 的批量大小，因此模型被编译为形状为 &lt;强 id=0&gt;16NxK。而 RAG 查询查找通常是一个形状为 &lt;强 id=1&gt;1NxK 的单个请求。因此，存在批量大小不匹配（这些张量的“0”维度），触发了查询查找阶段的重新编译。我们通过以下 Torch 日志进行了确认：<code class="language-plaintext highlighter-rouge">TORCH_LOGS="recompiles"</code></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>TORCH_LOGS="recompiles" python rag_compile.py 
+V1103 02:48:08.805986 34281 site-packages/torch/_dynamo/guards.py:2813] [0/1] [__recompiles] Recompiling function forward in site-packages/transformers/models/mpnet/modeling_mpnet.py:502
+V1103 02:48:08.805986 34281 site-packages/torch/_dynamo/guards.py:2813] [0/1] [__recompiles]     triggered by the following guard failure(s):
+V1103 02:48:08.805986 34281 site-packages/torch/_dynamo/guards.py:2813] [0/1] [__recompiles]     - 0/0: tensor 'L['input_ids']' size mismatch at index 0. expected 16, actual 1
+</code></pre></div></div>
+
+<h4 id="solution-2">解决方案</h4>
+
+<p>Torch dynamo 提供了一个装饰器来标记给定张量的维度为动态，并指定相应的期望值，从而避免重新编译。例如，将 <code class="language-plaintext highlighter-rouge">input_ids</code> 和 <code class="language-plaintext highlighter-rouge">attention_mask</code> 的维度“0”标记为动态，并指定该维度允许的值为“1”（如下代码片段所示），应该可以避免冗余的编译。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch._dynamo.decorators.mark_unbacked(encoded_input['input_ids'], 0)
+torch._dynamo.mark_dynamic(encoded_input['input_ids'], 1)
+        torch._dynamo.decorators.mark_unbacked(encoded_input['attention_mask'], 0)
+torch._dynamo.mark_dynamic(encoded_input['attention_mask'], 1)
+</code></pre></div></div>
+
+<p>然而，在这个特定情况下，Torch dynamo 装饰器和标记并没有起作用。此外，使用装饰器创建的图会损坏。因此，我们添加了一些预热迭代来隐藏编译延迟，并在稳态下分析了查询查找性能。好消息是，实际上，这种重新编译只会在第一次查询时触发，所以如果数据库大小固定，可能不会影响生产环境。此外，PyTorch AOT Inductor（PyTorch 中的新功能）通过 torch.compile 解决了重新编译和预热挑战。在后续的博客中，我们将讨论如何在生产环境中使用 AOT Inductor 来应对这些挑战。</p>
+
+<p>通过这些解决方案，我们能够应用 torch.compile、权重预打包以及针对 AWS Graviton 的特定优化，在端到端 RAG 场景中提升性能，相较于基线急切模式提高了 1.3 倍。</p>
+
+<h2 id="deployment">部署</h2>
+
+<p>如何在 AWS Graviton 基于的 Amazon EC2 实例上部署 torch 编译的 RAG，以及如何与 Llama 结合使用 <a href="https://github.com/pytorch/serve"> TorchServe</a> 进行部署的详细指南，可以在 <a href="https://pytorch.org/serve/enhancing_llm_serving_compile_rag.html"> PyTorch 网站</a>上找到。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>在本博客中，我们介绍了如何在 AWS Graviton3 基于的 EC2 实例上优化嵌入模型推理性能。我们还分享了面临的挑战、为 RAG 用例实施的解决方案以及带来的速度提升。希望您能尝试一下！如果您在 Graviton 上需要任何关于 ML 软件的支持，请在 <a href="https://github.com/aws/aws-graviton-getting-started"> AWS Graviton 技术指南 GitHub</a> 上提交问题。</p>
+
+<p>我们想对 Eli Uriegas 在制作这篇博客文章过程中提供的支持表示感谢。</p>
+
+<h2 id="authors">作者</h2>
+
+<p><strong>苏妮塔·纳达帕利</strong>是 AWS 的首席工程师和 AI/ML 专家。她负责 AWS Graviton 软件性能优化，以支持 AI/ML 和 HPC 工作负载。她对开源软件开发充满热情，致力于为基于 Arm 指令集架构（ISA）的 SoC 提供高性能和可持续的软件解决方案。</p>
+
+<p><strong>安基特·古纳帕尔</strong>是 Meta（PyTorch）的 AI 合作伙伴工程师。他负责客户支持、TorchServe 的推广和发布工程。他热衷于解决模型推理和模型服务中的生产问题。他还喜欢将技术复杂的内容以用户友好的格式提炼出来。</p>
+
+<p><strong>哈米德·肖贾纳泽里</strong>领导 Meta 的 AI 框架合作伙伴工程团队。他热衷于构建可扩展的 AI 解决方案，并专注于使用 PyTorch 解决大规模分布式训练、推理、模型服务和优化的挑战。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

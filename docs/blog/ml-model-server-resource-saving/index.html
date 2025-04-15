@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      ML Model Server Resource Saving - Transition From High-Cost GPUs to Intel CPUs and oneAPI powered Software with performance | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Reviewers: Yunsang Ju(Naver GplaceAI Leader), Min Jean Cho(Intel), Jing Xu(Intel), Mark Saroufim(Meta)
+
+Intro
+
+Here, We will be sharing our experience in moving AI workloads from our GPU servers to our Intel CPU servers without any performance or quality degradation, and saving annual costs of approximately 340 thousand U.S. Dollar (refer to the Conclusion) in the process.
+
+We aim to provide value to our consumers by serving various AI models that enhance the Online to Offline (O2O) experience. With the ongoing growth in the demand for new models and the limited nature of high-cost resource GPUs, we needed to transition relatively lightweight AI models from GPU servers to Intel CPU servers for reducing resource consumption. In the same setting, however, the CPU server had issues where performance of rps, inference time, etc. was reduced by tens of times. We applied various engineering techniques and lightweighted the model to solve this problem, and we were able to successfully transition to the Intel CPU servers with the same performance or better performance as the GPU servers with just a three-fold scale out.
+
+For a more detailed introduction about our team, please refer to the Introduction to NAVER Place AI Development Team.
+
+I’ll mention it again in the middle, but I’ve received a lot of help from Grokking Pytorch Intel CPU Performance From First Principles written by Intel and PyTorch in the overall work.
+
+Problem Definition
+
+1: Service Architecture
+
+
+
+Simplified service architecture (Image Source:&nbsp;NAVER GplaceAI)
+
+To facilitate understanding, a brief introduction to our service architecture will be provided. CPU intensive tasks such as preprocessing input to tensor format (then forwarded to the model) and post processing inference results to human readable output (e.g. natural language and image formats) are performed on the App Server(FastAPI) The Model Server(TorchServe) exclusively handles inference operations. For stable operation of the service, the following actions need to be performed with sufficient throughput and low latency.
+
+The specific processing sequence is as follows:
+
+
+  The client submits a request to the app server via the Traefik gateway.
+  The app server pre-processes the input by performing actions such as resizing and transforming, and converting it into a Torch tensor before then requesting the model server.
+  The model server performs inference and returns the feature to the app server
+  The app server converts the feature into a format understandable by humans through post-processing and returns it to the client
+
+
+2:  Throughput and Latency Measurement
+
+
+
+Comparison of Image Scoring Models
+
+With all other conditions remaining the same, deploying on a threefold increase CPU server pod, yet, notably, the RPS (requests per second) and response time deteriorated by more than tenfold. While it was not surprising that CPU inference performance is inferior to GPUs, the challenging situation was evident. Given the goal of maintaining performance within limited resources, achieving an approximate 10 to 20 times performance improvement was necessary Barring any additional scaling.
+
+3: Challenges From a Throughput Perspective
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+
+
+One of the first steps TorchServer framework users might take in order to improve throughput is to increase the number of workers in TorchServe. This approach is effective on GPU servers Because of parallel workload processing, excluding the linear memory usage increase as workers scale. However, we were experiencing worse performance when increasing the number of workers. Identifying the cause of performance degradation on CPU servers required further investigation.
+
+4: Challenges From a Latency Perspective
+
+Our primary concern was latency. Throughput improvement is normally achievable when a system’s implementation is faithful to scale-out principles, except for perhaps very rare worst-case scenarios. However, in the case of the Image Scoring model example, even performing a single inference took more than 1 second, and as the request volume increased, latency increased to as much as 4 seconds. It was a situation where the timeout criteria to satisfy the client could not be met even with a single inference.
+
+Proposed Solutions
+
+Improvements were needed from both an ML and an engineering perspective. It was essential to fundamentally reduce the inference time on the CPU and to identify the causes of performance degradation when applying config that generally enhances performance, in order to find the optimal configuration values. To accomplish this, collaboration was established with MLE professionals to concurrently execute tasks encompassing ‘model lightweighting without compromising performance’, and ‘Identify optimal configurations for achieving peak performance’. Using the aforementioned approaches we were able to effectively transition workload handling to our CPU servers.
+
+1: Resolving Low RPS from an Engineering Perspective
+
+First, the reason for performance degradation even after increasing the worker number was the front-end bound caused by logical threads in GEMM operations. Generally, when increasing the number of workers, the expected improvement effect is the increase in parallelism. Conversely, if performance decreases, one can infer the corresponding trade-off effect.
+
+
+
+Image Source:&nbsp;Nvidia
+
+As many are aware, the reason model inference performance on CPUs is inferior to GPUs lies in the difference in hardware design, particularly in terms of multi-threading capabilities. Diving deeper, model inference is fundamentally a repetition of GEMM (General Matrix Multiply) operations, and these GEMM operations are executed independently in “fused-multiply-add” (FMA) or “dot-product” (DP) execution units. If the GEMM operation becomes a bottleneck on the CPU, increasing parallelism might actually result in decreased performance. While researching the problem we found relevant information within the PyTorch documentation.
+
+While two logical threads run GEMM at the same time, they will be sharing the same core resources causing front-end bound
+
+This information highlighted that logical threads could cause a bottleneck in CPU GEMM operations, which helped us intuitively understand why performance decreased when increasing the worker num. This is because the default value of the torch thread corresponds to the physical core value of the CPU.
+
+root@test-pod:/# lscpu
+  …
+Thread(s) per core: 2
+Core(s) per socket: 12
+  …
+root@test-pod:/# python
+>>> import torch
+>>> print(torch.get_num_threads())
+24
+
+
+When the worker_num increases, the total thread count increases by the product of the physical core * worker number. Consequently, logical threads are utilized. In order to improve performance, the total number of threads per worker was adjusted to align with the physical core count. Below, it can be observed that the metric RPS increased approximately threefold to 6.3(from the previous value of 2.1) when the worker_num was increased to 4 and the total thread count was aligned with the number of physical cores.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+
+
+Cautionary Note 1: Our team is Using Kubernetes to maintain our deployments. So we are adjusting the which required us to adjust according to the CPU resource limit of the pod, rather than the physical core count of the node that can be checked using the lscpu command. (Setting the torch thread of each worker to 8/4 = 2, or 24/4 = 6 resulted in performance degradation.)
+
+Cautionary Note 2: Since torch thread settings for each worker can only be configured as integers, it’s advisable to set the CPU limit divisible by the worker_num in order to adequately utilize CPU usage.
+
+
+
+ex) core=8, In the case of worker_num=3: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;75%
+
+
+
+ex) core=8, In the case of worker_num=4: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;100%
+
+We also analyzed the model containers to see why we got a mere threefold improvement in performance despite a four times increase in the number of workers. Various resources were monitored, and among them, the core utilization rate was identified as the underlying cause.
+
+
+
+Even when the total thread count was adjusted to match the CPU(2nd Generation, Intel(R) Xeon(R) Silver 4214) limit(8 core), there were instances where computations were executed from logical thread to logical core. Due to the presence of 24 physical cores, the cores numbered 25 to 48 are classified as logical cores. The possibility of confining thread execution solely within physical cores seemed to offer the potential for further performance enhancement. The reference to this solution could be found within the source document mentioned in the PyTorch-geometric article that warned about CPU GEMM bottlenecks.
+
+
+  Reference Documentation: Grokking Pytorch Intel CPU Performance From First Principles
+
+
+As per the instructions in the document, Intel provides Intel® Extension for PyTorch where we can simply pin cores to specific sockets. The application method is also made very simple, by adding the following settings to the torchserve config.properties file.(used intel_extension_for_pytorch==1.13.0)
+
+ipex_enable=true
+CPU_launcher_enable=true
+
+
+
+
+Image Source:&nbsp;PyTorch
+
+Beyond the removal of logical threads through socket pinning, there is an additional effect of eliminating UPI cache hit overhead. Since the CPU comprises more than one socket when threads scheduled on socket 1 are rescheduled on socket 2, cache hits occur in cases of accessing the cache of socket 1 via Intel Ultra Path Interconnect (UPI). At this point, UPI access to the local cache becomes more than twice as slow as local cache access, resulting in more bottlenecks. With threads being pinned to socket units by oneAPI powered Intel® Extension for PyTorch, We observed rps handling increase of up to four times than when the bottleneck existed.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+
+
+Cautionary Note 1: Intel® Extension for PyTorch is specialized in neural network (referred to as “nn” hereafter) inference optimization, so the performance improvement from additional techniques outside nn might be minimal. Indeed, in the instance of the image scoring system highlighted as an example, where svr (support vector regression) is applied post-inference, the performance enhancement was confined to a 4-fold increase. However, for a purely nn inference model such as the food recognition model, a performance boost of 7-fold (2.5rps -> 17.5rps) was detected.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/food-classification                                                 446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+
+
+Cautionary Note 2: Applying Intel® Extension for PyTorch requires torchserve version 0.6.1 or higher. Since our team was using version 0.6.0, there was an issue where socket pinning was not functioning correctly. Currently, we have made modifications to the guide document, specifying the required version.
+
+Within WorkerLifeCycle.java, multi-worker pinning is not supported in 0.6.0 and below (ninstance is hardcoded to 1)
+
+// 0.6.0 version
+
+public ArrayList<String> launcherArgsToList() {
+   ArrayList<String> arrlist = new ArrayList<String>();
+   arrlist.add(" -m");="" arrlist.add("intel_extension_for_pytorch.cpu.launch");="" arrlist.add("="" —="" ninstance");="" arrlist.add("1");="" if="" (launcherargs="" !="null" &amp;&amp;="" launcherargs.length()="" &gt;="" 1)="" {="" string[]="" argarray="launcherArgs.split(&quot;" ");="" for="" (int="" i="0;" &lt;="" argarray.length;="" i++)="" arrlist.add(argarray[i]);="" }="" return="" arrlist;="" master="" version="" (this.numworker="" argl.add("="" ninstances");="" argl.add(string.valueof(this.numworker));="" instance_idx");="" argl.add(string.valueof(this.currnumrunningworkers));="" 2:="" addressing="" slow="" latency="" through="" model="" lightweighting="" we="" also="" streamlined="" our="" using="" knowledge="" distillation="" (commonly="" abbreviated="" as="" kd)="" to="" further="" reduce="" latency.="" is="" widely="" known,="" kd="" a="" technique="" where="" from="" larger="" network="" (teacher="" network)="" conveyed="" smaller,="" lightweight="" (student="" which="" less="" resource="" intensive="" and="" can="" be="" more="" readily="" deployed.="" detailed="" information,="" please="" refer="" the="" paper="" this="" concept="" was="" initially="" introduced,="" titled="" distilling="" in="" neural="" network.="" there="" variety="" of="" techniques="" available="" because="" were="" primarily="" focused="" on="" accuracy="" loss="" minimization,="" adopted="" approach="" stronger="" teacher,="" published="" year="" 2022.="" straightforward.="" unlike="" conventional="" method="" that="" utilizes="" only="" model’s="" prop="" values,="" chosen="" involves="" having="" student="" learn="" correlations="" between="" classes="" teacher="" when="" put="" into="" actual="" application,="" observed="" effective="" weight="" reduction="" observe="" while="" mainting="" high="" accuracy.="" following="" are="" outcomes="" experimentation="" with="" mentioned="" several="" candidate="" models,="" selections="" made="" based="" maintained="" level="" image="" scoring="" system,="" additional="" measures="" taken="" input="" size.="" considering="" prior="" use="" cpu-based="" ml="" svr="" (support="" vector="" regression)="" used="" (2-stage:="" cnn="" +="" svr),="" even="" 1-stage="" model,="" significant="" speed="" advantages="" not="" cpu="" inference.="" order="" streamlining="" have="" significance,="" size="" during="" inference="" needed="" reduction.="" consequently,="" experiments="" conducted="" reduced="" 384384="" 224224.="" simplifying="" transformations,="" 2-stage="" (cnn="" svr)="" unified="" convnext,="" then="" applied="" efficientnet="" resolve="" trade-off.="" experiments,="" encountered="" problem="" changing="" img_resize="" 224="" led="" performance="" drop="" 0.4007="" 0.4296="" terms="" mae.="" due="" size,="" various="" preprocessing="" original="" training="" images="" (such="" affine,="" randomrotate90,="" blur,="" oneof="" [griddistortion,="" opticaldistortion,="" elastictransform],="" verticalflip)="" had="" counterproductive="" effect.="" by="" adopting="" these="" measures,="" achieved,="" mae="" value="" improved="" 25%="" compared="" previous="" one="" (.518="" .3876).="" validation="" 1:="" final="" measurement="" shows="" improvements="" servers,="" three="" models="" throughout="" article.="" #="" food="" photo="" classifier="" (pod="" 3):="" 2.5rps="" -&gt;="" 84="" rps="" type="" reqs="" fails="" |="" avg="" min="" max="" med="" req="" s="" failures="" --------|----------------------------------------------------------------------------|------|------------|-------|------|-------|-------|--------|---------="" post="" predictions="" food-classification="" 2341="" 0(0.00%)="" 208="" 130="" 508="" 200="" 84.50="" 0.00="" --------|----------------------------------------------------------------------------|--------|-------------|------|-------|--------|------|--------|----------="" aggregated="" 2.1rps="" 62rps="" #reqs="" #fails="" median="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|-------|--------|---------|--------|---------="" image-scoring="" 1298="" 0="" (0.00%)="" 323="" 99="" 607="" 370="" 61.90="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|------|--------|---------|--------|----------="" receipt="" classifier(pod="" 3)="" :="" 20rps="" 111.8rps="" --------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------="" receipt-classification="" 4024="" 266="" 133="" 2211="" 111.8="" 4020=""  traffic="" mirroring="" previously="" mentioned,="" team’s="" service="" architecture="" employs="" tool="" “traefik”="" gateway="" front="" app="" server,="" briefly="" introduced="" at="" beginning="" validation,="" feature="" traefik="" utilized="" mirror="" traffic="" production="" staging="" month="" before="" applying="" it="" production,="" now="" operational.="" details="" regarding="" beyond="" scope="" topic="" hence="" omitted.="" those="" interested,="" kindly="" document="" https:="" doc.traefik.io="" routing="" services="" #mirroring-service.="" conclusion="" concludes="" discussion="" about="" transitioning="" gpu="" server="" maintaining="" quality.="" effort,="" team="" able="" save="" 15="" gpus="" each="" south="" korea="" japan,="" resulting="" an="" annual="" cost="" savings="" approximately="" 340="" thousand="" u.s.="" dollar.="" although="" directly="" purchase="" within="" naver,="" calculated="" rough="" aws="" ec2="" instances="" stably="" support="" t4="" gpus.="" calculation:="" 1.306="" (1-year="" reserved="" instance="" hourly="" cost)="" *="" 24="" (hours)="" 365="" (days)="" (number="" gpus)="" 2="" (kr="" jp)="" secured="" will="" harnessed="" advance="" enhance="" ai="" services,="" delivering="" exceptional="" experiences.="" sincerely="" appreciate="" your="" encouragement="" anticipation.:)="" explore="" www.intel.com="" www="" us="" en="" developer="" ecosystem="" pytorch-foundation.html="" pytorch-geometric.readthedocs.io="" latest="" advanced="" cpu_affinity.html#binding-processes-to-physical-cores="" arxiv.org="" pdf="" 2205.10536.pdf="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="ML Model Server Resource Saving - Transition From High-Cost GPUs to Intel CPUs and oneAPI powered Software with performance">
+<meta property="og:description" content="Reviewers: Yunsang Ju(Naver GplaceAI Leader), Min Jean Cho(Intel), Jing Xu(Intel), Mark Saroufim(Meta)
+
+Intro
+
+Here, We will be sharing our experience in moving AI workloads from our GPU servers to our Intel CPU servers without any performance or quality degradation, and saving annual costs of approximately 340 thousand U.S. Dollar (refer to the Conclusion) in the process.
+
+We aim to provide value to our consumers by serving various AI models that enhance the Online to Offline (O2O) experience. With the ongoing growth in the demand for new models and the limited nature of high-cost resource GPUs, we needed to transition relatively lightweight AI models from GPU servers to Intel CPU servers for reducing resource consumption. In the same setting, however, the CPU server had issues where performance of rps, inference time, etc. was reduced by tens of times. We applied various engineering techniques and lightweighted the model to solve this problem, and we were able to successfully transition to the Intel CPU servers with the same performance or better performance as the GPU servers with just a three-fold scale out.
+
+For a more detailed introduction about our team, please refer to the Introduction to NAVER Place AI Development Team.
+
+I’ll mention it again in the middle, but I’ve received a lot of help from Grokking Pytorch Intel CPU Performance From First Principles written by Intel and PyTorch in the overall work.
+
+Problem Definition
+
+1: Service Architecture
+
+
+
+Simplified service architecture (Image Source:&nbsp;NAVER GplaceAI)
+
+To facilitate understanding, a brief introduction to our service architecture will be provided. CPU intensive tasks such as preprocessing input to tensor format (then forwarded to the model) and post processing inference results to human readable output (e.g. natural language and image formats) are performed on the App Server(FastAPI) The Model Server(TorchServe) exclusively handles inference operations. For stable operation of the service, the following actions need to be performed with sufficient throughput and low latency.
+
+The specific processing sequence is as follows:
+
+
+  The client submits a request to the app server via the Traefik gateway.
+  The app server pre-processes the input by performing actions such as resizing and transforming, and converting it into a Torch tensor before then requesting the model server.
+  The model server performs inference and returns the feature to the app server
+  The app server converts the feature into a format understandable by humans through post-processing and returns it to the client
+
+
+2:  Throughput and Latency Measurement
+
+
+
+Comparison of Image Scoring Models
+
+With all other conditions remaining the same, deploying on a threefold increase CPU server pod, yet, notably, the RPS (requests per second) and response time deteriorated by more than tenfold. While it was not surprising that CPU inference performance is inferior to GPUs, the challenging situation was evident. Given the goal of maintaining performance within limited resources, achieving an approximate 10 to 20 times performance improvement was necessary Barring any additional scaling.
+
+3: Challenges From a Throughput Perspective
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+
+
+One of the first steps TorchServer framework users might take in order to improve throughput is to increase the number of workers in TorchServe. This approach is effective on GPU servers Because of parallel workload processing, excluding the linear memory usage increase as workers scale. However, we were experiencing worse performance when increasing the number of workers. Identifying the cause of performance degradation on CPU servers required further investigation.
+
+4: Challenges From a Latency Perspective
+
+Our primary concern was latency. Throughput improvement is normally achievable when a system’s implementation is faithful to scale-out principles, except for perhaps very rare worst-case scenarios. However, in the case of the Image Scoring model example, even performing a single inference took more than 1 second, and as the request volume increased, latency increased to as much as 4 seconds. It was a situation where the timeout criteria to satisfy the client could not be met even with a single inference.
+
+Proposed Solutions
+
+Improvements were needed from both an ML and an engineering perspective. It was essential to fundamentally reduce the inference time on the CPU and to identify the causes of performance degradation when applying config that generally enhances performance, in order to find the optimal configuration values. To accomplish this, collaboration was established with MLE professionals to concurrently execute tasks encompassing ‘model lightweighting without compromising performance’, and ‘Identify optimal configurations for achieving peak performance’. Using the aforementioned approaches we were able to effectively transition workload handling to our CPU servers.
+
+1: Resolving Low RPS from an Engineering Perspective
+
+First, the reason for performance degradation even after increasing the worker number was the front-end bound caused by logical threads in GEMM operations. Generally, when increasing the number of workers, the expected improvement effect is the increase in parallelism. Conversely, if performance decreases, one can infer the corresponding trade-off effect.
+
+
+
+Image Source:&nbsp;Nvidia
+
+As many are aware, the reason model inference performance on CPUs is inferior to GPUs lies in the difference in hardware design, particularly in terms of multi-threading capabilities. Diving deeper, model inference is fundamentally a repetition of GEMM (General Matrix Multiply) operations, and these GEMM operations are executed independently in “fused-multiply-add” (FMA) or “dot-product” (DP) execution units. If the GEMM operation becomes a bottleneck on the CPU, increasing parallelism might actually result in decreased performance. While researching the problem we found relevant information within the PyTorch documentation.
+
+While two logical threads run GEMM at the same time, they will be sharing the same core resources causing front-end bound
+
+This information highlighted that logical threads could cause a bottleneck in CPU GEMM operations, which helped us intuitively understand why performance decreased when increasing the worker num. This is because the default value of the torch thread corresponds to the physical core value of the CPU.
+
+root@test-pod:/# lscpu
+  …
+Thread(s) per core: 2
+Core(s) per socket: 12
+  …
+root@test-pod:/# python
+>>> import torch
+>>> print(torch.get_num_threads())
+24
+
+
+When the worker_num increases, the total thread count increases by the product of the physical core * worker number. Consequently, logical threads are utilized. In order to improve performance, the total number of threads per worker was adjusted to align with the physical core count. Below, it can be observed that the metric RPS increased approximately threefold to 6.3(from the previous value of 2.1) when the worker_num was increased to 4 and the total thread count was aligned with the number of physical cores.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+
+
+Cautionary Note 1: Our team is Using Kubernetes to maintain our deployments. So we are adjusting the which required us to adjust according to the CPU resource limit of the pod, rather than the physical core count of the node that can be checked using the lscpu command. (Setting the torch thread of each worker to 8/4 = 2, or 24/4 = 6 resulted in performance degradation.)
+
+Cautionary Note 2: Since torch thread settings for each worker can only be configured as integers, it’s advisable to set the CPU limit divisible by the worker_num in order to adequately utilize CPU usage.
+
+
+
+ex) core=8, In the case of worker_num=3: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;75%
+
+
+
+ex) core=8, In the case of worker_num=4: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;100%
+
+We also analyzed the model containers to see why we got a mere threefold improvement in performance despite a four times increase in the number of workers. Various resources were monitored, and among them, the core utilization rate was identified as the underlying cause.
+
+
+
+Even when the total thread count was adjusted to match the CPU(2nd Generation, Intel(R) Xeon(R) Silver 4214) limit(8 core), there were instances where computations were executed from logical thread to logical core. Due to the presence of 24 physical cores, the cores numbered 25 to 48 are classified as logical cores. The possibility of confining thread execution solely within physical cores seemed to offer the potential for further performance enhancement. The reference to this solution could be found within the source document mentioned in the PyTorch-geometric article that warned about CPU GEMM bottlenecks.
+
+
+  Reference Documentation: Grokking Pytorch Intel CPU Performance From First Principles
+
+
+As per the instructions in the document, Intel provides Intel® Extension for PyTorch where we can simply pin cores to specific sockets. The application method is also made very simple, by adding the following settings to the torchserve config.properties file.(used intel_extension_for_pytorch==1.13.0)
+
+ipex_enable=true
+CPU_launcher_enable=true
+
+
+
+
+Image Source:&nbsp;PyTorch
+
+Beyond the removal of logical threads through socket pinning, there is an additional effect of eliminating UPI cache hit overhead. Since the CPU comprises more than one socket when threads scheduled on socket 1 are rescheduled on socket 2, cache hits occur in cases of accessing the cache of socket 1 via Intel Ultra Path Interconnect (UPI). At this point, UPI access to the local cache becomes more than twice as slow as local cache access, resulting in more bottlenecks. With threads being pinned to socket units by oneAPI powered Intel® Extension for PyTorch, We observed rps handling increase of up to four times than when the bottleneck existed.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+
+
+Cautionary Note 1: Intel® Extension for PyTorch is specialized in neural network (referred to as “nn” hereafter) inference optimization, so the performance improvement from additional techniques outside nn might be minimal. Indeed, in the instance of the image scoring system highlighted as an example, where svr (support vector regression) is applied post-inference, the performance enhancement was confined to a 4-fold increase. However, for a purely nn inference model such as the food recognition model, a performance boost of 7-fold (2.5rps -> 17.5rps) was detected.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/food-classification                                                 446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+
+
+Cautionary Note 2: Applying Intel® Extension for PyTorch requires torchserve version 0.6.1 or higher. Since our team was using version 0.6.0, there was an issue where socket pinning was not functioning correctly. Currently, we have made modifications to the guide document, specifying the required version.
+
+Within WorkerLifeCycle.java, multi-worker pinning is not supported in 0.6.0 and below (ninstance is hardcoded to 1)
+
+// 0.6.0 version
+
+public ArrayList<String> launcherArgsToList() {
+   ArrayList<String> arrlist = new ArrayList<String>();
+   arrlist.add(" -m");="" arrlist.add("intel_extension_for_pytorch.cpu.launch");="" arrlist.add("="" —="" ninstance");="" arrlist.add("1");="" if="" (launcherargs="" !="null" &amp;&amp;="" launcherargs.length()="" &gt;="" 1)="" {="" string[]="" argarray="launcherArgs.split(&quot;" ");="" for="" (int="" i="0;" &lt;="" argarray.length;="" i++)="" arrlist.add(argarray[i]);="" }="" return="" arrlist;="" master="" version="" (this.numworker="" argl.add("="" ninstances");="" argl.add(string.valueof(this.numworker));="" instance_idx");="" argl.add(string.valueof(this.currnumrunningworkers));="" 2:="" addressing="" slow="" latency="" through="" model="" lightweighting="" we="" also="" streamlined="" our="" using="" knowledge="" distillation="" (commonly="" abbreviated="" as="" kd)="" to="" further="" reduce="" latency.="" is="" widely="" known,="" kd="" a="" technique="" where="" from="" larger="" network="" (teacher="" network)="" conveyed="" smaller,="" lightweight="" (student="" which="" less="" resource="" intensive="" and="" can="" be="" more="" readily="" deployed.="" detailed="" information,="" please="" refer="" the="" paper="" this="" concept="" was="" initially="" introduced,="" titled="" distilling="" in="" neural="" network.="" there="" variety="" of="" techniques="" available="" because="" were="" primarily="" focused="" on="" accuracy="" loss="" minimization,="" adopted="" approach="" stronger="" teacher,="" published="" year="" 2022.="" straightforward.="" unlike="" conventional="" method="" that="" utilizes="" only="" model’s="" prop="" values,="" chosen="" involves="" having="" student="" learn="" correlations="" between="" classes="" teacher="" when="" put="" into="" actual="" application,="" observed="" effective="" weight="" reduction="" observe="" while="" mainting="" high="" accuracy.="" following="" are="" outcomes="" experimentation="" with="" mentioned="" several="" candidate="" models,="" selections="" made="" based="" maintained="" level="" image="" scoring="" system,="" additional="" measures="" taken="" input="" size.="" considering="" prior="" use="" cpu-based="" ml="" svr="" (support="" vector="" regression)="" used="" (2-stage:="" cnn="" +="" svr),="" even="" 1-stage="" model,="" significant="" speed="" advantages="" not="" cpu="" inference.="" order="" streamlining="" have="" significance,="" size="" during="" inference="" needed="" reduction.="" consequently,="" experiments="" conducted="" reduced="" 384384="" 224224.="" simplifying="" transformations,="" 2-stage="" (cnn="" svr)="" unified="" convnext,="" then="" applied="" efficientnet="" resolve="" trade-off.="" experiments,="" encountered="" problem="" changing="" img_resize="" 224="" led="" performance="" drop="" 0.4007="" 0.4296="" terms="" mae.="" due="" size,="" various="" preprocessing="" original="" training="" images="" (such="" affine,="" randomrotate90,="" blur,="" oneof="" [griddistortion,="" opticaldistortion,="" elastictransform],="" verticalflip)="" had="" counterproductive="" effect.="" by="" adopting="" these="" measures,="" achieved,="" mae="" value="" improved="" 25%="" compared="" previous="" one="" (.518="" .3876).="" validation="" 1:="" final="" measurement="" shows="" improvements="" servers,="" three="" models="" throughout="" article.="" #="" food="" photo="" classifier="" (pod="" 3):="" 2.5rps="" -&gt;="" 84="" rps="" type="" name="" reqs="" fails="" |="" avg="" min="" max="" med="" req="" s="" failures="" --------|----------------------------------------------------------------------------|------|------------|-------|------|-------|-------|--------|---------="" post="" predictions="" food-classification="" 2341="" 0(0.00%)="" 208="" 130="" 508="" 200="" 84.50="" 0.00="" --------|----------------------------------------------------------------------------|--------|-------------|------|-------|--------|------|--------|----------="" aggregated="" 2.1rps="" 62rps="" #reqs="" #fails="" median="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|-------|--------|---------|--------|---------="" image-scoring="" 1298="" 0="" (0.00%)="" 323="" 99="" 607="" 370="" 61.90="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|------|--------|---------|--------|----------="" receipt="" classifier(pod="" 3)="" :="" 20rps="" 111.8rps="" --------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------="" receipt-classification="" 4024="" 266="" 133="" 2211="" 111.8="" 4020=""  traffic="" mirroring="" previously="" mentioned,="" team’s="" service="" architecture="" employs="" tool="" “traefik”="" gateway="" front="" app="" server,="" briefly="" introduced="" at="" beginning="" validation,="" feature="" traefik="" utilized="" mirror="" traffic="" production="" staging="" month="" before="" applying="" it="" production,="" now="" operational.="" details="" regarding="" beyond="" scope="" topic="" hence="" omitted.="" those="" interested,="" kindly="" document="" https:="" doc.traefik.io="" routing="" services="" #mirroring-service.="" conclusion="" concludes="" discussion="" about="" transitioning="" gpu="" server="" maintaining="" quality.="" effort,="" team="" able="" save="" 15="" gpus="" each="" south="" korea="" japan,="" resulting="" an="" annual="" cost="" savings="" approximately="" 340="" thousand="" u.s.="" dollar.="" although="" directly="" purchase="" within="" naver,="" calculated="" rough="" aws="" ec2="" instances="" stably="" support="" t4="" gpus.="" calculation:="" 1.306="" (1-year="" reserved="" instance="" hourly="" cost)="" *="" 24="" (hours)="" 365="" (days)="" (number="" gpus)="" 2="" (kr="" jp)="" secured="" will="" harnessed="" advance="" enhance="" ai="" services,="" delivering="" exceptional="" experiences.="" sincerely="" appreciate="" your="" encouragement="" anticipation.:)="" explore="" www.intel.com="" www="" us="" en="" developer="" ecosystem="" pytorch-foundation.html="" pytorch-geometric.readthedocs.io="" latest="" advanced="" cpu_affinity.html#binding-processes-to-physical-cores="" arxiv.org="" pdf="" 2205.10536.pdf="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ML Model Server Resource Saving - Transition From High-Cost GPUs to Intel CPUs and oneAPI powered Software with performance">
+<meta name="twitter:description" content="Reviewers: Yunsang Ju(Naver GplaceAI Leader), Min Jean Cho(Intel), Jing Xu(Intel), Mark Saroufim(Meta)
+
+Intro
+
+Here, We will be sharing our experience in moving AI workloads from our GPU servers to our Intel CPU servers without any performance or quality degradation, and saving annual costs of approximately 340 thousand U.S. Dollar (refer to the Conclusion) in the process.
+
+We aim to provide value to our consumers by serving various AI models that enhance the Online to Offline (O2O) experience. With the ongoing growth in the demand for new models and the limited nature of high-cost resource GPUs, we needed to transition relatively lightweight AI models from GPU servers to Intel CPU servers for reducing resource consumption. In the same setting, however, the CPU server had issues where performance of rps, inference time, etc. was reduced by tens of times. We applied various engineering techniques and lightweighted the model to solve this problem, and we were able to successfully transition to the Intel CPU servers with the same performance or better performance as the GPU servers with just a three-fold scale out.
+
+For a more detailed introduction about our team, please refer to the Introduction to NAVER Place AI Development Team.
+
+I’ll mention it again in the middle, but I’ve received a lot of help from Grokking Pytorch Intel CPU Performance From First Principles written by Intel and PyTorch in the overall work.
+
+Problem Definition
+
+1: Service Architecture
+
+
+
+Simplified service architecture (Image Source:&nbsp;NAVER GplaceAI)
+
+To facilitate understanding, a brief introduction to our service architecture will be provided. CPU intensive tasks such as preprocessing input to tensor format (then forwarded to the model) and post processing inference results to human readable output (e.g. natural language and image formats) are performed on the App Server(FastAPI) The Model Server(TorchServe) exclusively handles inference operations. For stable operation of the service, the following actions need to be performed with sufficient throughput and low latency.
+
+The specific processing sequence is as follows:
+
+
+  The client submits a request to the app server via the Traefik gateway.
+  The app server pre-processes the input by performing actions such as resizing and transforming, and converting it into a Torch tensor before then requesting the model server.
+  The model server performs inference and returns the feature to the app server
+  The app server converts the feature into a format understandable by humans through post-processing and returns it to the client
+
+
+2:  Throughput and Latency Measurement
+
+
+
+Comparison of Image Scoring Models
+
+With all other conditions remaining the same, deploying on a threefold increase CPU server pod, yet, notably, the RPS (requests per second) and response time deteriorated by more than tenfold. While it was not surprising that CPU inference performance is inferior to GPUs, the challenging situation was evident. Given the goal of maintaining performance within limited resources, achieving an approximate 10 to 20 times performance improvement was necessary Barring any additional scaling.
+
+3: Challenges From a Throughput Perspective
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+
+
+One of the first steps TorchServer framework users might take in order to improve throughput is to increase the number of workers in TorchServe. This approach is effective on GPU servers Because of parallel workload processing, excluding the linear memory usage increase as workers scale. However, we were experiencing worse performance when increasing the number of workers. Identifying the cause of performance degradation on CPU servers required further investigation.
+
+4: Challenges From a Latency Perspective
+
+Our primary concern was latency. Throughput improvement is normally achievable when a system’s implementation is faithful to scale-out principles, except for perhaps very rare worst-case scenarios. However, in the case of the Image Scoring model example, even performing a single inference took more than 1 second, and as the request volume increased, latency increased to as much as 4 seconds. It was a situation where the timeout criteria to satisfy the client could not be met even with a single inference.
+
+Proposed Solutions
+
+Improvements were needed from both an ML and an engineering perspective. It was essential to fundamentally reduce the inference time on the CPU and to identify the causes of performance degradation when applying config that generally enhances performance, in order to find the optimal configuration values. To accomplish this, collaboration was established with MLE professionals to concurrently execute tasks encompassing ‘model lightweighting without compromising performance’, and ‘Identify optimal configurations for achieving peak performance’. Using the aforementioned approaches we were able to effectively transition workload handling to our CPU servers.
+
+1: Resolving Low RPS from an Engineering Perspective
+
+First, the reason for performance degradation even after increasing the worker number was the front-end bound caused by logical threads in GEMM operations. Generally, when increasing the number of workers, the expected improvement effect is the increase in parallelism. Conversely, if performance decreases, one can infer the corresponding trade-off effect.
+
+
+
+Image Source:&nbsp;Nvidia
+
+As many are aware, the reason model inference performance on CPUs is inferior to GPUs lies in the difference in hardware design, particularly in terms of multi-threading capabilities. Diving deeper, model inference is fundamentally a repetition of GEMM (General Matrix Multiply) operations, and these GEMM operations are executed independently in “fused-multiply-add” (FMA) or “dot-product” (DP) execution units. If the GEMM operation becomes a bottleneck on the CPU, increasing parallelism might actually result in decreased performance. While researching the problem we found relevant information within the PyTorch documentation.
+
+While two logical threads run GEMM at the same time, they will be sharing the same core resources causing front-end bound
+
+This information highlighted that logical threads could cause a bottleneck in CPU GEMM operations, which helped us intuitively understand why performance decreased when increasing the worker num. This is because the default value of the torch thread corresponds to the physical core value of the CPU.
+
+root@test-pod:/# lscpu
+  …
+Thread(s) per core: 2
+Core(s) per socket: 12
+  …
+root@test-pod:/# python
+>>> import torch
+>>> print(torch.get_num_threads())
+24
+
+
+When the worker_num increases, the total thread count increases by the product of the physical core * worker number. Consequently, logical threads are utilized. In order to improve performance, the total number of threads per worker was adjusted to align with the physical core count. Below, it can be observed that the metric RPS increased approximately threefold to 6.3(from the previous value of 2.1) when the worker_num was increased to 4 and the total thread count was aligned with the number of physical cores.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+
+
+Cautionary Note 1: Our team is Using Kubernetes to maintain our deployments. So we are adjusting the which required us to adjust according to the CPU resource limit of the pod, rather than the physical core count of the node that can be checked using the lscpu command. (Setting the torch thread of each worker to 8/4 = 2, or 24/4 = 6 resulted in performance degradation.)
+
+Cautionary Note 2: Since torch thread settings for each worker can only be configured as integers, it’s advisable to set the CPU limit divisible by the worker_num in order to adequately utilize CPU usage.
+
+
+
+ex) core=8, In the case of worker_num=3: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;75%
+
+
+
+ex) core=8, In the case of worker_num=4: int(8/worker_num) = 2, 2*worker_num/8 =&nbsp;100%
+
+We also analyzed the model containers to see why we got a mere threefold improvement in performance despite a four times increase in the number of workers. Various resources were monitored, and among them, the core utilization rate was identified as the underlying cause.
+
+
+
+Even when the total thread count was adjusted to match the CPU(2nd Generation, Intel(R) Xeon(R) Silver 4214) limit(8 core), there were instances where computations were executed from logical thread to logical core. Due to the presence of 24 physical cores, the cores numbered 25 to 48 are classified as logical cores. The possibility of confining thread execution solely within physical cores seemed to offer the potential for further performance enhancement. The reference to this solution could be found within the source document mentioned in the PyTorch-geometric article that warned about CPU GEMM bottlenecks.
+
+
+  Reference Documentation: Grokking Pytorch Intel CPU Performance From First Principles
+
+
+As per the instructions in the document, Intel provides Intel® Extension for PyTorch where we can simply pin cores to specific sockets. The application method is also made very simple, by adding the following settings to the torchserve config.properties file.(used intel_extension_for_pytorch==1.13.0)
+
+ipex_enable=true
+CPU_launcher_enable=true
+
+
+
+
+Image Source:&nbsp;PyTorch
+
+Beyond the removal of logical threads through socket pinning, there is an additional effect of eliminating UPI cache hit overhead. Since the CPU comprises more than one socket when threads scheduled on socket 1 are rescheduled on socket 2, cache hits occur in cases of accessing the cache of socket 1 via Intel Ultra Path Interconnect (UPI). At this point, UPI access to the local cache becomes more than twice as slow as local cache access, resulting in more bottlenecks. With threads being pinned to socket units by oneAPI powered Intel® Extension for PyTorch, We observed rps handling increase of up to four times than when the bottleneck existed.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+
+
+Cautionary Note 1: Intel® Extension for PyTorch is specialized in neural network (referred to as “nn” hereafter) inference optimization, so the performance improvement from additional techniques outside nn might be minimal. Indeed, in the instance of the image scoring system highlighted as an example, where svr (support vector regression) is applied post-inference, the performance enhancement was confined to a 4-fold increase. However, for a purely nn inference model such as the food recognition model, a performance boost of 7-fold (2.5rps -> 17.5rps) was detected.
+
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/food-classification                                                 446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+
+
+Cautionary Note 2: Applying Intel® Extension for PyTorch requires torchserve version 0.6.1 or higher. Since our team was using version 0.6.0, there was an issue where socket pinning was not functioning correctly. Currently, we have made modifications to the guide document, specifying the required version.
+
+Within WorkerLifeCycle.java, multi-worker pinning is not supported in 0.6.0 and below (ninstance is hardcoded to 1)
+
+// 0.6.0 version
+
+public ArrayList<String> launcherArgsToList() {
+   ArrayList<String> arrlist = new ArrayList<String>();
+   arrlist.add(" -m");="" arrlist.add("intel_extension_for_pytorch.cpu.launch");="" arrlist.add("="" —="" ninstance");="" arrlist.add("1");="" if="" (launcherargs="" !="null" &amp;&amp;="" launcherargs.length()="" &gt;="" 1)="" {="" string[]="" argarray="launcherArgs.split(&quot;" ");="" for="" (int="" i="0;" &lt;="" argarray.length;="" i++)="" arrlist.add(argarray[i]);="" }="" return="" arrlist;="" master="" version="" (this.numworker="" argl.add("="" ninstances");="" argl.add(string.valueof(this.numworker));="" instance_idx");="" argl.add(string.valueof(this.currnumrunningworkers));="" 2:="" addressing="" slow="" latency="" through="" model="" lightweighting="" we="" also="" streamlined="" our="" using="" knowledge="" distillation="" (commonly="" abbreviated="" as="" kd)="" to="" further="" reduce="" latency.="" is="" widely="" known,="" kd="" a="" technique="" where="" from="" larger="" network="" (teacher="" network)="" conveyed="" smaller,="" lightweight="" (student="" which="" less="" resource="" intensive="" and="" can="" be="" more="" readily="" deployed.="" detailed="" information,="" please="" refer="" the="" paper="" this="" concept="" was="" initially="" introduced,="" titled="" distilling="" in="" neural="" network.="" there="" variety="" of="" techniques="" available="" because="" were="" primarily="" focused="" on="" accuracy="" loss="" minimization,="" adopted="" approach="" stronger="" teacher,="" published="" year="" 2022.="" straightforward.="" unlike="" conventional="" method="" that="" utilizes="" only="" model’s="" prop="" values,="" chosen="" involves="" having="" student="" learn="" correlations="" between="" classes="" teacher="" when="" put="" into="" actual="" application,="" observed="" effective="" weight="" reduction="" observe="" while="" mainting="" high="" accuracy.="" following="" are="" outcomes="" experimentation="" with="" mentioned="" several="" candidate="" models,="" selections="" made="" based="" maintained="" level="" image="" scoring="" system,="" additional="" measures="" taken="" input="" size.="" considering="" prior="" use="" cpu-based="" ml="" svr="" (support="" vector="" regression)="" used="" (2-stage:="" cnn="" +="" svr),="" even="" 1-stage="" model,="" significant="" speed="" advantages="" not="" cpu="" inference.="" order="" streamlining="" have="" significance,="" size="" during="" inference="" needed="" reduction.="" consequently,="" experiments="" conducted="" reduced="" 384384="" 224224.="" simplifying="" transformations,="" 2-stage="" (cnn="" svr)="" unified="" convnext,="" then="" applied="" efficientnet="" resolve="" trade-off.="" experiments,="" encountered="" problem="" changing="" img_resize="" 224="" led="" performance="" drop="" 0.4007="" 0.4296="" terms="" mae.="" due="" size,="" various="" preprocessing="" original="" training="" images="" (such="" affine,="" randomrotate90,="" blur,="" oneof="" [griddistortion,="" opticaldistortion,="" elastictransform],="" verticalflip)="" had="" counterproductive="" effect.="" by="" adopting="" these="" measures,="" achieved,="" mae="" value="" improved="" 25%="" compared="" previous="" one="" (.518="" .3876).="" validation="" 1:="" final="" measurement="" shows="" improvements="" servers,="" three="" models="" throughout="" article.="" #="" food="" photo="" classifier="" (pod="" 3):="" 2.5rps="" -&gt;="" 84="" rps="" type="" reqs="" fails="" |="" avg="" min="" max="" med="" req="" s="" failures="" --------|----------------------------------------------------------------------------|------|------------|-------|------|-------|-------|--------|---------="" post="" predictions="" food-classification="" 2341="" 0(0.00%)="" 208="" 130="" 508="" 200="" 84.50="" 0.00="" --------|----------------------------------------------------------------------------|--------|-------------|------|-------|--------|------|--------|----------="" aggregated="" 2.1rps="" 62rps="" #reqs="" #fails="" median="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|-------|--------|---------|--------|---------="" image-scoring="" 1298="" 0="" (0.00%)="" 323="" 99="" 607="" 370="" 61.90="" --------|---------------------------------------------------------------------------------|--------|-------------|--------|------|--------|---------|--------|----------="" receipt="" classifier(pod="" 3)="" :="" 20rps="" 111.8rps="" --------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------="" receipt-classification="" 4024="" 266="" 133="" 2211="" 111.8="" 4020=""  traffic="" mirroring="" previously="" mentioned,="" team’s="" service="" architecture="" employs="" tool="" “traefik”="" gateway="" front="" app="" server,="" briefly="" introduced="" at="" beginning="" validation,="" feature="" traefik="" utilized="" mirror="" traffic="" production="" staging="" month="" before="" applying="" it="" production,="" now="" operational.="" details="" regarding="" beyond="" scope="" topic="" hence="" omitted.="" those="" interested,="" kindly="" document="" https:="" doc.traefik.io="" routing="" services="" #mirroring-service.="" conclusion="" concludes="" discussion="" about="" transitioning="" gpu="" server="" maintaining="" quality.="" effort,="" team="" able="" save="" 15="" gpus="" each="" south="" korea="" japan,="" resulting="" an="" annual="" cost="" savings="" approximately="" 340="" thousand="" u.s.="" dollar.="" although="" directly="" purchase="" within="" naver,="" calculated="" rough="" aws="" ec2="" instances="" stably="" support="" t4="" gpus.="" calculation:="" 1.306="" (1-year="" reserved="" instance="" hourly="" cost)="" *="" 24="" (hours)="" 365="" (days)="" (number="" gpus)="" 2="" (kr="" jp)="" secured="" will="" harnessed="" advance="" enhance="" ai="" services,="" delivering="" exceptional="" experiences.="" sincerely="" appreciate="" your="" encouragement="" anticipation.:)="" explore="" www.intel.com="" www="" us="" en="" developer="" ecosystem="" pytorch-foundation.html="" pytorch-geometric.readthedocs.io="" latest="" advanced="" cpu_affinity.html#binding-processes-to-physical-cores="" arxiv.org="" pdf="" 2205.10536.pdf="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年10月11日</p>
+            <h1>
+                <a class="blog-title">机器学习模型服务器资源节省 - 从高成本 GPU 过渡到 Intel CPU 和 oneAPI 软件，实现性能提升</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由桑俊珺（Naver GplaceAI MLOps）、刘俊英（Naver GplaceAI MLE）、闵俊浩（Naver GplaceAI MLE）撰写</p>
+                    <p>审稿人： <a href="https://www.linkedin.com/in/yunsang-ju/"> 具云桑 </a>（Naver GplaceAI 领导），赵明珍（Intel），徐静（Intel），马克·萨拉菲姆（Meta）</p>
+
+<h2 id="intro">简介</h2>
+
+<p>在这里，我们将分享我们将 AI 工作负载从我们的 GPU 服务器迁移到我们的 Intel CPU 服务器的过程，在此过程中没有任何性能或质量下降，并且 <strong> 节省了约 34 万美元的年度成本 </strong>（参见 <strong> 结论 </strong>）。</p>
+
+<p>我们旨在通过提供各种增强线上线下（O2O）体验的 AI 模型，为消费者创造价值。随着对新模型需求的持续增长以及高成本资源 GPU 的有限性，我们需要将相对轻量级的 AI 模型从 GPU 服务器迁移到英特尔 CPU 服务器，以减少资源消耗。然而，在相同的设置中，CPU 服务器存在性能问题，rps、推理时间等性能降低了数十倍。我们应用了各种工程技术，并对模型进行了轻量化，成功解决了这个问题，并且仅通过三倍的扩展，就实现了与 GPU 服务器相同或更好的性能。</p>
+
+<p>欲了解更多关于我们团队的信息，请参阅 <a href="https://medium.com/naver-place-dev/introduction-to-naver-place-ai-development-team-a8b0630e3b23">NAVER Place AI 开发团队简介 </a>。</p>
+
+<p>我再次提到，我在整个工作中从 <a href="https://maskerprc.github.io/tutorials/intermediate/torchserve_with_ipex.html#grokking-pytorch-intel-cpu-performance-from-first-principles">《从原理上掌握 PyTorch 英特尔 CPU 性能》</a> 这本书中获得了许多帮助，作者是英特尔和 PyTorch。</p>
+
+<h2 id="problem-definition">问题定义</h2>
+
+<h3 id="1-service-architecture">1: 服务架构</h3>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg1.jpg" alt="Simplified service architecture" style="width:100%"></p>
+
+<p><strong>简化版服务架构（图片来源：NAVER GplaceAI）</strong></p>
+
+<p>为便于理解，将简要介绍我们的服务架构。在 App Server（FastAPI）上执行 CPU 密集型任务，如将输入预处理为张量格式（然后转发到模型）以及将推理结果后处理为人类可读的输出（例如自然语言和图像格式）。Model Server（TorchServe）专门处理推理操作。为确保服务的稳定运行，需要以下操作以足够的吞吐量和低延迟执行。</p>
+
+<p>具体的处理顺序如下：</p>
+
+<ul>
+  <li>客户通过 Traefik 网关向应用服务器提交请求。</li>
+  <li>应用服务器通过执行诸如调整大小和转换等操作预处理输入，并将其转换为 Torch 张量，然后请求模型服务器。</li>
+  <li>模型服务器执行推理并将特征返回给应用服务器。</li>
+  <li>应用服务器通过后处理将特征转换为人类可理解的格式，并将其返回给客户端。</li>
+</ul>
+
+<h3 id="2-throughput-and-latency-measurement">2：吞吐量和延迟测量</h3>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg1-1.jpg" alt="Comparison of Image Scoring Models" style="width:100%"></p>
+
+<p><strong>图像评分模型的比较</strong></p>
+
+<p>在所有其他条件保持不变的情况下，部署在 CPU 服务器 Pod 数量增加三倍的情况下，然而，值得注意的是，RPS（每秒请求数）和响应时间恶化了十倍以上。虽然 CPU 推理性能不如 GPU 并不令人惊讶，但困难的情况是显而易见的。鉴于在有限资源内保持性能的目标，在没有额外扩展的情况下，实现大约 10 到 20 倍的性能提升是必要的。</p>
+
+<h3 id="3-challenges-from-a-throughput-perspective">3：从吞吐量角度面临的挑战</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                        37     0(0.00%) |   9031    4043   28985   8200 |    1.00        0.00
+</code></pre></div></div>
+
+<p>火炬服务器框架用户为了提高吞吐量可能会采取的第一个步骤之一是增加 TorchServe 中的工作进程数量。这种方法在 GPU 服务器上有效，因为并行工作负载处理，除了随着工作进程数量的增加而线性增加的内存使用外。然而，我们在增加工作进程数量时遇到了性能下降。在 CPU 服务器上识别性能下降的原因需要进一步调查。</p>
+
+<h3 id="4challenges-from-a-latency-perspective">4: 从延迟角度面临的挑战</h3>
+
+<p>我们的主要关注点是延迟。当系统的实现忠实于扩展原则时，通常可以通过吞吐量提高来实现，除非是极少数的最坏情况。然而，在图像评分模型示例中，即使是执行单个推理也超过了1秒，随着请求量的增加，延迟增加到最多4秒。这是一个即使单个推理也无法满足客户端超时标准的情况。</p>
+
+<h2 id="proposed-solutions">提出的解决方案</h2>
+
+<p>从机器学习和工程两个角度都需要进行改进。在 CPU 上基本减少推理时间以及识别应用通常能提升性能的配置导致性能下降的原因，以找到最佳配置值是至关重要的。为了实现这一点，我们与机器学习专家建立了合作，同时执行包括“在不影响性能的前提下进行模型轻量化”和“确定实现峰值性能的最佳配置”在内的任务。通过上述方法，我们能够有效地将工作负载处理转移到我们的 CPU 服务器上。</p>
+
+<h3 id="1-resolving-low-rps-from-an-engineering-perspective">1: 从工程角度解决低 RPS 问题</h3>
+
+<p>首先，即使增加了工作节点数量，性能下降的原因还是前端受限于 GEMM 操作中的逻辑线程，这是前端瓶颈。通常情况下，增加工作节点数量的预期效果是并行度的提升。相反，如果性能下降，可以推断出相应的权衡效应。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg2.jpg" alt="CPU + GPU" style="width:100%; max-width: 420px; display: block; margin-left: auto; margin-right: auto"></p>
+
+<p><strong>图片来源：<a href="https://blogs.nvidia.com/blog/2018/06/11/what-is-a-virtual-gpu/"> 英伟达</a></strong></p>
+
+<p>许多人都知道，CPU 上模型推理性能不如 GPU 的原因在于硬件设计的差异，尤其是在多线程能力方面。深入分析，模型推理本质上是对 GEMM（通用矩阵乘法）操作的重复，而这些 GEMM 操作在“融合乘加”（FMA）或“点积”（DP）执行单元中独立执行。如果 GEMM 操作成为 CPU 的瓶颈，增加并行性实际上可能会导致性能下降。在研究这个问题时，我们在 PyTorch 文档中找到了相关信息。</p>
+
+<p><strong><em>当两个逻辑线程同时运行 GEMM 时，它们将共享相同的核心资源，导致前端受限。</em></strong></p>
+
+<p>这条信息指出，逻辑线程可能导致 CPU GEMM 操作出现瓶颈，这有助于我们直观地理解为什么增加工作线程数量会导致性能下降。这是因为 torch 线程的默认值对应于 CPU 的物理核心值。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>root@test-pod:/# lscpu
+  …
+Thread(s) per core: 2
+Core(s) per socket: 12
+  …
+root@test-pod:/# python
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; print(torch.get_num_threads())
+24
+</code></pre></div></div>
+
+<p>当 worker_num 增加时，总线程数会增加物理核心数乘以 worker 数量的乘积。因此，逻辑线程被利用。为了提高性能，每个 worker 的线程总数被调整为与物理核心数对齐。下面可以观察到，当 worker_num 增加到 4 且总线程数与物理核心数对齐时，指标 RPS <strong> 大约增加了三倍 </strong>，达到 6.3（从之前的 2.1 值）。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       265     0(0.00%) |   3154    1885    4008   3200 |    6.30        0.00
+</code></pre></div></div>
+
+<p><strong>注意事项 1</strong>：我们的团队正在使用 Kubernetes 来维护我们的部署。因此，我们需要根据 pod 的 CPU 资源限制进行调整，而不是使用 lscpu 命令检查的节点物理核心数。（将每个 worker 的 torch 线程设置为 8/4=2，或 24/4=6 会导致性能下降。）</p>
+
+<p><strong>注意事项 2</strong>：由于每个 worker 的 torch 线程设置<a href="https://pytorch.org/docs/stable/generated/torch.set_num_threads.html">只能配置为整数 </a>，建议将 CPU 限制设置为可被 worker_num 整除，以便充分利用 CPU 使用率。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg3.jpg" alt="example" style="width:100%"></p>
+
+<p><strong>示例：core=8，当 worker_num=3 时：int(8/worker_num)=2，2*worker_num/8=75%</strong></p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg4.jpg" alt="example" style="width:100%; margin-top: 30px"></p>
+
+<p><strong>示例：core=8，当 worker_num=4 时：int(8/worker_num)=2，2*worker_num/8=100%</strong></p>
+
+<p>我们还分析了模型容器，以了解为什么在工人数量增加四倍的情况下，性能仅提高了三倍。监控了各种资源，其中核心利用率被确定为根本原因。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg5.jpg" alt="threads" style="width:100%"></p>
+
+<p>即使将总线程数调整为与 CPU（第二代，Intel(R) Xeon(R) Silver 4214）限制（8 核心）相匹配，也存在从逻辑线程到逻辑核心执行计算的情况。由于存在 24 个物理核心，编号 25 至 48 的核心被归类为逻辑核心。将线程执行仅限于物理核心的可能性似乎提供了进一步性能提升的潜力。有关此解决方案的参考可以在 PyTorch-geometric 文章中找到，该文章警告了 CPU GEMM 瓶颈。</p>
+
+<ul>
+  <li>参考文档：<a href="https://maskerprc.github.io/tutorials/intermediate/torchserve_with_ipex.html#grokking-pytorch-intel-cpu-performance-from-first-principles"> 从第一性原理掌握 PyTorch Intel CPU 性能</a></li>
+</ul>
+
+<p>根据文档中的说明，英特尔提供了 Intel® Extension for PyTorch，我们可以简单地将核心固定到特定的插槽上。应用程序方法也非常简单，只需将以下设置添加到 <strong>torchserve config.properties</strong> 文件中。（使用 intel_extension_for_pytorch==1.13.0）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ipex_enable=true
+CPU_launcher_enable=true
+</code></pre></div></div>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg6.jpg" alt="two-socket configuration" style="width:100%"></p>
+
+<p><strong>图片来源：<a href="https://maskerprc.github.io/tutorials/intermediate/torchserve_with_ipex.html#grokking-pytorch-intel-cpu-performance-from-first-principles">PyTorch</a></strong></p>
+
+<p>除了通过插槽固定消除逻辑线程之外，还有一个额外的好处是消除了 UPI 缓存命中开销。由于 CPU 由多个插槽组成，当调度在插槽 1 上的线程重新调度到插槽 2 时，会发生缓存命中，这是通过 Intel Ultra Path Interconnect (UPI) 访问插槽 1 的缓存。此时，对本地缓存的 UPI 访问速度比本地缓存访问慢两倍以上，导致更多瓶颈。通过 oneAPI 驱动的 Intel® Extension for PyTorch 将线程固定到插槽单元，我们观察到 rps 处理能力比瓶颈存在时提高了 <strong> 四倍 </strong>。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/image-scoring                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       131     0(0.00%) |   3456    1412    6813   3100 |    7.90        0.00
+</code></pre></div></div>
+
+<p><strong>注意事项 1</strong>：Intel® Extension for PyTorch 专注于神经网络（以下简称“nn”）推理优化，因此从 nn 之外的技术获得的性能提升可能很小。实际上，在图像评分系统这个示例中，其中应用了 svr（支持向量回归）后推理，性能提升仅限于 4 倍增加。然而，对于纯 nn 推理模型，如食物识别模型，<strong>a</strong><strong> 性能提升了 7 倍（2.5rps -&gt; 17.5rps）</strong>。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/food-classification                                                 446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                       446     0(0.00%) |   1113     249    1804   1200 |   17.50        0.00
+</code></pre></div></div>
+
+<p><strong>注意事项 2</strong>：应用 Intel® Extension for PyTorch 需要 <strong>torchserve 版本 0.6.1 或更高版本 </strong>。由于我们团队使用的是版本 0.6.0，存在 socket pinning 无法正确工作的问题。目前，我们已经对指南文档进行了修改，指明了所需版本。</p>
+
+<p>在 <a href="https://github.com/pytorch/serve/blob/4236a86dc0a018198ecd3fe261e835b416df739e/frontend/server/src/main/java/org/pytorch/serve/wlm/WorkerLifeCycle.java">WorkerLifeCycle.java</a> 中，0.6.0 及以下版本不支持多 worker pinning（ninstance 是硬编码为 1）</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>// 0.6.0 version
+
+public ArrayList&lt;String&gt; launcherArgsToList() {
+   ArrayList&lt;String&gt; arrlist = new ArrayList&lt;String&gt;();
+   arrlist.add("-m");
+   arrlist.add("intel_extension_for_pytorch.cpu.launch");
+   arrlist.add(" — ninstance");
+   arrlist.add("1");
+   if (launcherArgs != null &amp;&amp; launcherArgs.length() &gt; 1) {
+     String[] argarray = launcherArgs.split(" ");
+     for (int i = 0; i &lt; argarray.length; i++) {
+       arrlist.add(argarray[i]);
+     }
+   }
+   return arrlist;
+ }
+// master version
+
+if (this.numWorker &gt; 1) {
+   argl.add(" — ninstances");
+   argl.add(String.valueOf(this.numWorker));
+   argl.add(" — instance_idx");
+   argl.add(String.valueOf(this.currNumRunningWorkers));
+ }
+</code></pre></div></div>
+
+<h3 id="2-addressing-slow-latency-through-model-lightweighting">2：通过模型轻量化解决慢速延迟问题</h3>
+
+<p>我们也通过使用《知识蒸馏》（通常缩写为 KD）简化了我们的模型，以进一步降低延迟。众所周知，KD 是一种将来自较大网络（教师网络）的知识传递给较小、轻量级网络（学生网络）的技术，后者资源消耗更少，可以更方便地部署。有关更详细的信息，请参阅最初介绍这一概念、题为《神经网络的蒸馏知识》的论文。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg7.jpg" alt="neural networks" style="width:100%"></p>
+
+<p>有各种 KD 技术可用，因为我们主要关注的是&lt;强 id=0&gt;精度损失最小化 ，所以我们采用了 2022 年发表的论文<a href="https://arxiv.org/pdf/2205.10536.pdf">从更强的教师那里进行知识蒸馏</a>中的方法。这个概念很简单。与仅利用模型属性值的传统蒸馏方法不同，所选择的方法涉及让学生网络学习教师网络中类之间的相关性。在实际应用中，我们观察到有效的模型权重减少，在保持高精度的同时观察到模型权重的有效减少。以下是我们对几个候选学生模型进行知识蒸馏技术实验的结果，选择是基于保持的精度水平。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg8.jpg" alt="table of services" style="width:100%"></p>
+
+<p>对于图像评分系统，采取了额外措施以减少输入大小。考虑到先前使用的基于 CPU 的机器学习技术 SVR（支持向量回归）（两阶段：CNN + SVR），即使将其简化为单阶段模型，在 CPU 推理中也没有观察到明显的速度优势。为了使简化具有意义，需要在推理过程中进一步减少学生模型的输入大小。因此，进行了将大小从 384<em>384 减少到 224</em>224 的实验。</p>
+
+<p>进一步简化变换，将两阶段（CNN + SVR）方法统一为单阶段模型，并使用更大的 ConvNext，然后使用轻量级的 EfficientNet 应用 kd 以解决精度权衡问题。在实验过程中，我们发现将 Img_resize 改为 224 导致 MAE 性能从 0.4007 下降到 0.4296。由于输入尺寸减小，对原始训练图像应用的各种预处理技术（如仿射变换、随机旋转 90 度、模糊、OneOf [GridDistortion、OpticalDistortion、ElasticTransform]、垂直翻转）产生了反效果。通过采取这些措施，实现了学生的有效训练，并且与之前相比，<strong>MAE 值提高了 25%（从 0.518 到 0.3876）</strong>。</p>
+
+<h2 id="validation">验证</h2>
+
+<h3 id="1-final-performance-measurement">1: 最终性能测量</h3>
+
+<p>以下展示了使用 CPU 服务器在本文中提到的三个模型上的最终性能提升。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Food photo classifier (pod 3): 2.5rps -&gt; 84 rps
+
+ Type Name                                                                           # reqs # fails | Avg Min Max Med | req/s failures/s
+ --------|----------------------------------------------------------------------------|------|------------|-------|------|-------|-------|--------|--------- 
+POST /predictions/food-classification 2341 0(0.00%) | 208 130 508 200 | 84.50 0.00 
+--------|----------------------------------------------------------------------------|--------|-------------|------|-------|--------|------|--------|----------
+         Aggregated                                                                      2341     0(0.00%) |    208     130     508    200 |   84.50        0.00
+
+# Image scoring (pod 3): 2.1rps -&gt; 62rps
+ Type Name                                                                               #reqs #fails | Avg Min Max Median | req/s failures/s
+ --------|---------------------------------------------------------------------------------|--------|-------------|--------|-------|--------|---------|--------|--------- 
+  POST /predictions/image-scoring 1298 0 (0.00%) | 323 99 607 370 | 61.90 0.00 
+--------|---------------------------------------------------------------------------------|--------|-------------|--------|------|--------|---------|--------|----------
+          Aggregated                                                                          1298     0(0.00%)  |     323      99     607     370  |   61.90        0.00
+
+# receipt classifier(pod 3) : 20rps -&gt; 111.8rps
+Type     Name                                                                          # reqs      # fails |    Avg     Min     Max    Med |   req/s  failures/s
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+POST     /predictions/receipt-classification                                             4024     0(0.00%) |    266     133    2211    200 |   111.8        0.00
+--------|----------------------------------------------------------------------------|-------|-------------|-------|-------|-------|-------|--------|-----------
+         Aggregated                                                                      4020     0(0.00%) |    266     133    2211    200 |   111.8        0.00
+</code></pre></div></div>
+
+<h3 id="2-traffic-mirroring">2: 流量镜像</h3>
+
+<p>如前所述，我们团队的服务架构采用“traefik”工具作为应用服务器的前端网关，这在文章开头有简要介绍。为了最终验证，利用了 traefik 网关的镜像功能，将生产环境的流量镜像到测试环境进行了一个月的验证，现在已应用于生产环境并正常运行。</p>
+
+<p>关于镜像的详细信息超出了本主题的范围，因此省略。有兴趣的读者请参阅文档：https://doc.traefik.io/traefik/routing/services/#mirroring-service<span style="text-decoration:underline;">.</span></p>
+
+<h2 id="in-conclusion">结论</h2>
+
+<p>这就结束了关于从 GPU 模型服务器过渡到 CPU 服务器同时保持服务质量讨论。通过这次努力，我们团队在南韩和日本分别节省了 15 个 GPU，从而实现了约 34 万美元的年度成本节约。尽管我们在 NAVER 直接购买和使用 GPU，但我们根据稳定支持 T4 GPU 的 AWS EC2 实例计算了大致的成本降低。</p>
+
+<p><img src="/assets/images/ml-model-server-resource-saving/fg9.jpg" alt="instance sizes" style="width:100%"></p>
+
+<p><strong>计算：1.306（1 年预留实例有效每小时成本）* 24（小时）* 365（天）* 15（GPU 数量）* 2（KR + JP）</strong></p>
+
+<p>这些安全 GPU 将被用于进一步推进和提升我们团队的 AI 服务，提供卓越的服务体验。我们衷心感谢您的鼓励和期待。:）</p>
+
+<h2 id="explore-more">探索更多</h2>
+
+<ul>
+  <li><a href="https://www.intel.com/content/www/us/en/developer/ecosystem/pytorch-foundation.html">https://www.intel.com/content/www/us/en/developer/ecosystem/pytorch-foundation.html</a></li>
+  <li><a href="https://pytorch-geometric.readthedocs.io/en/latest/advanced/cpu_affinity.html#binding-processes-to-physical-cores">https://pytorch-geometric.readthedocs.io/en/latest/advanced/CPU_affinity.html#binding-processes-to-physical-cores</a></li>
+  <li><a href="https://arxiv.org/pdf/2205.10536.pdf">https://arxiv.org/pdf/2205.10536.pdf</a></li>
+</ul>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Introducing depyf: mastering torch.compile with ease | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="
+
+We are thrilled to introduce depyf, a new project to the PyTorch ecosystem designed to help users understand, learn, and adapt to torch.compile!
+
+Motivation
+
+torch.compile is a cornerstone of PyTorch 2.x, offering a straightforward path to accelerate machine learning workflows with just a single line of code for both training and inference. The mere inclusion of @torch.compile can dramatically enhance the performance of your code. However, identifying the optimal insertion point for torch.compile is not easy, not to mention the complexity of adjusting various knobs for maximum efficiency.
+
+The intricacies of the torch.compile stack, encompassing Dynamo, AOTAutograd, Inductor, and more, present a steep learning curve. These components, essential for deep learning performance optimization, can be daunting without a solid foundation in the subject.
+
+Note: For an introductory example of how torch.compile works, please refer to this walk-through explanation.
+
+A common tool: TORCH_COMPILE_DEBUG
+
+To demystify torch.compile, the common approach involves leveraging the TORCH_COMPILE_DEBUG environment variable. While it provides more information, deciphering the output remains a formidable task.
+
+For example, when we have the following code:
+
+# test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() < 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == " __main__":="" main()="" and="" run="" it="" with="" torch_compile_debug="1" python="" test.py="" ,="" we="" will="" get="" a="" directory="" named="" run_2024_02_05_23_02_45_552124-pid_9520="" under="" which="" there="" are="" these="" files:="" .="" ├──="" torchdynamo="" │="" └──="" debug.log="" torchinductor="" aot_model___0_debug.log="" aot_model___10_debug.log="" aot_model___11_debug.log="" model__4_inference_10.1="" fx_graph_readable.py="" fx_graph_runnable.py="" fx_graph_transformed.py="" ir_post_fusion.txt="" ir_pre_fusion.txt="" output_code.py="" model__5_inference_11.2="" model___9.0="" the="" generated="" files="" logs="" often="" raise="" more="" questions="" than="" they="" answer,="" leaving="" developers="" puzzled="" over="" meaning="" relationships="" within="" data.="" common="" puzzles="" for="" include:="" what="" does="" mean?="" i="" have="" one="" function="" but="" three="" model__xxx.py="" in="" directory,="" is="" their="" correspondence?="" those="" load_global="" stuff="" ?="" better="" tool:="" depyf="" comes="" to="" rescue="" let’s="" see="" how="" can="" help="" resolve="" above="" challenges.="" use="" simply="" execute="" pip="" install="" or="" follow="" project="" page="" https:="" github.com="" thuml="" latest="" version,="" then="" surround="" main="" code="" depyf.prepare_debug="" #="" import="" torch="" from="" _dynamo="" as="" typing="" list="" @torch.compile="" def="" toy_example(a,="" b):="" x="a" (torch.abs(a)="" +="" 1)="" if="" b.sum()="" &lt;="" 0:="" b="b" *="" -1="" return="" main():="" _="" range(100):="" toy_example(torch.randn(10),="" torch.randn(10))="" __name__="=" "__main__":="" depyf.prepare_debug("depyf_debug_dir"):="" after="" executing="" produce="" depyf_debug_dir="" (the="" argument="" of="" prepare_debug="" function).="" would="" be="" __compiled_fn_0="" post="" grad="" 0.py="" captured="" graph="" forward="" kernel="" __compiled_fn_3="" __compiled_fn_4="" __transformed_code_0_for_torch_dynamo_resume_in_toy_example_at_8.py="" __transformed_code_0_for_toy_example.py="" __transformed_code_1_for_torch_dynamo_resume_in_toy_example_at_8.py="" full_code_for_toy_example_0.py="" two="" obvious="" benefits:="" long="" difficult-to-understand="" gone.="" its="" cleaned="" up="" shown="" human-readable="" source="" code,="" full_code_for_xxx.py="" __transformed_code_{n}_for_xxx.py="" worth="" note,="" that="" most="" tedious="" difficult="" job="" decompile="" bytecode="" inside="" into="" freeing="" intimidating="" internals="" python.="" correspondence="" between="" names="" computation="" graphs="" respected.="" example,="" immediately="" know="" corresponding="" __compiled_fn_0_xxx.py="" because="" share="" same="" prefix="" name.="" starting="" following="" functions="" involved,="" users="" clear="" view="" torch.compile="" code.="" thing:="" step-through="" debuggability="" stepping="" through="" line="" by="" using="" debuggers="" great="" way="" understand="" works.="" however,="" only="" users’="" information,="" cannot="" executed="" data="" concern.="" note:="" “debug”,="" mean="" process="" inspecting="" improving="" program,="" rather="" correcting="" buggy="" standout="" feature="" capability="" facilitate="" debugging="" torch.compile:="" all="" generates="" linked="" runtime="" objects="" interpreter,="" set="" breakpoints="" files.="" usage="" simple,="" just="" add="" context="" manager="" depyf.debug()="" should="" do="" trick:="" depyf.debug():="" caveat:="" workflow="" deviates="" standard="" workflow.="" torch.compile,="" many="" codes="" dynamically="" generated.="" therefore,="" need="" to:="" launch="" program="" when="" exits="" depyf.prepare_debug("depyf_debug_dir")="" available="" depyf_debug_dir.="" enters="" automatically="" breakpoint="" internally,="" so="" paused.="" navigate="" breakpoints.="" continue="" hit="" breakpoints!="" here="" screenshot="" looks="" like.="" tensor="" variables="" live,="" inspect="" any="" variable,="" step="" our="" daily="" now!="" difference="" human-written="" conclusion="" serves="" an="" invaluable="" tool="" accelerating="" pytorch="" effortlessly.="" looking="" delve="" deeper="" whether="" leverage="" full="" potential="" integrate="" custom="" operations,="" learning="" curve="" very="" steep="" though.="" designed="" lower="" this="" barrier,="" offering="" user-friendly="" experience="" understand,="" learn,="" adapt="" torch.compile.="" explore="" benefits="" firsthand!="" open-source="" readily="" at="" depyf.="" installation="" straightforward="" via="" hope="" enhance="" everyone’s="" development="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Introducing depyf: mastering torch.compile with ease">
+<meta property="og:description" content="
+
+We are thrilled to introduce depyf, a new project to the PyTorch ecosystem designed to help users understand, learn, and adapt to torch.compile!
+
+Motivation
+
+torch.compile is a cornerstone of PyTorch 2.x, offering a straightforward path to accelerate machine learning workflows with just a single line of code for both training and inference. The mere inclusion of @torch.compile can dramatically enhance the performance of your code. However, identifying the optimal insertion point for torch.compile is not easy, not to mention the complexity of adjusting various knobs for maximum efficiency.
+
+The intricacies of the torch.compile stack, encompassing Dynamo, AOTAutograd, Inductor, and more, present a steep learning curve. These components, essential for deep learning performance optimization, can be daunting without a solid foundation in the subject.
+
+Note: For an introductory example of how torch.compile works, please refer to this walk-through explanation.
+
+A common tool: TORCH_COMPILE_DEBUG
+
+To demystify torch.compile, the common approach involves leveraging the TORCH_COMPILE_DEBUG environment variable. While it provides more information, deciphering the output remains a formidable task.
+
+For example, when we have the following code:
+
+# test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() < 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == " __main__":="" main()="" and="" run="" it="" with="" torch_compile_debug="1" python="" test.py="" ,="" we="" will="" get="" a="" directory="" named="" run_2024_02_05_23_02_45_552124-pid_9520="" under="" which="" there="" are="" these="" files:="" .="" ├──="" torchdynamo="" │="" └──="" debug.log="" torchinductor="" aot_model___0_debug.log="" aot_model___10_debug.log="" aot_model___11_debug.log="" model__4_inference_10.1="" fx_graph_readable.py="" fx_graph_runnable.py="" fx_graph_transformed.py="" ir_post_fusion.txt="" ir_pre_fusion.txt="" output_code.py="" model__5_inference_11.2="" model___9.0="" the="" generated="" files="" logs="" often="" raise="" more="" questions="" than="" they="" answer,="" leaving="" developers="" puzzled="" over="" meaning="" relationships="" within="" data.="" common="" puzzles="" for="" include:="" what="" does="" mean?="" i="" have="" one="" function="" but="" three="" model__xxx.py="" in="" directory,="" is="" their="" correspondence?="" those="" load_global="" stuff="" ?="" better="" tool:="" depyf="" comes="" to="" rescue="" let’s="" see="" how="" can="" help="" resolve="" above="" challenges.="" use="" simply="" execute="" pip="" install="" or="" follow="" project="" page="" https:="" github.com="" thuml="" latest="" version,="" then="" surround="" main="" code="" depyf.prepare_debug="" #="" import="" torch="" from="" _dynamo="" as="" typing="" list="" @torch.compile="" def="" toy_example(a,="" b):="" x="a" (torch.abs(a)="" +="" 1)="" if="" b.sum()="" &lt;="" 0:="" b="b" *="" -1="" return="" main():="" _="" range(100):="" toy_example(torch.randn(10),="" torch.randn(10))="" __name__="=" "__main__":="" depyf.prepare_debug("depyf_debug_dir"):="" after="" executing="" produce="" depyf_debug_dir="" (the="" argument="" of="" prepare_debug="" function).="" would="" be="" __compiled_fn_0="" post="" grad="" 0.py="" captured="" graph="" forward="" kernel="" __compiled_fn_3="" __compiled_fn_4="" __transformed_code_0_for_torch_dynamo_resume_in_toy_example_at_8.py="" __transformed_code_0_for_toy_example.py="" __transformed_code_1_for_torch_dynamo_resume_in_toy_example_at_8.py="" full_code_for_toy_example_0.py="" two="" obvious="" benefits:="" long="" difficult-to-understand="" gone.="" its="" cleaned="" up="" shown="" human-readable="" source="" code,="" full_code_for_xxx.py="" __transformed_code_{n}_for_xxx.py="" worth="" note,="" that="" most="" tedious="" difficult="" job="" decompile="" bytecode="" inside="" into="" freeing="" intimidating="" internals="" python.="" correspondence="" between="" names="" computation="" graphs="" respected.="" example,="" immediately="" know="" corresponding="" __compiled_fn_0_xxx.py="" because="" share="" same="" prefix="" name.="" starting="" following="" functions="" involved,="" users="" clear="" view="" torch.compile="" code.="" thing:="" step-through="" debuggability="" stepping="" through="" line="" by="" using="" debuggers="" great="" way="" understand="" works.="" however,="" only="" users’="" information,="" cannot="" executed="" data="" concern.="" note:="" “debug”,="" mean="" process="" inspecting="" improving="" program,="" rather="" correcting="" buggy="" standout="" feature="" capability="" facilitate="" debugging="" torch.compile:="" all="" generates="" linked="" runtime="" objects="" interpreter,="" set="" breakpoints="" files.="" usage="" simple,="" just="" add="" context="" manager="" depyf.debug()="" should="" do="" trick:="" depyf.debug():="" caveat:="" workflow="" deviates="" standard="" workflow.="" torch.compile,="" many="" codes="" dynamically="" generated.="" therefore,="" need="" to:="" launch="" program="" when="" exits="" depyf.prepare_debug("depyf_debug_dir")="" available="" depyf_debug_dir.="" enters="" automatically="" breakpoint="" internally,="" so="" paused.="" navigate="" breakpoints.="" continue="" hit="" breakpoints!="" here="" screenshot="" looks="" like.="" tensor="" variables="" live,="" inspect="" any="" variable,="" step="" our="" daily="" now!="" difference="" human-written="" conclusion="" serves="" an="" invaluable="" tool="" accelerating="" pytorch="" effortlessly.="" looking="" delve="" deeper="" whether="" leverage="" full="" potential="" integrate="" custom="" operations,="" learning="" curve="" very="" steep="" though.="" designed="" lower="" this="" barrier,="" offering="" user-friendly="" experience="" understand,="" learn,="" adapt="" torch.compile.="" explore="" benefits="" firsthand!="" open-source="" readily="" at="" depyf.="" installation="" straightforward="" via="" hope="" enhance="" everyone’s="" development="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Introducing depyf: mastering torch.compile with ease">
+<meta name="twitter:description" content="
+
+We are thrilled to introduce depyf, a new project to the PyTorch ecosystem designed to help users understand, learn, and adapt to torch.compile!
+
+Motivation
+
+torch.compile is a cornerstone of PyTorch 2.x, offering a straightforward path to accelerate machine learning workflows with just a single line of code for both training and inference. The mere inclusion of @torch.compile can dramatically enhance the performance of your code. However, identifying the optimal insertion point for torch.compile is not easy, not to mention the complexity of adjusting various knobs for maximum efficiency.
+
+The intricacies of the torch.compile stack, encompassing Dynamo, AOTAutograd, Inductor, and more, present a steep learning curve. These components, essential for deep learning performance optimization, can be daunting without a solid foundation in the subject.
+
+Note: For an introductory example of how torch.compile works, please refer to this walk-through explanation.
+
+A common tool: TORCH_COMPILE_DEBUG
+
+To demystify torch.compile, the common approach involves leveraging the TORCH_COMPILE_DEBUG environment variable. While it provides more information, deciphering the output remains a formidable task.
+
+For example, when we have the following code:
+
+# test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() < 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == " __main__":="" main()="" and="" run="" it="" with="" torch_compile_debug="1" python="" test.py="" ,="" we="" will="" get="" a="" directory="" named="" run_2024_02_05_23_02_45_552124-pid_9520="" under="" which="" there="" are="" these="" files:="" .="" ├──="" torchdynamo="" │="" └──="" debug.log="" torchinductor="" aot_model___0_debug.log="" aot_model___10_debug.log="" aot_model___11_debug.log="" model__4_inference_10.1="" fx_graph_readable.py="" fx_graph_runnable.py="" fx_graph_transformed.py="" ir_post_fusion.txt="" ir_pre_fusion.txt="" output_code.py="" model__5_inference_11.2="" model___9.0="" the="" generated="" files="" logs="" often="" raise="" more="" questions="" than="" they="" answer,="" leaving="" developers="" puzzled="" over="" meaning="" relationships="" within="" data.="" common="" puzzles="" for="" include:="" what="" does="" mean?="" i="" have="" one="" function="" but="" three="" model__xxx.py="" in="" directory,="" is="" their="" correspondence?="" those="" load_global="" stuff="" ?="" better="" tool:="" depyf="" comes="" to="" rescue="" let’s="" see="" how="" can="" help="" resolve="" above="" challenges.="" use="" simply="" execute="" pip="" install="" or="" follow="" project="" page="" https:="" github.com="" thuml="" latest="" version,="" then="" surround="" main="" code="" depyf.prepare_debug="" #="" import="" torch="" from="" _dynamo="" as="" typing="" list="" @torch.compile="" def="" toy_example(a,="" b):="" x="a" (torch.abs(a)="" +="" 1)="" if="" b.sum()="" &lt;="" 0:="" b="b" *="" -1="" return="" main():="" _="" range(100):="" toy_example(torch.randn(10),="" torch.randn(10))="" __name__="=" "__main__":="" depyf.prepare_debug("depyf_debug_dir"):="" after="" executing="" produce="" depyf_debug_dir="" (the="" argument="" of="" prepare_debug="" function).="" would="" be="" __compiled_fn_0="" post="" grad="" 0.py="" captured="" graph="" forward="" kernel="" __compiled_fn_3="" __compiled_fn_4="" __transformed_code_0_for_torch_dynamo_resume_in_toy_example_at_8.py="" __transformed_code_0_for_toy_example.py="" __transformed_code_1_for_torch_dynamo_resume_in_toy_example_at_8.py="" full_code_for_toy_example_0.py="" two="" obvious="" benefits:="" long="" difficult-to-understand="" gone.="" its="" cleaned="" up="" shown="" human-readable="" source="" code,="" full_code_for_xxx.py="" __transformed_code_{n}_for_xxx.py="" worth="" note,="" that="" most="" tedious="" difficult="" job="" decompile="" bytecode="" inside="" into="" freeing="" intimidating="" internals="" python.="" correspondence="" between="" names="" computation="" graphs="" respected.="" example,="" immediately="" know="" corresponding="" __compiled_fn_0_xxx.py="" because="" share="" same="" prefix="" name.="" starting="" following="" functions="" involved,="" users="" clear="" view="" torch.compile="" code.="" thing:="" step-through="" debuggability="" stepping="" through="" line="" by="" using="" debuggers="" great="" way="" understand="" works.="" however,="" only="" users’="" information,="" cannot="" executed="" data="" concern.="" note:="" “debug”,="" mean="" process="" inspecting="" improving="" program,="" rather="" correcting="" buggy="" standout="" feature="" capability="" facilitate="" debugging="" torch.compile:="" all="" generates="" linked="" runtime="" objects="" interpreter,="" set="" breakpoints="" files.="" usage="" simple,="" just="" add="" context="" manager="" depyf.debug()="" should="" do="" trick:="" depyf.debug():="" caveat:="" workflow="" deviates="" standard="" workflow.="" torch.compile,="" many="" codes="" dynamically="" generated.="" therefore,="" need="" to:="" launch="" program="" when="" exits="" depyf.prepare_debug("depyf_debug_dir")="" available="" depyf_debug_dir.="" enters="" automatically="" breakpoint="" internally,="" so="" paused.="" navigate="" breakpoints.="" continue="" hit="" breakpoints!="" here="" screenshot="" looks="" like.="" tensor="" variables="" live,="" inspect="" any="" variable,="" step="" our="" daily="" now!="" difference="" human-written="" conclusion="" serves="" an="" invaluable="" tool="" accelerating="" pytorch="" effortlessly.="" looking="" delve="" deeper="" whether="" leverage="" full="" potential="" integrate="" custom="" operations,="" learning="" curve="" very="" steep="" though.="" designed="" lower="" this="" barrier,="" offering="" user-friendly="" experience="" understand,="" learn,="" adapt="" torch.compile.="" explore="" benefits="" firsthand!="" open-source="" readily="" at="" depyf.="" installation="" straightforward="" via="" hope="" enhance="" everyone’s="" development="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年5月11日</p>
+            <h1>
+                <a class="blog-title">介绍 depyf：轻松掌握 torch.compile</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">作者：尤开超</p>
+                    <p><img src="/assets/images/depyf.png" alt="depyf logo" style="width:100%;display: block; max-width: 400px; margin-right: auto; margin-left: auto"></p>
+
+<p>我们非常高兴向 PyTorch 生态系统介绍一个新项目 <code class="language-plaintext highlighter-rouge">depyf</code>，旨在帮助用户理解、学习和适应 <code class="language-plaintext highlighter-rouge">torch.compile</code>！</p>
+
+<h2 id="motivation">动机</h2>
+
+<p><code class="language-plaintext highlighter-rouge">torch.compile</code> 是 PyTorch 2.x 的基石，只需一行代码即可加速机器学习工作流程，无论是训练还是推理。只需包含 <code class="language-plaintext highlighter-rouge">@torch.compile</code>，就能<a href="https://pytorch.org/get-started/pytorch-2.0/">显著提升代码性能 </a>。然而，确定 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的最佳插入点并不容易，更不用说调整各种旋钮以实现最大效率的复杂性了。</p>
+
+<p>《torch.compile》栈的复杂性，包括 Dynamo、AOTAutograd、Inductor 等，呈现一个 <strong> 陡峭的学习曲线 </strong>。这些对于深度学习性能优化至关重要的组件，如果没有扎实的理论基础，可能会让人感到难以掌握。</p>
+
+<p><em>注意：有关 torch.compile 的入门示例，请参阅此<a href="https://depyf.readthedocs.io/en/latest/walk_through.html">教程说明 </a>。</em></p>
+
+<h2 id="a-common-tool-torch_compile_debug">常用工具：<code class="language-plaintext highlighter-rouge">TORCH_COMPILE_DEBUG</code></h2>
+
+<p>要揭开 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的神秘面纱，常见的做法是利用 <code class="language-plaintext highlighter-rouge">TORCH_COMPILE_DEBUG</code> 环境变量。虽然它提供了更多信息，但解读输出仍然是一项艰巨的任务。</p>
+
+<p>例如，当我们有以下代码：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() &lt; 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == "__main__":
+   main()
+</code></pre></div></div>
+
+<p>并用 <code class="language-plaintext highlighter-rouge">TORCH_COMPILE_DEBUG=1 python test.py</code>  运行它，我们将得到一个名为 <code class="language-plaintext highlighter-rouge">torch_compile_debug/run_2024_02_05_23_02_45_552124-pid_9520</code>  的目录，其中包含以下文件：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>.
+├── torchdynamo
+│   └── debug.log
+└── torchinductor
+   ├── aot_model___0_debug.log
+   ├── aot_model___10_debug.log
+   ├── aot_model___11_debug.log
+   ├── model__4_inference_10.1
+   │   ├── fx_graph_readable.py
+   │   ├── fx_graph_runnable.py
+   │   ├── fx_graph_transformed.py
+   │   ├── ir_post_fusion.txt
+   │   ├── ir_pre_fusion.txt
+   │   └── output_code.py
+   ├── model__5_inference_11.2
+   │   ├── fx_graph_readable.py
+   │   ├── fx_graph_runnable.py
+   │   ├── fx_graph_transformed.py
+   │   ├── ir_post_fusion.txt
+   │   ├── ir_pre_fusion.txt
+   │   └── output_code.py
+   └── model___9.0
+       ├── fx_graph_readable.py
+       ├── fx_graph_runnable.py
+       ├── fx_graph_transformed.py
+       ├── ir_post_fusion.txt
+       ├── ir_pre_fusion.txt
+       └── output_code.py
+</code></pre></div></div>
+
+<p>生成的文件和日志往往提出更多问题，而不是回答，让开发者对数据中的含义和关系感到困惑。对于 <code class="language-plaintext highlighter-rouge">TORCH_COMPILE_DEBUG</code> 常见的难题包括：</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">model__4_inference_10.1</code> 是什么意思？</li>
+  <li>我有一个功能，但在目录中有三个 <code class="language-plaintext highlighter-rouge">model__xxx.py</code> 文件，它们之间有什么对应关系？</li>
+  <li>那些在 <code class="language-plaintext highlighter-rouge">debug.log</code> 中的 <code class="language-plaintext highlighter-rouge">LOAD_GLOBAL</code> 是什么意思？</li>
+</ul>
+
+<h2 id="a-better-tool-depyf-comes-to-rescue">一个更好的工具：<code class="language-plaintext highlighter-rouge">depyf</code> 来拯救</h2>
+
+<p>让我们看看 <code class="language-plaintext highlighter-rouge">depyf</code> 如何帮助开发者解决上述挑战。要使用 <code class="language-plaintext highlighter-rouge">depyf</code>，只需执行 <code class="language-plaintext highlighter-rouge">pip install depyf</code> 或访问项目页面 <a href="https://github.com/thuml/depyf"> https://github.com/thuml/depyf</a> 安装最新版本，然后在主代码周围使用 <code class="language-plaintext highlighter-rouge">with depyf.prepare_debug</code> 。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() &lt; 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == "__main__":
+   import depyf
+   with depyf.prepare_debug("depyf_debug_dir"):
+       main()
+</code></pre></div></div>
+
+<p>执行 <code class="language-plaintext highlighter-rouge">python test.py</code> 后，<code class="language-plaintext highlighter-rouge">depyf</code> 将生成一个名为 <code class="language-plaintext highlighter-rouge">depyf_debug_dir</code> 的目录（这是 <code class="language-plaintext highlighter-rouge">prepare_debug</code> 函数的参数）。在该目录下，会有以下文件：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>.
+├── __compiled_fn_0 AFTER POST GRAD 0.py
+├── __compiled_fn_0 Captured Graph 0.py
+├── __compiled_fn_0 Forward graph 0.py
+├── __compiled_fn_0 kernel 0.py
+├── __compiled_fn_3 AFTER POST GRAD 0.py
+├── __compiled_fn_3 Captured Graph 0.py
+├── __compiled_fn_3 Forward graph 0.py
+├── __compiled_fn_3 kernel 0.py
+├── __compiled_fn_4 AFTER POST GRAD 0.py
+├── __compiled_fn_4 Captured Graph 0.py
+├── __compiled_fn_4 Forward graph 0.py
+├── __compiled_fn_4 kernel 0.py
+├── __transformed_code_0_for_torch_dynamo_resume_in_toy_example_at_8.py
+├── __transformed_code_0_for_toy_example.py
+├── __transformed_code_1_for_torch_dynamo_resume_in_toy_example_at_8.py
+└── full_code_for_toy_example_0.py
+</code></pre></div></div>
+
+<p>并且有两个明显的优点：</p>
+
+<ol>
+  <li>长而难以理解的 <code class="language-plaintext highlighter-rouge">torchdynamo/debug.log</code> 已消失。其内容已清理并显示为可读源代码，在 <code class="language-plaintext highlighter-rouge">full_code_for_xxx.py</code> 和 <code class="language-plaintext highlighter-rouge">__transformed_code_{n}_for_xxx.py</code>  。值得注意的是，<code class="language-plaintext highlighter-rouge">depyf</code> 最繁琐和困难的工作是将 <code class="language-plaintext highlighter-rouge">torchdynamo/debug.log</code> 中的字节码反编译成 Python 源代码，从而让开发者摆脱 Python 内部令人畏惧的部分。</li>
+  <li>函数名与计算图之间的对应关系得到了尊重。例如，在 <code class="language-plaintext highlighter-rouge">__transformed_code_0_for_toy_example.py</code>  ，我们可以看到一个名为 <code class="language-plaintext highlighter-rouge">__compiled_fn_0</code> 的函数，我们立即会知道其对应的计算图在 <code class="language-plaintext highlighter-rouge">__compiled_fn_0_xxx.py</code> 中，因为它们共享相同的 <code class="language-plaintext highlighter-rouge">__compiled_fn_0</code> 前缀名称。</li>
+</ol>
+
+<p><strong>从 <code>full_code_for_xxx.py</code> 开始，并跟随相关的函数，用户将清楚地了解 <code>torch.compile</code> 对其代码做了什么。</strong></p>
+
+<h2 id="one-more-thing-step-through-debuggability">还有一点：逐步调试功能</h2>
+
+<p>使用调试器逐行执行代码是理解代码工作原理的好方法。然而，在 <code class="language-plaintext highlighter-rouge">TORCH_COMPILE_DEBUG</code> 的情况下，这些文件仅供用户参考，无法使用用户关心的数据进行执行。</p>
+
+<p><em>注意：这里的“调试”指的是检查和改进程序的过程，而不是纠正有错误的代码。</em></p>
+
+<p><strong>depyf 的一个突出特点是它能够方便地进行 <code>torch.compile</code> 的逐步调试：它生成的所有文件都与 Python 解释器内的运行时代码对象相关联，我们可以在这些文件中设置断点。使用方法很简单，只需添加一个上下文管理器 <code>with depyf.debug()</code>，它就应该可以工作了：</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># test.py
+import torch
+from torch import _dynamo as torchdynamo
+from typing import List
+
+@torch.compile
+def toy_example(a, b):
+   x = a / (torch.abs(a) + 1)
+   if b.sum() &lt; 0:
+       b = b * -1
+   return x * b
+
+def main():
+   for _ in range(100):
+       toy_example(torch.randn(10), torch.randn(10))
+
+if __name__ == "__main__":
+   import depyf
+   with depyf.prepare_debug("depyf_debug_dir"):
+       main()
+   with depyf.debug():
+       main()
+</code></pre></div></div>
+
+<p>只有一个需要注意的地方：调试 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的工作流程与标准调试流程有所不同。使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 时，许多代码是<strong>动态</strong>生成的。因此，我们需要：</p>
+
+<ol>
+  <li>启动程序</li>
+  <li>当程序退出时 <code class="language-plaintext highlighter-rouge">with depyf.prepare_debug("depyf_debug_dir")</code> ，代码将可用在 <code class="language-plaintext highlighter-rouge">depyf_debug_dir</code> 中。</li>
+  <li>当程序进入 <code class="language-plaintext highlighter-rouge">with depyf.debug()</code> 时，它会自动内部设置断点，使程序暂停。</li>
+  <li>导航到 <code class="language-plaintext highlighter-rouge">depyf_debug_dir</code> 来设置断点。</li>
+  <li>继续运行代码，调试器将触发这些断点！</li>
+</ol>
+
+<p><img src="/assets/images/depyf-screenshot.png" alt="depyf screenshot" style="width:100%;"></p>
+
+<p>这是一张截图，展示了其外观。所有代码和张量变量都是实时状态，我们可以检查任何变量，并逐步执行代码，就像我们现在的日常调试工作流程一样！唯一的区别是我们现在调试的是由 <code class="language-plaintext highlighter-rouge">torch.compile</code> 生成的代码，而不是人类编写的代码。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p><code class="language-plaintext highlighter-rouge">torch.compile</code> 是一个加速 PyTorch 代码的无价工具。对于那些想要深入了解 <code class="language-plaintext highlighter-rouge">torch.compile</code>，无论是为了充分利用其功能还是集成自定义操作，学习曲线可能会非常陡峭。 <code class="language-plaintext highlighter-rouge">depyf</code> 设计用来降低这一门槛，为用户提供了友好易用的体验，以便理解、学习和适应 <code class="language-plaintext highlighter-rouge">torch.compile</code>。</p>
+
+<p>试试 <code class="language-plaintext highlighter-rouge">depyf</code> 并亲身体验其益处！该项目是开源的，可在 <a href="https://github.com/thuml/depyf"> https://github.com/thuml/depyf</a> 上轻松获取。通过 <code class="language-plaintext highlighter-rouge">pip install depyf</code> 即可安装。我们希望 <code class="language-plaintext highlighter-rouge">depyf</code> 能够通过 <code class="language-plaintext highlighter-rouge">torch.compile</code> 提升每个人的开发工作流程。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

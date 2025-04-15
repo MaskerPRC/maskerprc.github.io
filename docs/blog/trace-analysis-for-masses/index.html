@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch Trace Analysis for the Masses | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are excited to announce the public release of Holistic Trace Analysis (HTA), an open source performance analysis and visualization Python library for PyTorch users. HTA takes as input Kineto traces collected by the PyTorch profiler, which are complex and challenging to interpret, and up-levels the performance information contained in these traces. It was initially developed internally at Meta to understand and debug performance problems for large-scale distributed training jobs on GPUs. The multidisciplinary team has made a number of enhancements to HTA’s features and scaled them to support state-of-the-art ML workloads.
+
+ML researchers and systems engineers often struggle to computationally scale up their models because they are not aware of the performance bottlenecks in their workloads. The resources requested for a job (e.g. GPUs, memory) are often misaligned with the resources actually required due to lack of visibility “under the hood”. To achieve the best performance from the hardware stack, it is imperative to understand the resource utilization and bottlenecks for distributed training workloads.
+
+The initial HTA implementation was specifically targeted at Deep Learning Based Recommendation Models (DLRM). To make the features in HTA generic and applicable to use cases such as analyzing Vision and NLP models, we decided to refactor the HTA codebase and make the library available to the larger community. This new codebase has implemented several important ideas which lead to significant efficiency and performance improvements.
+
+In this blog, we present several features implemented in the open source version of HTA, which can be used as a Python script as well as interactively in a Jupyter notebook. HTA provides the following features:
+
+
+  Breakdown by Dimensions
+    
+      Temporal: Breakdown of GPU time in terms of time spent in computation, communication, memory events, and idle time on a single node and across all ranks.
+      Idle Time: Breakdown of GPU idle time into waiting for the host, waiting for another kernel or attributed to an unknown cause.
+      Kernel: Find kernels with the longest duration on each rank.
+      Communication Computation Overlap: Calculate the percentage of time when communication overlaps computation.
+    
+  
+  Statistical Analysis
+    
+      Kernel Duration Distribution: Distribution of average time taken by longest kernels across different ranks.
+      CUDA Kernel Launch: Distributions of GPU kernels with very small duration, large duration, and excessive launch time.
+      Augmented Counters (Memory bandwidth, Queue length): Augmented trace files which provide insights into memory copy bandwidth and number of outstanding operations on each CUDA stream.
+    
+  
+  Patterns
+    
+      Frequent CUDA Kernels: Find the CUDA kernels most frequently launched by any given PyTorch or user defined operator.
+    
+  
+  Trace Comparison
+    
+      Trace Diff: A trace comparison tool to identify and visualize the differences between traces.
+    
+  
+
+
+HTA source code is available to users via Github. Users can request new features or build their own analysis using the core libraries and data structures provided in the codebase in addition to the features mentioned above.
+
+GPU Training Performance Debugging 101
+
+To understand the GPU performance in distributed training jobs, we consider how the model operators interact with the GPU devices and how such interactions are reflected in certain measurable metrics.
+
+At a high level, we can break down the GPU operations in a model execution into three broad categories, henceforth referred to as kernel types:
+
+  Computation (COMP) - Compute kernels execute compiled routines for matrix multiplication and similar numeric calculations. They are responsible for all of the number-crunching necessary for model execution.
+  Communication (COMM) - Communication kernels are routines which are responsible for exchanging and synchronizing data between different GPU devices in a distributed training job. The NVIDIA Collective Communication Library (NCCL) is a widely used communication library and all its kernels have the prefix “nccl”. Example NCCL kernels include NCCL_AllGather, NCCL_ReduceScatter, NCCL_AllReduce, etc.
+  Memory (MEM) - Memory kernels manage the memory allocations/deallocations on the GPU devices and data movement between the memory space on the host and the GPUs. The memory kernels include Memcpy_H2D, Memcpy_D2H, Memcpy_D2D, Memset, etc. Here, H represents the Host and D represents the GPU Device. Thus, H2D, D2H, D2D stands for Host to Device, Device to Host and Device to Device respectively.
+
+
+Because a modern GPU device like the NVIDIA A100 GPU is a massively parallel device which is capable of running multiple kernels simultaneously, it is possible to overlap the computation, communication, and memory kernels to reduce the model execution time. One common technique to achieve the overlap is to utilize multiple CUDA streams. A CUDA stream is a sequence of operations that execute on a GPU device in the order in which they are issued by the host code. Different CUDA streams can be interleaved and even run concurrently, thus achieving the effect of kernel overlap.
+
+To help understand the above concepts, Figure 1 provides a timeline of the GPU kernels in a sample distributed training job on 8 GPUs for one iteration. In the figure below, each rank represents one GPU and the kernels on each GPU run on 6 CUDA streams. In the right column of the figure, you can see names of the GPU kernels used. In the middle of the figure, you see the overlap between compute and communicate kernels. This figure is created using the plot_timeline example notebook available in HTA.
+
+
+
+Figure 1. An example of the execution timeline of GPU Kernels across multiple ranks
+
+The performance of multiple GPU training jobs is affected by multiple factors. Among these factors, how does a model execution create and orchestrate the GPU kernels plays a critical role. HTA provides insights on how the model execution interacts with the GPU devices and highlights the opportunities for performance improvement.
+
+With the features we built in HTA, we aim to provide users insights into “what is happening under the hood in a distributed GPU training?” We briefly describe these features in the next few paragraphs.
+
+Features in Holistic Trace Analysis
+
+For most users, understanding the performance of GPU training jobs is nontrivial. Thus, we built this library to simplify the task of trace analysis and provide the user useful insights by examining the model execution traces. As the first step, we developed features which are important and generic enough so that most users can benefit from this library.
+
+Temporal Breakdown: We begin by asking whether the GPU is spending time on computation, communication, memory events, or is it idle? To answer this question, the temporal breakdown feature presents a breakdown in terms of these categories. To achieve high training efficiency the code should maximize time used by computation kernels and minimize idle time and non-compute time (time used by communication or memory kernels). This is accomplished by implementing concurrent execution of computation kernels with communication or memory kernels. Note that, during concurrent execution of computation kernels with communication/memory kernels the time spent by communication/memory kernels is accounted for under compute time.
+
+
+
+Figure 2: Temporal Breakdown across 8 GPUs
+
+Kernel Breakdown: It is natural to ask which kernels are taking the most amount of time. The next feature breaks down the time spent within each kernel type (COMM, COMP, MEM) and sorts them by duration. We present this information for each kernel type and for each rank as a pie chart. See figure 3 below.
+
+
+
+Figure 3: Pie chart of top computation and communication kernels
+
+Kernel Duration Distribution: Subsequently, one can also ask - for any given kernel, what is the distribution of the time spent across the ranks? To answer this, HTA generates bar graphs for the average duration of a given kernel across all ranks. Additionally, the error bars in the bar graphs show the minimum and maximum amount of time taken by a given kernel on a given rank. Figure 4 below shows a discrepancy between average duration on rank 0 as compared to other ranks. This anomalous behavior on rank 0 guides the user on where to look for possible bugs.
+
+
+
+Figure 4: Average duration of NCCL AllReduce Kernel across 8 ranks
+
+Communication Computation Overlap: In distributed training, a significant amount of time is spent in communication and synchronization events among multiple GPU devices. To achieve high GPU efficiency (i.e. TFLOPS/GPU) it is vital to keep the GPU doing actual computation work. In other words, a GPU should not be blocked because of waiting for data from other GPUs. One way to measure the extent to which computation is blocked by data dependencies is to calculate the computation-communication overlap. Higher GPU efficiency is observed if communication events overlap computation events. Lack of communication and computation overlap will lead to the GPU being idle, thus the efficiency would be low. Thus, the communication computation overlap feature calculates the percentage of time communication and computation overlap in a job for each rank and generates a bar graph representation. See figure below. More precisely, we measure the following ratio
+
+(time spent in computation while communicating) / (time spent in communication)
+
+
+
+Figure 5: Communication computation overlap
+
+Augmented Counters (Queue length, Memory bandwidth): To aid in debugging, HTA calculates the memory bandwidth statistics for D2H, H2D and D2D memory copy (memcpy) and memory set (memset) events. Additionally, HTA also computes the number of outstanding CUDA operations on each CUDA stream. We refer to this as queue length. When the queue length on a stream is 1024 or larger new events cannot be scheduled on that stream and the CPU will stall until the GPU events have processed. Additionally, HTA generates a new trace file containing tracks with the memory bandwidth and queue length time series. See Figure 6 below.
+
+
+
+Figure 6: Memory Bandwidth and Queue Length
+
+These primary features give us a peek into the system performance and help answer “what is happening in the system?”. As HTA evolves, we hope to address “why is X happening?” and also suggest possible solutions to overcome the bottlenecks.
+
+Installation and Usage
+
+Installation
+
+For installing the HTA please refer to the README. In brief, the user is required to clone the repo and install the necessary Python packages via pip.
+
+Usage
+
+This version of Holistic Trace Analysis is currently in beta and we recommend using HTA in a Jupyter notebook. A demo notebook is provided for your convenience. To get started, import the hta package in a Jupyter notebook, create a TraceAnalysis object and off we go in exactly two lines of code.
+
+from hta.trace_analysis import TraceAnalysis
+analyzer = TraceAnalysis(trace_dir = “/trace/folder/path”)
+
+
+Requirements
+
+
+  All trace files for a training or inference job must be stored in a unique folder.
+  Trace files are in json or gzipped json format.
+
+
+FAQ
+
+Q. How can I install HTA?
+
+Please see the README in the root directory of the repository.
+
+Q. Is there any documentation on the features and API in HTA?
+
+The documentation and detailed API is available here.
+
+Q. Can you implement feature X?
+
+Depending on how widely the feature is needed and the level of effort required to implement it we would consider developing the feature. Please open a Github Issue and tag it with the feature-request label.
+
+Q. Can I modify the code?
+
+Please do and send a PR along the way, if you think it would be useful for others.
+
+Q. How can I collect traces in PyTorch?
+
+Please refer to this tutorial here.
+
+Q. Can HTA be used at production scale?
+
+Yes, please see a use case study here.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch Trace Analysis for the Masses">
+<meta property="og:description" content="We are excited to announce the public release of Holistic Trace Analysis (HTA), an open source performance analysis and visualization Python library for PyTorch users. HTA takes as input Kineto traces collected by the PyTorch profiler, which are complex and challenging to interpret, and up-levels the performance information contained in these traces. It was initially developed internally at Meta to understand and debug performance problems for large-scale distributed training jobs on GPUs. The multidisciplinary team has made a number of enhancements to HTA’s features and scaled them to support state-of-the-art ML workloads.
+
+ML researchers and systems engineers often struggle to computationally scale up their models because they are not aware of the performance bottlenecks in their workloads. The resources requested for a job (e.g. GPUs, memory) are often misaligned with the resources actually required due to lack of visibility “under the hood”. To achieve the best performance from the hardware stack, it is imperative to understand the resource utilization and bottlenecks for distributed training workloads.
+
+The initial HTA implementation was specifically targeted at Deep Learning Based Recommendation Models (DLRM). To make the features in HTA generic and applicable to use cases such as analyzing Vision and NLP models, we decided to refactor the HTA codebase and make the library available to the larger community. This new codebase has implemented several important ideas which lead to significant efficiency and performance improvements.
+
+In this blog, we present several features implemented in the open source version of HTA, which can be used as a Python script as well as interactively in a Jupyter notebook. HTA provides the following features:
+
+
+  Breakdown by Dimensions
+    
+      Temporal: Breakdown of GPU time in terms of time spent in computation, communication, memory events, and idle time on a single node and across all ranks.
+      Idle Time: Breakdown of GPU idle time into waiting for the host, waiting for another kernel or attributed to an unknown cause.
+      Kernel: Find kernels with the longest duration on each rank.
+      Communication Computation Overlap: Calculate the percentage of time when communication overlaps computation.
+    
+  
+  Statistical Analysis
+    
+      Kernel Duration Distribution: Distribution of average time taken by longest kernels across different ranks.
+      CUDA Kernel Launch: Distributions of GPU kernels with very small duration, large duration, and excessive launch time.
+      Augmented Counters (Memory bandwidth, Queue length): Augmented trace files which provide insights into memory copy bandwidth and number of outstanding operations on each CUDA stream.
+    
+  
+  Patterns
+    
+      Frequent CUDA Kernels: Find the CUDA kernels most frequently launched by any given PyTorch or user defined operator.
+    
+  
+  Trace Comparison
+    
+      Trace Diff: A trace comparison tool to identify and visualize the differences between traces.
+    
+  
+
+
+HTA source code is available to users via Github. Users can request new features or build their own analysis using the core libraries and data structures provided in the codebase in addition to the features mentioned above.
+
+GPU Training Performance Debugging 101
+
+To understand the GPU performance in distributed training jobs, we consider how the model operators interact with the GPU devices and how such interactions are reflected in certain measurable metrics.
+
+At a high level, we can break down the GPU operations in a model execution into three broad categories, henceforth referred to as kernel types:
+
+  Computation (COMP) - Compute kernels execute compiled routines for matrix multiplication and similar numeric calculations. They are responsible for all of the number-crunching necessary for model execution.
+  Communication (COMM) - Communication kernels are routines which are responsible for exchanging and synchronizing data between different GPU devices in a distributed training job. The NVIDIA Collective Communication Library (NCCL) is a widely used communication library and all its kernels have the prefix “nccl”. Example NCCL kernels include NCCL_AllGather, NCCL_ReduceScatter, NCCL_AllReduce, etc.
+  Memory (MEM) - Memory kernels manage the memory allocations/deallocations on the GPU devices and data movement between the memory space on the host and the GPUs. The memory kernels include Memcpy_H2D, Memcpy_D2H, Memcpy_D2D, Memset, etc. Here, H represents the Host and D represents the GPU Device. Thus, H2D, D2H, D2D stands for Host to Device, Device to Host and Device to Device respectively.
+
+
+Because a modern GPU device like the NVIDIA A100 GPU is a massively parallel device which is capable of running multiple kernels simultaneously, it is possible to overlap the computation, communication, and memory kernels to reduce the model execution time. One common technique to achieve the overlap is to utilize multiple CUDA streams. A CUDA stream is a sequence of operations that execute on a GPU device in the order in which they are issued by the host code. Different CUDA streams can be interleaved and even run concurrently, thus achieving the effect of kernel overlap.
+
+To help understand the above concepts, Figure 1 provides a timeline of the GPU kernels in a sample distributed training job on 8 GPUs for one iteration. In the figure below, each rank represents one GPU and the kernels on each GPU run on 6 CUDA streams. In the right column of the figure, you can see names of the GPU kernels used. In the middle of the figure, you see the overlap between compute and communicate kernels. This figure is created using the plot_timeline example notebook available in HTA.
+
+
+
+Figure 1. An example of the execution timeline of GPU Kernels across multiple ranks
+
+The performance of multiple GPU training jobs is affected by multiple factors. Among these factors, how does a model execution create and orchestrate the GPU kernels plays a critical role. HTA provides insights on how the model execution interacts with the GPU devices and highlights the opportunities for performance improvement.
+
+With the features we built in HTA, we aim to provide users insights into “what is happening under the hood in a distributed GPU training?” We briefly describe these features in the next few paragraphs.
+
+Features in Holistic Trace Analysis
+
+For most users, understanding the performance of GPU training jobs is nontrivial. Thus, we built this library to simplify the task of trace analysis and provide the user useful insights by examining the model execution traces. As the first step, we developed features which are important and generic enough so that most users can benefit from this library.
+
+Temporal Breakdown: We begin by asking whether the GPU is spending time on computation, communication, memory events, or is it idle? To answer this question, the temporal breakdown feature presents a breakdown in terms of these categories. To achieve high training efficiency the code should maximize time used by computation kernels and minimize idle time and non-compute time (time used by communication or memory kernels). This is accomplished by implementing concurrent execution of computation kernels with communication or memory kernels. Note that, during concurrent execution of computation kernels with communication/memory kernels the time spent by communication/memory kernels is accounted for under compute time.
+
+
+
+Figure 2: Temporal Breakdown across 8 GPUs
+
+Kernel Breakdown: It is natural to ask which kernels are taking the most amount of time. The next feature breaks down the time spent within each kernel type (COMM, COMP, MEM) and sorts them by duration. We present this information for each kernel type and for each rank as a pie chart. See figure 3 below.
+
+
+
+Figure 3: Pie chart of top computation and communication kernels
+
+Kernel Duration Distribution: Subsequently, one can also ask - for any given kernel, what is the distribution of the time spent across the ranks? To answer this, HTA generates bar graphs for the average duration of a given kernel across all ranks. Additionally, the error bars in the bar graphs show the minimum and maximum amount of time taken by a given kernel on a given rank. Figure 4 below shows a discrepancy between average duration on rank 0 as compared to other ranks. This anomalous behavior on rank 0 guides the user on where to look for possible bugs.
+
+
+
+Figure 4: Average duration of NCCL AllReduce Kernel across 8 ranks
+
+Communication Computation Overlap: In distributed training, a significant amount of time is spent in communication and synchronization events among multiple GPU devices. To achieve high GPU efficiency (i.e. TFLOPS/GPU) it is vital to keep the GPU doing actual computation work. In other words, a GPU should not be blocked because of waiting for data from other GPUs. One way to measure the extent to which computation is blocked by data dependencies is to calculate the computation-communication overlap. Higher GPU efficiency is observed if communication events overlap computation events. Lack of communication and computation overlap will lead to the GPU being idle, thus the efficiency would be low. Thus, the communication computation overlap feature calculates the percentage of time communication and computation overlap in a job for each rank and generates a bar graph representation. See figure below. More precisely, we measure the following ratio
+
+(time spent in computation while communicating) / (time spent in communication)
+
+
+
+Figure 5: Communication computation overlap
+
+Augmented Counters (Queue length, Memory bandwidth): To aid in debugging, HTA calculates the memory bandwidth statistics for D2H, H2D and D2D memory copy (memcpy) and memory set (memset) events. Additionally, HTA also computes the number of outstanding CUDA operations on each CUDA stream. We refer to this as queue length. When the queue length on a stream is 1024 or larger new events cannot be scheduled on that stream and the CPU will stall until the GPU events have processed. Additionally, HTA generates a new trace file containing tracks with the memory bandwidth and queue length time series. See Figure 6 below.
+
+
+
+Figure 6: Memory Bandwidth and Queue Length
+
+These primary features give us a peek into the system performance and help answer “what is happening in the system?”. As HTA evolves, we hope to address “why is X happening?” and also suggest possible solutions to overcome the bottlenecks.
+
+Installation and Usage
+
+Installation
+
+For installing the HTA please refer to the README. In brief, the user is required to clone the repo and install the necessary Python packages via pip.
+
+Usage
+
+This version of Holistic Trace Analysis is currently in beta and we recommend using HTA in a Jupyter notebook. A demo notebook is provided for your convenience. To get started, import the hta package in a Jupyter notebook, create a TraceAnalysis object and off we go in exactly two lines of code.
+
+from hta.trace_analysis import TraceAnalysis
+analyzer = TraceAnalysis(trace_dir = “/trace/folder/path”)
+
+
+Requirements
+
+
+  All trace files for a training or inference job must be stored in a unique folder.
+  Trace files are in json or gzipped json format.
+
+
+FAQ
+
+Q. How can I install HTA?
+
+Please see the README in the root directory of the repository.
+
+Q. Is there any documentation on the features and API in HTA?
+
+The documentation and detailed API is available here.
+
+Q. Can you implement feature X?
+
+Depending on how widely the feature is needed and the level of effort required to implement it we would consider developing the feature. Please open a Github Issue and tag it with the feature-request label.
+
+Q. Can I modify the code?
+
+Please do and send a PR along the way, if you think it would be useful for others.
+
+Q. How can I collect traces in PyTorch?
+
+Please refer to this tutorial here.
+
+Q. Can HTA be used at production scale?
+
+Yes, please see a use case study here.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch Trace Analysis for the Masses">
+<meta name="twitter:description" content="We are excited to announce the public release of Holistic Trace Analysis (HTA), an open source performance analysis and visualization Python library for PyTorch users. HTA takes as input Kineto traces collected by the PyTorch profiler, which are complex and challenging to interpret, and up-levels the performance information contained in these traces. It was initially developed internally at Meta to understand and debug performance problems for large-scale distributed training jobs on GPUs. The multidisciplinary team has made a number of enhancements to HTA’s features and scaled them to support state-of-the-art ML workloads.
+
+ML researchers and systems engineers often struggle to computationally scale up their models because they are not aware of the performance bottlenecks in their workloads. The resources requested for a job (e.g. GPUs, memory) are often misaligned with the resources actually required due to lack of visibility “under the hood”. To achieve the best performance from the hardware stack, it is imperative to understand the resource utilization and bottlenecks for distributed training workloads.
+
+The initial HTA implementation was specifically targeted at Deep Learning Based Recommendation Models (DLRM). To make the features in HTA generic and applicable to use cases such as analyzing Vision and NLP models, we decided to refactor the HTA codebase and make the library available to the larger community. This new codebase has implemented several important ideas which lead to significant efficiency and performance improvements.
+
+In this blog, we present several features implemented in the open source version of HTA, which can be used as a Python script as well as interactively in a Jupyter notebook. HTA provides the following features:
+
+
+  Breakdown by Dimensions
+    
+      Temporal: Breakdown of GPU time in terms of time spent in computation, communication, memory events, and idle time on a single node and across all ranks.
+      Idle Time: Breakdown of GPU idle time into waiting for the host, waiting for another kernel or attributed to an unknown cause.
+      Kernel: Find kernels with the longest duration on each rank.
+      Communication Computation Overlap: Calculate the percentage of time when communication overlaps computation.
+    
+  
+  Statistical Analysis
+    
+      Kernel Duration Distribution: Distribution of average time taken by longest kernels across different ranks.
+      CUDA Kernel Launch: Distributions of GPU kernels with very small duration, large duration, and excessive launch time.
+      Augmented Counters (Memory bandwidth, Queue length): Augmented trace files which provide insights into memory copy bandwidth and number of outstanding operations on each CUDA stream.
+    
+  
+  Patterns
+    
+      Frequent CUDA Kernels: Find the CUDA kernels most frequently launched by any given PyTorch or user defined operator.
+    
+  
+  Trace Comparison
+    
+      Trace Diff: A trace comparison tool to identify and visualize the differences between traces.
+    
+  
+
+
+HTA source code is available to users via Github. Users can request new features or build their own analysis using the core libraries and data structures provided in the codebase in addition to the features mentioned above.
+
+GPU Training Performance Debugging 101
+
+To understand the GPU performance in distributed training jobs, we consider how the model operators interact with the GPU devices and how such interactions are reflected in certain measurable metrics.
+
+At a high level, we can break down the GPU operations in a model execution into three broad categories, henceforth referred to as kernel types:
+
+  Computation (COMP) - Compute kernels execute compiled routines for matrix multiplication and similar numeric calculations. They are responsible for all of the number-crunching necessary for model execution.
+  Communication (COMM) - Communication kernels are routines which are responsible for exchanging and synchronizing data between different GPU devices in a distributed training job. The NVIDIA Collective Communication Library (NCCL) is a widely used communication library and all its kernels have the prefix “nccl”. Example NCCL kernels include NCCL_AllGather, NCCL_ReduceScatter, NCCL_AllReduce, etc.
+  Memory (MEM) - Memory kernels manage the memory allocations/deallocations on the GPU devices and data movement between the memory space on the host and the GPUs. The memory kernels include Memcpy_H2D, Memcpy_D2H, Memcpy_D2D, Memset, etc. Here, H represents the Host and D represents the GPU Device. Thus, H2D, D2H, D2D stands for Host to Device, Device to Host and Device to Device respectively.
+
+
+Because a modern GPU device like the NVIDIA A100 GPU is a massively parallel device which is capable of running multiple kernels simultaneously, it is possible to overlap the computation, communication, and memory kernels to reduce the model execution time. One common technique to achieve the overlap is to utilize multiple CUDA streams. A CUDA stream is a sequence of operations that execute on a GPU device in the order in which they are issued by the host code. Different CUDA streams can be interleaved and even run concurrently, thus achieving the effect of kernel overlap.
+
+To help understand the above concepts, Figure 1 provides a timeline of the GPU kernels in a sample distributed training job on 8 GPUs for one iteration. In the figure below, each rank represents one GPU and the kernels on each GPU run on 6 CUDA streams. In the right column of the figure, you can see names of the GPU kernels used. In the middle of the figure, you see the overlap between compute and communicate kernels. This figure is created using the plot_timeline example notebook available in HTA.
+
+
+
+Figure 1. An example of the execution timeline of GPU Kernels across multiple ranks
+
+The performance of multiple GPU training jobs is affected by multiple factors. Among these factors, how does a model execution create and orchestrate the GPU kernels plays a critical role. HTA provides insights on how the model execution interacts with the GPU devices and highlights the opportunities for performance improvement.
+
+With the features we built in HTA, we aim to provide users insights into “what is happening under the hood in a distributed GPU training?” We briefly describe these features in the next few paragraphs.
+
+Features in Holistic Trace Analysis
+
+For most users, understanding the performance of GPU training jobs is nontrivial. Thus, we built this library to simplify the task of trace analysis and provide the user useful insights by examining the model execution traces. As the first step, we developed features which are important and generic enough so that most users can benefit from this library.
+
+Temporal Breakdown: We begin by asking whether the GPU is spending time on computation, communication, memory events, or is it idle? To answer this question, the temporal breakdown feature presents a breakdown in terms of these categories. To achieve high training efficiency the code should maximize time used by computation kernels and minimize idle time and non-compute time (time used by communication or memory kernels). This is accomplished by implementing concurrent execution of computation kernels with communication or memory kernels. Note that, during concurrent execution of computation kernels with communication/memory kernels the time spent by communication/memory kernels is accounted for under compute time.
+
+
+
+Figure 2: Temporal Breakdown across 8 GPUs
+
+Kernel Breakdown: It is natural to ask which kernels are taking the most amount of time. The next feature breaks down the time spent within each kernel type (COMM, COMP, MEM) and sorts them by duration. We present this information for each kernel type and for each rank as a pie chart. See figure 3 below.
+
+
+
+Figure 3: Pie chart of top computation and communication kernels
+
+Kernel Duration Distribution: Subsequently, one can also ask - for any given kernel, what is the distribution of the time spent across the ranks? To answer this, HTA generates bar graphs for the average duration of a given kernel across all ranks. Additionally, the error bars in the bar graphs show the minimum and maximum amount of time taken by a given kernel on a given rank. Figure 4 below shows a discrepancy between average duration on rank 0 as compared to other ranks. This anomalous behavior on rank 0 guides the user on where to look for possible bugs.
+
+
+
+Figure 4: Average duration of NCCL AllReduce Kernel across 8 ranks
+
+Communication Computation Overlap: In distributed training, a significant amount of time is spent in communication and synchronization events among multiple GPU devices. To achieve high GPU efficiency (i.e. TFLOPS/GPU) it is vital to keep the GPU doing actual computation work. In other words, a GPU should not be blocked because of waiting for data from other GPUs. One way to measure the extent to which computation is blocked by data dependencies is to calculate the computation-communication overlap. Higher GPU efficiency is observed if communication events overlap computation events. Lack of communication and computation overlap will lead to the GPU being idle, thus the efficiency would be low. Thus, the communication computation overlap feature calculates the percentage of time communication and computation overlap in a job for each rank and generates a bar graph representation. See figure below. More precisely, we measure the following ratio
+
+(time spent in computation while communicating) / (time spent in communication)
+
+
+
+Figure 5: Communication computation overlap
+
+Augmented Counters (Queue length, Memory bandwidth): To aid in debugging, HTA calculates the memory bandwidth statistics for D2H, H2D and D2D memory copy (memcpy) and memory set (memset) events. Additionally, HTA also computes the number of outstanding CUDA operations on each CUDA stream. We refer to this as queue length. When the queue length on a stream is 1024 or larger new events cannot be scheduled on that stream and the CPU will stall until the GPU events have processed. Additionally, HTA generates a new trace file containing tracks with the memory bandwidth and queue length time series. See Figure 6 below.
+
+
+
+Figure 6: Memory Bandwidth and Queue Length
+
+These primary features give us a peek into the system performance and help answer “what is happening in the system?”. As HTA evolves, we hope to address “why is X happening?” and also suggest possible solutions to overcome the bottlenecks.
+
+Installation and Usage
+
+Installation
+
+For installing the HTA please refer to the README. In brief, the user is required to clone the repo and install the necessary Python packages via pip.
+
+Usage
+
+This version of Holistic Trace Analysis is currently in beta and we recommend using HTA in a Jupyter notebook. A demo notebook is provided for your convenience. To get started, import the hta package in a Jupyter notebook, create a TraceAnalysis object and off we go in exactly two lines of code.
+
+from hta.trace_analysis import TraceAnalysis
+analyzer = TraceAnalysis(trace_dir = “/trace/folder/path”)
+
+
+Requirements
+
+
+  All trace files for a training or inference job must be stored in a unique folder.
+  Trace files are in json or gzipped json format.
+
+
+FAQ
+
+Q. How can I install HTA?
+
+Please see the README in the root directory of the repository.
+
+Q. Is there any documentation on the features and API in HTA?
+
+The documentation and detailed API is available here.
+
+Q. Can you implement feature X?
+
+Depending on how widely the feature is needed and the level of effort required to implement it we would consider developing the feature. Please open a Github Issue and tag it with the feature-request label.
+
+Q. Can I modify the code?
+
+Please do and send a PR along the way, if you think it would be useful for others.
+
+Q. How can I collect traces in PyTorch?
+
+Please refer to this tutorial here.
+
+Q. Can HTA be used at production scale?
+
+Yes, please see a use case study here.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中有什么新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年1月9日</p>
+            <h1>
+                <a class="blog-title">面向大众的 PyTorch 跟踪分析</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Anupam Bhatnagar、Xizhou Feng、Brian Coutinho、Yifan Liu、Sung-Han Lin、Louis Feng 和 Yuzhen Huang 所著</p>
+                    <p>我们很高兴宣布 Holistic Trace Analysis（HTA）的公开发布，这是一个为 PyTorch 用户提供的开源性能分析和可视化 Python 库。HTA 以 <a href="https://github.com/pytorch/kineto">Kineto 跟踪</a>作为输入，这些跟踪由 <a href="https://pytorch.org/blog/introducing-pytorch-profiler-the-new-and-improved-performance-tool/">PyTorch 分析器</a>收集，复杂且难以解释，并提升了这些跟踪中包含的性能信息。它最初在 Meta 内部开发，用于理解和调试在 GPU 上大规模分布式训练作业的性能问题。该多学科团队对 HTA 的功能进行了多项改进，并扩展到支持最先进的机器学习工作负载。</p>
+
+<p>机器学习研究人员和系统工程师常常在计算上难以扩展他们的模型，因为他们对自己的工作负载中的性能瓶颈缺乏了解。对于一项工作请求的资源（例如，GPU、内存）往往由于缺乏“内部”的可见性而与实际所需资源不匹配。为了从硬件堆栈中获得最佳性能，了解分布式训练工作负载的资源利用率和瓶颈至关重要。</p>
+
+<p>初始的 HTA 实现专门针对基于深度学习的推荐模型（DLRM）。为了使 HTA 中的功能通用并适用于分析视觉和 NLP 模型等用例，我们决定重构 HTA 代码库，并将库提供给更广泛的社区。这个新的代码库实现了几个重要的想法，这些想法导致了显著的效率和性能改进。</p>
+
+<p>在本文中，我们介绍了 HTA 开源版本中实现的一些功能，这些功能可以作为 Python 脚本使用，也可以在 Jupyter 笔记本中交互式使用。HTA 提供了以下功能：</p>
+
+<ol>
+  <li><strong>按维度拆分</strong>
+    <ol>
+      <li><strong>时间 </strong>：以计算、通信、内存事件和单个节点以及所有 rank 的空闲时间为单位的 GPU 时间分解。</li>
+      <li><strong>空闲时间 </strong>：将 GPU 空闲时间分解为等待主机、等待另一个内核或归因于未知原因。</li>
+      <li><strong>内核 </strong>：查找每个 rank 上持续时间最长的内核。</li>
+      <li><strong>通信与计算重叠 </strong>：计算通信与计算重叠的时间百分比。</li>
+    </ol>
+  </li>
+  <li><strong>统计分析</strong>
+    <ol>
+      <li><strong>内核持续时间分布 </strong>：不同排名下最长内核的平均耗时分布。</li>
+      <li><strong>CUDA 内核启动 </strong>：非常短、长和过长的启动时间的 GPU 内核分布。</li>
+      <li><strong>增强计数器（内存带宽、队列长度）</strong>：增强的跟踪文件，提供对内存复制带宽和每个 CUDA 流上挂起的操作数量的洞察。</li>
+    </ol>
+  </li>
+  <li><strong>模式</strong>
+    <ol>
+      <li><strong>频繁调用的 CUDA 内核 </strong>：查找由任何给定的 PyTorch 或用户定义的操作符频繁调用的 CUDA 内核。</li>
+    </ol>
+  </li>
+  <li><strong>跟踪比较</strong>
+    <ol>
+      <li><strong>跟踪差异 </strong>：一个跟踪比较工具，用于识别和可视化跟踪之间的差异。</li>
+    </ol>
+  </li>
+</ol>
+
+<p>HTA 源代码可通过 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis">GitHub</a> 供用户获取。用户除了上述功能外，还可以通过代码库中的核心库和数据结构请求新功能或构建自己的分析。</p>
+
+<h2 id="gpu-training-performance-debugging-101">GPU 训练性能调试 101</h2>
+
+<p>要理解分布式训练作业中的 GPU 性能，我们需要考虑模型操作符如何与 GPU 设备交互，以及这种交互如何反映在某些可测量的指标中。</p>
+
+<p>从宏观层面来看，我们可以将模型执行中的 GPU 操作分为三大类，以下称为内核类型：</p>
+<ol>
+  <li><strong>计算（COMP）</strong> - 计算内核执行编译后的矩阵乘法等数值计算程序。它们负责模型执行所需的全部数值计算。</li>
+  <li><strong>通信（COMM）</strong> - 通信内核是负责在分布式训练作业中不同 GPU 设备之间交换和同步数据的程序。NVIDIA 集体通信库（NCCL）是一个广泛使用的通信库，其所有内核前缀均为“nccl”。示例 NCCL 内核包括 NCCL_AllGather、NCCL_ReduceScatter、NCCL_AllReduce 等。</li>
+  <li><strong>内存（MEM）</strong> - 内存内核管理 GPU 设备上的内存分配/释放以及主机内存空间与 GPU 之间的数据移动。内存内核包括 Memcpy_H2D、Memcpy_D2H、Memcpy_D2D、Memset 等。在这里，H 代表主机（Host），D 代表 GPU 设备（Device）。因此，H2D、D2H、D2D 分别代表主机到设备、设备到主机和设备到设备。</li>
+</ol>
+
+<p>因为现代 GPU 设备如 NVIDIA A100 GPU 是一种大规模并行设备，能够同时运行多个内核，因此可以重叠计算、通信和内存内核以减少模型执行时间。实现重叠的一个常见技术是利用多个 CUDA 流。CUDA 流是一系列在 GPU 设备上按主机代码发出的顺序执行的运算。不同的 CUDA 流可以交错执行，甚至可以并发运行，从而实现内核重叠的效果。</p>
+
+<p>为了帮助理解上述概念，图 1 提供了一个在 8 个 GPU 上进行的样本分布式训练作业一个迭代的 GPU 内核的时间线。在下面的图中，每个排名代表一个 GPU，每个 GPU 上的内核在 6 个 CUDA 流上运行。在图的右侧列中，您可以看到使用的 GPU 内核名称。在图的中间，您可以看到计算和通信内核的重叠。此图使用 HTA 中可用的 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis/blob/main/examples/plot_timeline.ipynb">plot_timeline 示例笔记本</a>创建。</p>
+
+<p><img src="/assets/images/trace-image6.png" alt="Figure 1. An example of the execution timeline of GPU Kernels across multiple ranks" width="100%"></p>
+
+<p style="text-align: center;"><em>图 1. 多个排名间 GPU 内核执行时间线的示例</em></p>
+
+<p>多个 GPU 训练作业的性能受多种因素影响。在这些因素中，模型执行如何创建和编排 GPU 内核起着至关重要的作用。HTA 提供了关于模型执行如何与 GPU 设备交互的见解，并突出了性能改进的机会。</p>
+
+<p>通过我们在 HTA 中构建的功能，我们旨在让用户深入了解“分布式 GPU 训练内部发生了什么？”我们将在接下来的几段中简要描述这些功能。</p>
+
+<h2 id="features-in-holistic-trace-analysis">Holistic Trace Analysis 功能</h2>
+
+<p>对于大多数用户来说，理解 GPU 训练作业的性能并不简单。因此，我们构建了这个库来简化跟踪分析的任务，并通过检查模型执行跟踪为用户提供有用的见解。作为第一步，我们开发了重要且足够通用的功能，以便大多数用户都能从这个库中受益。</p>
+
+<p><strong>时间分解 </strong>：我们首先询问 GPU 是否在计算、通信、内存事件上花费时间，还是处于空闲状态？为了回答这个问题，时间分解功能以这些类别为依据进行分解。为了实现高训练效率，代码应最大化计算内核的使用时间，并最小化空闲时间和非计算时间（由通信或内存内核使用的时间）。这是通过实现计算内核与通信或内存内核的并发执行来实现的。<em> 请注意，在计算内核与通信/内存内核的并发执行过程中，通信/内存内核花费的时间计入计算时间。</em></p>
+
+<p><img src="/assets/images/trace-image3.png" alt="Figure 2: Temporal Breakdown across 8 GPUs" width="100%"></p>
+
+<p style="text-align: center;"><em>图 2：8 个 GPU 的时间分解</em></p>
+
+<p><strong>内核分解 </strong>：自然会问哪些内核花费了最多的时间。下一个功能将每个内核类型（COMM、COMP、MEM）内花费的时间分解，并按持续时间排序。我们将此信息以饼图的形式呈现给每个内核类型和每个 rank。请参见下面的图 3。</p>
+
+<p><img src="/assets/images/trace-image1.png" alt="Figure 3: Pie chart of top computation and communication kernels" width="100%"></p>
+
+<p style="text-align: center;"><em>图3：计算和通信内核的饼图</em></p>
+
+<p><strong>内核持续时间分布 </strong>：随后，人们还可以询问——对于任何给定的内核，它在各个 rank 上的时间分配是怎样的？为了回答这个问题，HTA 会为所有 rank 上的给定内核的平均持续时间生成条形图。此外，条形图中的误差线显示了给定内核在给定 rank 上所花费的最短和最长时间。图 4 显示了 rank 0 的平均持续时间与其他 rank 之间的差异。rank 0 上的这种异常行为指导用户查找可能的错误位置。</p>
+
+<p><img src="/assets/images/trace-image4.png" alt="Figure 4: Average duration of NCCL AllReduce Kernel across 8 ranks" width="100%"></p>
+
+<p style="text-align: center;"><em>图 4：NCCL AllReduce 内核在 8 个 rank 上的平均持续时间</em></p>
+
+<p><strong>通信计算重叠 </strong>：在分布式训练中，大量时间被用于多个 GPU 设备之间的通信和同步事件。为了实现高 GPU 效率（即 TFLOPS/GPU），保持 GPU 进行实际计算工作至关重要。换句话说，GPU 不应该因为等待来自其他 GPU 的数据而被阻塞。衡量计算被数据依赖性阻塞程度的一种方法就是计算计算-通信重叠。如果通信事件与计算事件重叠，则观察到更高的 GPU 效率。缺乏通信和计算重叠会导致 GPU 空闲，从而效率会降低。因此，通信计算重叠功能计算每个 rank 在作业中通信和计算重叠的时间百分比，并生成条形图表示。请参见下图。更精确地说，我们测量以下比率</p>
+
+<p style="text-align: center;">（计算过程中花费的时间）/（通信花费的时间）</p>
+
+<p><img src="/assets/images/trace-image5.png" alt="Figure 5: Communication computation overlap" width="100%"></p>
+
+<p style="text-align: center;"><em>图5：通信计算重叠</em></p>
+
+<p><strong>增强计数器（队列长度、内存带宽）</strong>：为了帮助调试，HTA 计算了 D2H、H2D 和 D2D 内存复制（memcpy）和内存设置（memset）事件的内存带宽统计数据。此外，HTA 还计算了每个 CUDA 流上挂起的 CUDA 操作的数量。我们将其称为队列长度。当某个流上的队列长度达到 1024 或更大时，该流上无法再安排新事件，CPU 将等待 GPU 事件处理完毕。此外，HTA 还会生成一个新的跟踪文件，其中包含内存带宽和队列长度的时间序列跟踪。见图 6。</p>
+
+<p><img src="/assets/images/trace-image2.png" alt="Figure 6: Memory Bandwidth and Queue Length" width="100%"></p>
+
+<p style="text-align: center;"><em>图6：内存带宽和队列长度</em></p>
+
+<p>这些主要功能让我们窥视系统性能，并帮助我们回答“系统里发生了什么？”。随着 HTA 的发展，我们希望解决“为什么 X 会发生？”的问题，并提出可能的解决方案来克服瓶颈。</p>
+
+<h2 id="installation-and-usage">安装和用法</h2>
+
+<h3 id="installation">安装</h3>
+
+<p>安装 HTA 请参阅 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis/blob/main/README.md">README</a>。简要来说，用户需要克隆 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis">repo</a> 并使用 pip 安装必要的 Python 包。</p>
+
+<h3 id="usage">使用说明</h3>
+
+<p>本版本的 Holistic Trace Analysis 目前处于测试阶段，我们建议在 Jupyter 笔记本中使用 HTA。为了方便，提供了一个<a href="https://github.com/facebookresearch/HolisticTraceAnalysis/blob/main/examples/trace_analysis_demo.ipynb">演示笔记本 </a>。要开始使用，请在 Jupyter 笔记本中导入 hta 包，创建一个 TraceAnalysis 对象，然后我们就可以用两行代码开始了。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">hta.trace_analysis</span> <span class="kn">import</span> <span class="n">TraceAnalysis</span>
+<span class="n">analyzer</span> <span class="o">=</span> <span class="n">TraceAnalysis</span><span class="p">(</span><span class="n">trace_dir</span> <span class="o">=</span> <span class="err">“</span><span class="o">/</span><span class="n">trace</span><span class="o">/</span><span class="n">folder</span><span class="o">/</span><span class="n">path</span><span class="err">”</span><span class="p">)</span>
+</code></pre></div></div>
+
+<h3 id="requirements">要求</h3>
+
+<ul>
+  <li>所有训练或推理作业的跟踪文件必须存储在唯一的文件夹中。</li>
+  <li>跟踪文件为 json 或 gzip 压缩的 json 格式。</li>
+</ul>
+
+<h2 id="faq">常见问题解答</h2>
+
+<h4 id="q-how-can-i-install-hta">Q. 如何安装 HTA？</h4>
+
+<p>请参阅仓库根目录下的 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis/blob/main/README.md">README</a>。</p>
+
+<h4 id="q-is-there-any-documentation-on-the-features-and-api-in-hta">Q. 有关于 HTA 功能和 API 的文档吗？</h4>
+
+<p>文档和详细 API 信息可在 <a href="https://hta.readthedocs.io/"> 此处 </a> 查找。</p>
+
+<h4 id="q-can-you-implement-feature-x">Q. 你能实现功能 X 吗？</h4>
+
+<p>根据功能的需求广泛程度和实现所需的努力程度，我们会考虑开发该功能。请打开一个 <a href="https://github.com/facebookresearch/HolisticTraceAnalysis/issues">GitHub Issue</a> 并将其标记为 feature-request 标签。</p>
+
+<h4 id="q-can-i-modify-the-code">Q. 我可以修改代码吗？</h4>
+
+<p>请修改，并在过程中如果认为对其他人有用的话，<a href="https://github.com/facebookresearch/HolisticTraceAnalysis/pulls"> 提交一个 PR</a>。</p>
+
+<h4 id="q-how-can-i-collect-traces-in-pytorch">Q. 如何在 PyTorch 中收集跟踪信息？</h4>
+
+<p>请参阅这篇教程<a href="https://maskerprc.github.io/tutorials/intermediate/tensorboard_profiler_tutorial.html#use-profiler-to-record-execution-events">这里 </a>。</p>
+
+<h4 id="q-can-hta-be-used-at-production-scale">Q. HTA 能否在生产规模上使用？</h4>
+
+<p>是的，请参阅<a href="https://pytorch.org/blog/performance-debugging-of-production-pytorch-models-at-meta/">这里</a>的一个用例研究。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

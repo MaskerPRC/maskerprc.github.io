@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Case Study: Amazon Ads Uses PyTorch and AWS Inferentia to Scale Models for Ads Processing | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Amazon Ads uses PyTorch, TorchServe, and AWS Inferentia to reduce inference costs by 71% and drive scale out.
+
+Amazon Ads helps companies build their brand and connect with shoppers through ads shown both within and beyond Amazon’s store, including websites, apps, and streaming TV content in more than 15 countries. Businesses and brands of all sizes, including registered sellers, vendors, book vendors, Kindle Direct Publishing (KDP) authors, app developers, and agencies can upload their own ad creatives, which can include images, video, audio, and, of course, products sold on Amazon.
+
+
+  
+
+
+To promote an accurate, safe, and pleasant shopping experience, these ads must comply with content guidelines. For example, ads cannot flash on and off, products must be featured in an appropriate context, and images and text should be appropriate for a general audience. To help ensure that ads meet the required policies and standards, we needed to develop scalable mechanisms and tools.
+
+As a solution, we used machine learning (ML) models to surface ads that might need revision. As deep neural networks flourished over the past decade, our data science team began exploring more versatile deep learning (DL) methods capable of processing text, images, audio, or video with minimal human intervention. To that end, we’ve used PyTorch to build computer vision (CV) and natural language processing (NLP) models that automatically flag potentially non-compliant ads. PyTorch is intuitive, flexible, and user-friendly, and has made our transition to using DL models seamless. Deploying these new models on AWS Inferentia-based Amazon EC2 Inf1 instances, rather than on GPU-based instances, reduced our inference latency by 30 percent and our inference costs by 71 percent for the same workloads.
+
+Transition to deep learning
+
+Our ML systems paired classical models with word embeddings to evaluate ad text. But our requirements evolved, and as the volume of submissions continued to expand, we needed a method nimble enough to scale along with our business. In addition, our models must be fast and serve ads within milliseconds to provide an optimal customer experience.
+
+Over the last decade, DL has become very popular in numerous domains, including natural language, vision, and audio. Because deep neural networks channel data sets through many layers — extracting progressively higher-level features — they can make more nuanced inferences than classical ML models. Rather than simply detecting prohibited language, for example, a DL model can reject an ad for making false claims.
+
+In addition, DL techniques are transferable– a model trained for one task can be adapted to carry out a related task. For instance, a pre-trained neural network can be optimized to detect objects in images and then fine-tuned to identify specific objects that are not allowed to be displayed in an ad.
+
+Deep neural networks can automate two of classical ML’s most time-consuming steps: feature engineering and data labeling. Unlike traditional supervised learning approaches, which require exploratory data analysis and hand-engineered features, deep neural networks learn the relevant features directly from the data. DL models can also analyze unstructured data, like text and images, without the preprocessing necessary in ML. Deep neural networks scale effectively with more data and perform especially well in applications involving large data sets.
+
+We chose PyTorch to develop our models because it helped us maximize the performance of our systems. With PyTorch, we can serve our customers better while taking advantage of Python’s most intuitive concepts. The programming in PyTorch is object-oriented: it groups processing functions with the data they modify. As a result, our codebase is modular, and we can reuse pieces of code in different applications. In addition, PyTorch’s eager mode allows loops and control structures and, therefore, more complex operations in the model. Eager mode makes it easy to prototype and iterate upon our models, and we can work with various data structures. This flexibility helps us update our models quickly to meet changing business requirements.
+
+“Before this, we experimented with other frameworks that were “Pythonic,” but PyTorch was the clear winner for us here.” said Yashal Kanungo, Applied Scientist. “Using PyTorch was easy because the structure felt native to Python programming, which the data scientists were very familiar with”.
+
+Training pipeline
+
+Today, we build our text models entirely in PyTorch. To save time and money, we often skip the early stages of training by fine-tuning a pre-trained NLP model for language analysis. If we need a new model to evaluate images or video, we start by browsing PyTorch’s torchvision library, which offers pretrained options for image and video classification, object detection, instance segmentation, and pose estimation. For specialized tasks, we build a custom model from the ground up. PyTorch is perfect for this, because eager mode and the user-friendly front end make it easy to experiment with different architectures.
+
+To learn how to finetune neural networks in PyTorch, head to this tutorial.
+
+Before we begin training, we optimize our model’s hyperparameters, the variables that define the network architecture (for example, the number of hidden layers) and training mechanics (such as learning rate and batch size). Choosing appropriate hyperparameter values is essential, because they will shape the training behavior of the model. We rely on the Bayesian search feature in SageMaker, AWS’s ML platform, for this step. Bayesian search treats hyperparameter tuning as a regression problem: It proposes the hyperparameter combinations that are likely to produce the best results and runs training jobs to test those values. After each trial, a regression algorithm determines the next set of hyperparameter values to test, and performance improves incrementally.
+
+We prototype and iterate upon our models using SageMaker Notebooks. Eager mode lets us prototype models quickly by building a new computational graph for each training batch; the sequence of operations can change from iteration to iteration to accommodate different data structures or to jibe with intermediate results. That frees us to adjust the network during training without starting over from scratch. These dynamic graphs are particularly valuable for recursive computations based on variable sequence lengths, such as the words, sentences, and paragraphs in an ad that are analyzed with NLP.
+
+When we’ve finalized the model architecture, we deploy training jobs on SageMaker. PyTorch helps us develop large models faster by running numerous training jobs at the same time. PyTorch’s Distributed Data Parallel (DDP) module replicates a single model across multiple interconnected machines within SageMaker, and all the processes run forward passes simultaneously on their own unique portion of the data set. During the backward pass, the module averages the gradients of all the processes, so each local model is updated with the same parameter values.
+
+Model deployment pipeline
+
+When we deploy the model in production, we want to ensure lower inference costs without impacting prediction accuracy. Several PyTorch features and AWS services have helped us address the challenge.
+
+The flexibility of a dynamic graph enriches training, but in deployment we want to maximize performance and portability. An advantage of developing NLP models in PyTorch is that out of the box, they can be traced into a static sequence of operations by TorchScript, a subset of Python specialized for ML applications. Torchscript converts PyTorch models to a more efficient, production-friendly intermediate representation (IR) graph that is easily compiled. We run a sample input through the model, and TorchScript records the operations executed during the forward pass. The resulting IR graph can run in high-performance environments, including C++ and other multithreaded Python-free contexts, and optimizations such as operator fusion can speed up the runtime.
+
+Neuron SDK and AWS Inferentia powered compute
+
+We deploy our models on Amazon EC2 Inf1 instances powered by AWS Inferentia, Amazon’s first ML silicon designed to accelerate deep learning inference workloads. Inferentia has shown to reduce inference costs by up to 70% compared to Amazon EC2 GPU-based instances.
+We used the AWS Neuron SDK — a set of software tools used with Inferentia — to compile and optimize our models for deployment on EC2 Inf1 instances.
+
+The code snippet below shows how to compile a Hugging Face BERT model with Neuron. Like torch.jit.trace(), neuron.trace() records the model’s operations on an example input during the forward pass to build a static IR graph.
+
+import torch
+from transformers import BertModel, BertTokenizer
+import torch.neuron
+tokenizer = BertTokenizer.from_pretrained(" path="" to="" saved="" vocab")="" model="BertModel.from_pretrained(&quot;path" the="" model",="" returned_dict="False)" inputs="tokenizer" ("sample="" input",="" return_tensor="pt" )="" neuron_model="torch.neuron.trace(model," example_inputs="(inputs['input_ids']," inputs['attention_mask']),="" verbose="1)" output="neuron_model(*(inputs['input_ids']," inputs['attention_mask']))="" autocasting="" and="" recalibration="" under="" hood,="" neuron="" optimizes="" our="" models="" for="" performance="" by="" them="" a="" smaller="" data="" type.="" as="" default,="" most="" applications="" represent="" neural="" network="" values="" in="" 32-bit="" single-precision="" floating="" point="" (fp32)="" number="" format.="" 16-bit="" format="" —="" half-precision="" (fp16)="" or="" brain="" (bf16)="" reduces="" model’s="" memory="" footprint="" execution="" time.="" case,="" we="" decided="" use="" fp16="" optimize="" while="" maintaining="" high="" accuracy.="" type="" can,="" some="" cases,="" trigger="" slight="" differences="" predictions.="" ensure="" that="" accuracy="" is="" not="" affected,="" compares="" metrics="" predictions="" of="" fp32="" models.="" when="" diminishes="" accuracy,="" can="" tell="" compiler="" convert="" only="" weights="" certain="" fp16,="" keeping="" rest="" intermediate="" results="" fp32.="" addition,="" often="" run="" few="" iterations="" with="" training="" recalibrate="" autocasted="" this="" process="" much="" less="" intensive="" than="" original="" training.="" deployment="" analyze="" multimedia="" ads,="" an="" ensemble="" dl="" all="" ads="" uploaded="" amazon="" are="" through="" specialized="" assess="" every="" they="" include:="" images,="" video="" audio,="" headlines,="" texts,="" backgrounds,="" even="" syntax,="" grammar,="" potentially="" inappropriate="" language.="" signals="" receive="" from="" these="" indicate="" whether="" advertisement="" complies="" criteria.="" deploying="" monitoring="" multiple="" significantly="" complex,="" so="" depend="" on="" torchserve,="" sagemaker’s="" default="" pytorch="" serving="" library.="" jointly="" developed="" facebook’s="" team="" aws="" streamline="" transition="" prototyping="" production,="" torchserve="" helps="" us="" deploy="" trained="" at="" scale="" without="" having="" write="" custom="" code.="" it="" provides="" secure="" set="" apis="" inference,="" management,="" metrics,="" explanations.="" features="" such="" multi-model="" serving,="" versioning,="" support,="" automatic="" batching,="" ideal="" supporting="" immense="" workload.="" you="" read="" more="" about="" your="" sagemaker="" native="" integration="" blog="" post.="" take="" advantage="" pytorch’s="" object-oriented="" programming="" paradigm="" wrap="" into="" one="" parent="" object="" nn.module="" serve="" single="" ensemble.="" other="" individual="" separate="" endpoints,="" running="" inf1="" instances.="" handlers="" particularly="" appreciate="" allows="" embed="" initialization,="" preprocessing,="" inferencing,="" post="" processing="" code="" python="" script,="" handler.py,="" which="" lives="" server.="" script="" handler="" —preprocesses="" un-labeled="" ad,="" runs="" models,="" delivers="" resulting="" inferences="" downstream="" systems.="" several="" load="" architecture="" prepare="" particular="" device.="" bundle="" additional="" required="" artifacts,="" vocabulary="" files="" label="" maps,="" archive="" file.="" need="" have="" complex="" initialization="" processes="" originated="" third-party="" libraries,="" design="" torchserve.="" let="" any="" model,="" library,="" process.="" following="" snippet="" shows="" simple="" hugging="" face="" bert="" hosting="" endpoint="" instance.="" import="" torch="" torch.neuron="" ts.torch_handler.base_handler="" basehandler="" transformers="" automodelforsequenceclassification,autotokenizer="" class="" mymodelhandler(basehandler):="" def="" initialize(self,="" context):="" self.manifest="ctx.manifest" properties="ctx.system_properties" model_dir="properties.get(&quot;model_dir&quot;)" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.tokenizer="AutoTokenizer.from_pretrained(" model_dir,="" do_lower_case="True" self.model="AutoModelForSequenceClassification.from_pretrained(" preprocess(self,="" data):="" input_text="data.get(&quot;data&quot;)" if="" none:="" max_length="int(max_length)," pad_to_max_length="True," add_special_tokens="True," return_tensors="pt" return="" inference(self,inputs):="" postprocess(self,="" output):="" batching="" hardware="" accelerators="" optimized="" parallelism,="" feeding="" step="" saturate="" available="" capacity,="" typically="" higher="" throughputs.="" excessively="" batch="" sizes,="" however,="" increase="" latency="" minimal="" improvement="" experimenting="" different="" sizes="" identify="" sweet="" spot="" accelerator.="" experiments="" determine="" best="" size="" size,="" payload="" request="" traffic="" patterns.="" now="" supports="" variable="" sizes.="" previously,="" tracing="" hardcoded="" predefined="" had="" pad="" data,="" waste="" compute,="" slow="" throughputs,="" exacerbate="" latency.="" inferentia="" maximize="" throughput="" small="" batches,="" reducing="" easing="" system.="" parallelism="" multi-cores="" also="" improves="" latency,="" crucial="" heavy="" workloads.="" each="" chip="" contains="" four="" neuroncores="" either="" simultaneously="" form="" pipeline="" stream="" model.="" parallel="" configuration="" offers="" highest="" lowest="" cost,="" because="" scales="" out="" concurrent="" requests.="" parallel:="" critical="" monitor="" production.="" initially="" make="" good="" eventually="" degrade="" exposed="" wider="" variety="" data.="" phenomenon,="" called="" drift,="" usually="" occurs="" input="" distributions="" prediction="" targets="" change.="" track="" parity="" between="" production="" notifies="" begin="" deviate="" validation="" results.="" thanks="" early="" warning,="" restore="" retraining="" necessary="" before="" advertisers="" affected.="" real="" time,="" sends="" quality="" predictions,="" f-scores,="" distribution="" predicted="" classes.="" application="" needs="" scale,="" logs="" resource="" utilization="" cpu,="" memory,="" disk="" regular="" intervals;="" records="" requests="" received="" versus="" served.="" api.="" rewarding="" result="" deployed="" inferentia,="" sped="" up="" analysis="" cutting="" costs.="" starting="" first="" explorations="" dl,="" felt="" natural.="" its="" user-friendly="" helped="" smooth="" course="" multimodal="" ensembles.="" lets="" prototype="" build="" quickly,="" vital="" advertising="" service="" evolves="" expands.="" added="" benefit,="" works="" seamlessly="" ml="" stack.="" look="" forward="" building="" cases="" pytorch,="" continue="" clients="" accurate,="" real-time="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/">
+  <meta name="twitter:image" content="http://localhost:4000/">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Case Study: Amazon Ads Uses PyTorch and AWS Inferentia to Scale Models for Ads Processing">
+<meta property="og:description" content="Amazon Ads uses PyTorch, TorchServe, and AWS Inferentia to reduce inference costs by 71% and drive scale out.
+
+Amazon Ads helps companies build their brand and connect with shoppers through ads shown both within and beyond Amazon’s store, including websites, apps, and streaming TV content in more than 15 countries. Businesses and brands of all sizes, including registered sellers, vendors, book vendors, Kindle Direct Publishing (KDP) authors, app developers, and agencies can upload their own ad creatives, which can include images, video, audio, and, of course, products sold on Amazon.
+
+
+  
+
+
+To promote an accurate, safe, and pleasant shopping experience, these ads must comply with content guidelines. For example, ads cannot flash on and off, products must be featured in an appropriate context, and images and text should be appropriate for a general audience. To help ensure that ads meet the required policies and standards, we needed to develop scalable mechanisms and tools.
+
+As a solution, we used machine learning (ML) models to surface ads that might need revision. As deep neural networks flourished over the past decade, our data science team began exploring more versatile deep learning (DL) methods capable of processing text, images, audio, or video with minimal human intervention. To that end, we’ve used PyTorch to build computer vision (CV) and natural language processing (NLP) models that automatically flag potentially non-compliant ads. PyTorch is intuitive, flexible, and user-friendly, and has made our transition to using DL models seamless. Deploying these new models on AWS Inferentia-based Amazon EC2 Inf1 instances, rather than on GPU-based instances, reduced our inference latency by 30 percent and our inference costs by 71 percent for the same workloads.
+
+Transition to deep learning
+
+Our ML systems paired classical models with word embeddings to evaluate ad text. But our requirements evolved, and as the volume of submissions continued to expand, we needed a method nimble enough to scale along with our business. In addition, our models must be fast and serve ads within milliseconds to provide an optimal customer experience.
+
+Over the last decade, DL has become very popular in numerous domains, including natural language, vision, and audio. Because deep neural networks channel data sets through many layers — extracting progressively higher-level features — they can make more nuanced inferences than classical ML models. Rather than simply detecting prohibited language, for example, a DL model can reject an ad for making false claims.
+
+In addition, DL techniques are transferable– a model trained for one task can be adapted to carry out a related task. For instance, a pre-trained neural network can be optimized to detect objects in images and then fine-tuned to identify specific objects that are not allowed to be displayed in an ad.
+
+Deep neural networks can automate two of classical ML’s most time-consuming steps: feature engineering and data labeling. Unlike traditional supervised learning approaches, which require exploratory data analysis and hand-engineered features, deep neural networks learn the relevant features directly from the data. DL models can also analyze unstructured data, like text and images, without the preprocessing necessary in ML. Deep neural networks scale effectively with more data and perform especially well in applications involving large data sets.
+
+We chose PyTorch to develop our models because it helped us maximize the performance of our systems. With PyTorch, we can serve our customers better while taking advantage of Python’s most intuitive concepts. The programming in PyTorch is object-oriented: it groups processing functions with the data they modify. As a result, our codebase is modular, and we can reuse pieces of code in different applications. In addition, PyTorch’s eager mode allows loops and control structures and, therefore, more complex operations in the model. Eager mode makes it easy to prototype and iterate upon our models, and we can work with various data structures. This flexibility helps us update our models quickly to meet changing business requirements.
+
+“Before this, we experimented with other frameworks that were “Pythonic,” but PyTorch was the clear winner for us here.” said Yashal Kanungo, Applied Scientist. “Using PyTorch was easy because the structure felt native to Python programming, which the data scientists were very familiar with”.
+
+Training pipeline
+
+Today, we build our text models entirely in PyTorch. To save time and money, we often skip the early stages of training by fine-tuning a pre-trained NLP model for language analysis. If we need a new model to evaluate images or video, we start by browsing PyTorch’s torchvision library, which offers pretrained options for image and video classification, object detection, instance segmentation, and pose estimation. For specialized tasks, we build a custom model from the ground up. PyTorch is perfect for this, because eager mode and the user-friendly front end make it easy to experiment with different architectures.
+
+To learn how to finetune neural networks in PyTorch, head to this tutorial.
+
+Before we begin training, we optimize our model’s hyperparameters, the variables that define the network architecture (for example, the number of hidden layers) and training mechanics (such as learning rate and batch size). Choosing appropriate hyperparameter values is essential, because they will shape the training behavior of the model. We rely on the Bayesian search feature in SageMaker, AWS’s ML platform, for this step. Bayesian search treats hyperparameter tuning as a regression problem: It proposes the hyperparameter combinations that are likely to produce the best results and runs training jobs to test those values. After each trial, a regression algorithm determines the next set of hyperparameter values to test, and performance improves incrementally.
+
+We prototype and iterate upon our models using SageMaker Notebooks. Eager mode lets us prototype models quickly by building a new computational graph for each training batch; the sequence of operations can change from iteration to iteration to accommodate different data structures or to jibe with intermediate results. That frees us to adjust the network during training without starting over from scratch. These dynamic graphs are particularly valuable for recursive computations based on variable sequence lengths, such as the words, sentences, and paragraphs in an ad that are analyzed with NLP.
+
+When we’ve finalized the model architecture, we deploy training jobs on SageMaker. PyTorch helps us develop large models faster by running numerous training jobs at the same time. PyTorch’s Distributed Data Parallel (DDP) module replicates a single model across multiple interconnected machines within SageMaker, and all the processes run forward passes simultaneously on their own unique portion of the data set. During the backward pass, the module averages the gradients of all the processes, so each local model is updated with the same parameter values.
+
+Model deployment pipeline
+
+When we deploy the model in production, we want to ensure lower inference costs without impacting prediction accuracy. Several PyTorch features and AWS services have helped us address the challenge.
+
+The flexibility of a dynamic graph enriches training, but in deployment we want to maximize performance and portability. An advantage of developing NLP models in PyTorch is that out of the box, they can be traced into a static sequence of operations by TorchScript, a subset of Python specialized for ML applications. Torchscript converts PyTorch models to a more efficient, production-friendly intermediate representation (IR) graph that is easily compiled. We run a sample input through the model, and TorchScript records the operations executed during the forward pass. The resulting IR graph can run in high-performance environments, including C++ and other multithreaded Python-free contexts, and optimizations such as operator fusion can speed up the runtime.
+
+Neuron SDK and AWS Inferentia powered compute
+
+We deploy our models on Amazon EC2 Inf1 instances powered by AWS Inferentia, Amazon’s first ML silicon designed to accelerate deep learning inference workloads. Inferentia has shown to reduce inference costs by up to 70% compared to Amazon EC2 GPU-based instances.
+We used the AWS Neuron SDK — a set of software tools used with Inferentia — to compile and optimize our models for deployment on EC2 Inf1 instances.
+
+The code snippet below shows how to compile a Hugging Face BERT model with Neuron. Like torch.jit.trace(), neuron.trace() records the model’s operations on an example input during the forward pass to build a static IR graph.
+
+import torch
+from transformers import BertModel, BertTokenizer
+import torch.neuron
+tokenizer = BertTokenizer.from_pretrained(" path="" to="" saved="" vocab")="" model="BertModel.from_pretrained(&quot;path" the="" model",="" returned_dict="False)" inputs="tokenizer" ("sample="" input",="" return_tensor="pt" )="" neuron_model="torch.neuron.trace(model," example_inputs="(inputs['input_ids']," inputs['attention_mask']),="" verbose="1)" output="neuron_model(*(inputs['input_ids']," inputs['attention_mask']))="" autocasting="" and="" recalibration="" under="" hood,="" neuron="" optimizes="" our="" models="" for="" performance="" by="" them="" a="" smaller="" data="" type.="" as="" default,="" most="" applications="" represent="" neural="" network="" values="" in="" 32-bit="" single-precision="" floating="" point="" (fp32)="" number="" format.="" 16-bit="" format="" —="" half-precision="" (fp16)="" or="" brain="" (bf16)="" reduces="" model’s="" memory="" footprint="" execution="" time.="" case,="" we="" decided="" use="" fp16="" optimize="" while="" maintaining="" high="" accuracy.="" type="" can,="" some="" cases,="" trigger="" slight="" differences="" predictions.="" ensure="" that="" accuracy="" is="" not="" affected,="" compares="" metrics="" predictions="" of="" fp32="" models.="" when="" diminishes="" accuracy,="" can="" tell="" compiler="" convert="" only="" weights="" certain="" fp16,="" keeping="" rest="" intermediate="" results="" fp32.="" addition,="" often="" run="" few="" iterations="" with="" training="" recalibrate="" autocasted="" this="" process="" much="" less="" intensive="" than="" original="" training.="" deployment="" analyze="" multimedia="" ads,="" an="" ensemble="" dl="" all="" ads="" uploaded="" amazon="" are="" through="" specialized="" assess="" every="" they="" include:="" images,="" video="" audio,="" headlines,="" texts,="" backgrounds,="" even="" syntax,="" grammar,="" potentially="" inappropriate="" language.="" signals="" receive="" from="" these="" indicate="" whether="" advertisement="" complies="" criteria.="" deploying="" monitoring="" multiple="" significantly="" complex,="" so="" depend="" on="" torchserve,="" sagemaker’s="" default="" pytorch="" serving="" library.="" jointly="" developed="" facebook’s="" team="" aws="" streamline="" transition="" prototyping="" production,="" torchserve="" helps="" us="" deploy="" trained="" at="" scale="" without="" having="" write="" custom="" code.="" it="" provides="" secure="" set="" apis="" inference,="" management,="" metrics,="" explanations.="" features="" such="" multi-model="" serving,="" versioning,="" support,="" automatic="" batching,="" ideal="" supporting="" immense="" workload.="" you="" read="" more="" about="" your="" sagemaker="" native="" integration="" blog="" post.="" take="" advantage="" pytorch’s="" object-oriented="" programming="" paradigm="" wrap="" into="" one="" parent="" object="" nn.module="" serve="" single="" ensemble.="" other="" individual="" separate="" endpoints,="" running="" inf1="" instances.="" handlers="" particularly="" appreciate="" allows="" embed="" initialization,="" preprocessing,="" inferencing,="" post="" processing="" code="" python="" script,="" handler.py,="" which="" lives="" server.="" script="" handler="" —preprocesses="" un-labeled="" ad,="" runs="" models,="" delivers="" resulting="" inferences="" downstream="" systems.="" several="" load="" architecture="" prepare="" particular="" device.="" bundle="" additional="" required="" artifacts,="" vocabulary="" files="" label="" maps,="" archive="" file.="" need="" have="" complex="" initialization="" processes="" originated="" third-party="" libraries,="" design="" torchserve.="" let="" any="" model,="" library,="" process.="" following="" snippet="" shows="" simple="" hugging="" face="" bert="" hosting="" endpoint="" instance.="" import="" torch="" torch.neuron="" ts.torch_handler.base_handler="" basehandler="" transformers="" automodelforsequenceclassification,autotokenizer="" class="" mymodelhandler(basehandler):="" def="" initialize(self,="" context):="" self.manifest="ctx.manifest" properties="ctx.system_properties" model_dir="properties.get(&quot;model_dir&quot;)" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.tokenizer="AutoTokenizer.from_pretrained(" model_dir,="" do_lower_case="True" self.model="AutoModelForSequenceClassification.from_pretrained(" preprocess(self,="" data):="" input_text="data.get(&quot;data&quot;)" if="" none:="" max_length="int(max_length)," pad_to_max_length="True," add_special_tokens="True," return_tensors="pt" return="" inference(self,inputs):="" postprocess(self,="" output):="" batching="" hardware="" accelerators="" optimized="" parallelism,="" feeding="" step="" saturate="" available="" capacity,="" typically="" higher="" throughputs.="" excessively="" batch="" sizes,="" however,="" increase="" latency="" minimal="" improvement="" experimenting="" different="" sizes="" identify="" sweet="" spot="" accelerator.="" experiments="" determine="" best="" size="" size,="" payload="" request="" traffic="" patterns.="" now="" supports="" variable="" sizes.="" previously,="" tracing="" hardcoded="" predefined="" had="" pad="" data,="" waste="" compute,="" slow="" throughputs,="" exacerbate="" latency.="" inferentia="" maximize="" throughput="" small="" batches,="" reducing="" easing="" system.="" parallelism="" multi-cores="" also="" improves="" latency,="" crucial="" heavy="" workloads.="" each="" chip="" contains="" four="" neuroncores="" either="" simultaneously="" form="" pipeline="" stream="" model.="" parallel="" configuration="" offers="" highest="" lowest="" cost,="" because="" scales="" out="" concurrent="" requests.="" parallel:="" critical="" monitor="" production.="" initially="" make="" good="" eventually="" degrade="" exposed="" wider="" variety="" data.="" phenomenon,="" called="" drift,="" usually="" occurs="" input="" distributions="" prediction="" targets="" change.="" track="" parity="" between="" production="" notifies="" begin="" deviate="" validation="" results.="" thanks="" early="" warning,="" restore="" retraining="" necessary="" before="" advertisers="" affected.="" real="" time,="" sends="" quality="" predictions,="" f-scores,="" distribution="" predicted="" classes.="" application="" needs="" scale,="" logs="" resource="" utilization="" cpu,="" memory,="" disk="" regular="" intervals;="" records="" requests="" received="" versus="" served.="" api.="" rewarding="" result="" deployed="" inferentia,="" sped="" up="" analysis="" cutting="" costs.="" starting="" first="" explorations="" dl,="" felt="" natural.="" its="" user-friendly="" helped="" smooth="" course="" multimodal="" ensembles.="" lets="" prototype="" build="" quickly,="" vital="" advertising="" service="" evolves="" expands.="" added="" benefit,="" works="" seamlessly="" ml="" stack.="" look="" forward="" building="" cases="" pytorch,="" continue="" clients="" accurate,="" real-time="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Case Study: Amazon Ads Uses PyTorch and AWS Inferentia to Scale Models for Ads Processing">
+<meta name="twitter:description" content="Amazon Ads uses PyTorch, TorchServe, and AWS Inferentia to reduce inference costs by 71% and drive scale out.
+
+Amazon Ads helps companies build their brand and connect with shoppers through ads shown both within and beyond Amazon’s store, including websites, apps, and streaming TV content in more than 15 countries. Businesses and brands of all sizes, including registered sellers, vendors, book vendors, Kindle Direct Publishing (KDP) authors, app developers, and agencies can upload their own ad creatives, which can include images, video, audio, and, of course, products sold on Amazon.
+
+
+  
+
+
+To promote an accurate, safe, and pleasant shopping experience, these ads must comply with content guidelines. For example, ads cannot flash on and off, products must be featured in an appropriate context, and images and text should be appropriate for a general audience. To help ensure that ads meet the required policies and standards, we needed to develop scalable mechanisms and tools.
+
+As a solution, we used machine learning (ML) models to surface ads that might need revision. As deep neural networks flourished over the past decade, our data science team began exploring more versatile deep learning (DL) methods capable of processing text, images, audio, or video with minimal human intervention. To that end, we’ve used PyTorch to build computer vision (CV) and natural language processing (NLP) models that automatically flag potentially non-compliant ads. PyTorch is intuitive, flexible, and user-friendly, and has made our transition to using DL models seamless. Deploying these new models on AWS Inferentia-based Amazon EC2 Inf1 instances, rather than on GPU-based instances, reduced our inference latency by 30 percent and our inference costs by 71 percent for the same workloads.
+
+Transition to deep learning
+
+Our ML systems paired classical models with word embeddings to evaluate ad text. But our requirements evolved, and as the volume of submissions continued to expand, we needed a method nimble enough to scale along with our business. In addition, our models must be fast and serve ads within milliseconds to provide an optimal customer experience.
+
+Over the last decade, DL has become very popular in numerous domains, including natural language, vision, and audio. Because deep neural networks channel data sets through many layers — extracting progressively higher-level features — they can make more nuanced inferences than classical ML models. Rather than simply detecting prohibited language, for example, a DL model can reject an ad for making false claims.
+
+In addition, DL techniques are transferable– a model trained for one task can be adapted to carry out a related task. For instance, a pre-trained neural network can be optimized to detect objects in images and then fine-tuned to identify specific objects that are not allowed to be displayed in an ad.
+
+Deep neural networks can automate two of classical ML’s most time-consuming steps: feature engineering and data labeling. Unlike traditional supervised learning approaches, which require exploratory data analysis and hand-engineered features, deep neural networks learn the relevant features directly from the data. DL models can also analyze unstructured data, like text and images, without the preprocessing necessary in ML. Deep neural networks scale effectively with more data and perform especially well in applications involving large data sets.
+
+We chose PyTorch to develop our models because it helped us maximize the performance of our systems. With PyTorch, we can serve our customers better while taking advantage of Python’s most intuitive concepts. The programming in PyTorch is object-oriented: it groups processing functions with the data they modify. As a result, our codebase is modular, and we can reuse pieces of code in different applications. In addition, PyTorch’s eager mode allows loops and control structures and, therefore, more complex operations in the model. Eager mode makes it easy to prototype and iterate upon our models, and we can work with various data structures. This flexibility helps us update our models quickly to meet changing business requirements.
+
+“Before this, we experimented with other frameworks that were “Pythonic,” but PyTorch was the clear winner for us here.” said Yashal Kanungo, Applied Scientist. “Using PyTorch was easy because the structure felt native to Python programming, which the data scientists were very familiar with”.
+
+Training pipeline
+
+Today, we build our text models entirely in PyTorch. To save time and money, we often skip the early stages of training by fine-tuning a pre-trained NLP model for language analysis. If we need a new model to evaluate images or video, we start by browsing PyTorch’s torchvision library, which offers pretrained options for image and video classification, object detection, instance segmentation, and pose estimation. For specialized tasks, we build a custom model from the ground up. PyTorch is perfect for this, because eager mode and the user-friendly front end make it easy to experiment with different architectures.
+
+To learn how to finetune neural networks in PyTorch, head to this tutorial.
+
+Before we begin training, we optimize our model’s hyperparameters, the variables that define the network architecture (for example, the number of hidden layers) and training mechanics (such as learning rate and batch size). Choosing appropriate hyperparameter values is essential, because they will shape the training behavior of the model. We rely on the Bayesian search feature in SageMaker, AWS’s ML platform, for this step. Bayesian search treats hyperparameter tuning as a regression problem: It proposes the hyperparameter combinations that are likely to produce the best results and runs training jobs to test those values. After each trial, a regression algorithm determines the next set of hyperparameter values to test, and performance improves incrementally.
+
+We prototype and iterate upon our models using SageMaker Notebooks. Eager mode lets us prototype models quickly by building a new computational graph for each training batch; the sequence of operations can change from iteration to iteration to accommodate different data structures or to jibe with intermediate results. That frees us to adjust the network during training without starting over from scratch. These dynamic graphs are particularly valuable for recursive computations based on variable sequence lengths, such as the words, sentences, and paragraphs in an ad that are analyzed with NLP.
+
+When we’ve finalized the model architecture, we deploy training jobs on SageMaker. PyTorch helps us develop large models faster by running numerous training jobs at the same time. PyTorch’s Distributed Data Parallel (DDP) module replicates a single model across multiple interconnected machines within SageMaker, and all the processes run forward passes simultaneously on their own unique portion of the data set. During the backward pass, the module averages the gradients of all the processes, so each local model is updated with the same parameter values.
+
+Model deployment pipeline
+
+When we deploy the model in production, we want to ensure lower inference costs without impacting prediction accuracy. Several PyTorch features and AWS services have helped us address the challenge.
+
+The flexibility of a dynamic graph enriches training, but in deployment we want to maximize performance and portability. An advantage of developing NLP models in PyTorch is that out of the box, they can be traced into a static sequence of operations by TorchScript, a subset of Python specialized for ML applications. Torchscript converts PyTorch models to a more efficient, production-friendly intermediate representation (IR) graph that is easily compiled. We run a sample input through the model, and TorchScript records the operations executed during the forward pass. The resulting IR graph can run in high-performance environments, including C++ and other multithreaded Python-free contexts, and optimizations such as operator fusion can speed up the runtime.
+
+Neuron SDK and AWS Inferentia powered compute
+
+We deploy our models on Amazon EC2 Inf1 instances powered by AWS Inferentia, Amazon’s first ML silicon designed to accelerate deep learning inference workloads. Inferentia has shown to reduce inference costs by up to 70% compared to Amazon EC2 GPU-based instances.
+We used the AWS Neuron SDK — a set of software tools used with Inferentia — to compile and optimize our models for deployment on EC2 Inf1 instances.
+
+The code snippet below shows how to compile a Hugging Face BERT model with Neuron. Like torch.jit.trace(), neuron.trace() records the model’s operations on an example input during the forward pass to build a static IR graph.
+
+import torch
+from transformers import BertModel, BertTokenizer
+import torch.neuron
+tokenizer = BertTokenizer.from_pretrained(" path="" to="" saved="" vocab")="" model="BertModel.from_pretrained(&quot;path" the="" model",="" returned_dict="False)" inputs="tokenizer" ("sample="" input",="" return_tensor="pt" )="" neuron_model="torch.neuron.trace(model," example_inputs="(inputs['input_ids']," inputs['attention_mask']),="" verbose="1)" output="neuron_model(*(inputs['input_ids']," inputs['attention_mask']))="" autocasting="" and="" recalibration="" under="" hood,="" neuron="" optimizes="" our="" models="" for="" performance="" by="" them="" a="" smaller="" data="" type.="" as="" default,="" most="" applications="" represent="" neural="" network="" values="" in="" 32-bit="" single-precision="" floating="" point="" (fp32)="" number="" format.="" 16-bit="" format="" —="" half-precision="" (fp16)="" or="" brain="" (bf16)="" reduces="" model’s="" memory="" footprint="" execution="" time.="" case,="" we="" decided="" use="" fp16="" optimize="" while="" maintaining="" high="" accuracy.="" type="" can,="" some="" cases,="" trigger="" slight="" differences="" predictions.="" ensure="" that="" accuracy="" is="" not="" affected,="" compares="" metrics="" predictions="" of="" fp32="" models.="" when="" diminishes="" accuracy,="" can="" tell="" compiler="" convert="" only="" weights="" certain="" fp16,="" keeping="" rest="" intermediate="" results="" fp32.="" addition,="" often="" run="" few="" iterations="" with="" training="" recalibrate="" autocasted="" this="" process="" much="" less="" intensive="" than="" original="" training.="" deployment="" analyze="" multimedia="" ads,="" an="" ensemble="" dl="" all="" ads="" uploaded="" amazon="" are="" through="" specialized="" assess="" every="" they="" include:="" images,="" video="" audio,="" headlines,="" texts,="" backgrounds,="" even="" syntax,="" grammar,="" potentially="" inappropriate="" language.="" signals="" receive="" from="" these="" indicate="" whether="" advertisement="" complies="" criteria.="" deploying="" monitoring="" multiple="" significantly="" complex,="" so="" depend="" on="" torchserve,="" sagemaker’s="" default="" pytorch="" serving="" library.="" jointly="" developed="" facebook’s="" team="" aws="" streamline="" transition="" prototyping="" production,="" torchserve="" helps="" us="" deploy="" trained="" at="" scale="" without="" having="" write="" custom="" code.="" it="" provides="" secure="" set="" apis="" inference,="" management,="" metrics,="" explanations.="" features="" such="" multi-model="" serving,="" versioning,="" support,="" automatic="" batching,="" ideal="" supporting="" immense="" workload.="" you="" read="" more="" about="" your="" sagemaker="" native="" integration="" blog="" post.="" take="" advantage="" pytorch’s="" object-oriented="" programming="" paradigm="" wrap="" into="" one="" parent="" object="" nn.module="" serve="" single="" ensemble.="" other="" individual="" separate="" endpoints,="" running="" inf1="" instances.="" handlers="" particularly="" appreciate="" allows="" embed="" initialization,="" preprocessing,="" inferencing,="" post="" processing="" code="" python="" script,="" handler.py,="" which="" lives="" server.="" script="" handler="" —preprocesses="" un-labeled="" ad,="" runs="" models,="" delivers="" resulting="" inferences="" downstream="" systems.="" several="" load="" architecture="" prepare="" particular="" device.="" bundle="" additional="" required="" artifacts,="" vocabulary="" files="" label="" maps,="" archive="" file.="" need="" have="" complex="" initialization="" processes="" originated="" third-party="" libraries,="" design="" torchserve.="" let="" any="" model,="" library,="" process.="" following="" snippet="" shows="" simple="" hugging="" face="" bert="" hosting="" endpoint="" instance.="" import="" torch="" torch.neuron="" ts.torch_handler.base_handler="" basehandler="" transformers="" automodelforsequenceclassification,autotokenizer="" class="" mymodelhandler(basehandler):="" def="" initialize(self,="" context):="" self.manifest="ctx.manifest" properties="ctx.system_properties" model_dir="properties.get(&quot;model_dir&quot;)" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.tokenizer="AutoTokenizer.from_pretrained(" model_dir,="" do_lower_case="True" self.model="AutoModelForSequenceClassification.from_pretrained(" preprocess(self,="" data):="" input_text="data.get(&quot;data&quot;)" if="" none:="" max_length="int(max_length)," pad_to_max_length="True," add_special_tokens="True," return_tensors="pt" return="" inference(self,inputs):="" postprocess(self,="" output):="" batching="" hardware="" accelerators="" optimized="" parallelism,="" feeding="" step="" saturate="" available="" capacity,="" typically="" higher="" throughputs.="" excessively="" batch="" sizes,="" however,="" increase="" latency="" minimal="" improvement="" experimenting="" different="" sizes="" identify="" sweet="" spot="" accelerator.="" experiments="" determine="" best="" size="" size,="" payload="" request="" traffic="" patterns.="" now="" supports="" variable="" sizes.="" previously,="" tracing="" hardcoded="" predefined="" had="" pad="" data,="" waste="" compute,="" slow="" throughputs,="" exacerbate="" latency.="" inferentia="" maximize="" throughput="" small="" batches,="" reducing="" easing="" system.="" parallelism="" multi-cores="" also="" improves="" latency,="" crucial="" heavy="" workloads.="" each="" chip="" contains="" four="" neuroncores="" either="" simultaneously="" form="" pipeline="" stream="" model.="" parallel="" configuration="" offers="" highest="" lowest="" cost,="" because="" scales="" out="" concurrent="" requests.="" parallel:="" critical="" monitor="" production.="" initially="" make="" good="" eventually="" degrade="" exposed="" wider="" variety="" data.="" phenomenon,="" called="" drift,="" usually="" occurs="" input="" distributions="" prediction="" targets="" change.="" track="" parity="" between="" production="" notifies="" begin="" deviate="" validation="" results.="" thanks="" early="" warning,="" restore="" retraining="" necessary="" before="" advertisers="" affected.="" real="" time,="" sends="" quality="" predictions,="" f-scores,="" distribution="" predicted="" classes.="" application="" needs="" scale,="" logs="" resource="" utilization="" cpu,="" memory,="" disk="" regular="" intervals;="" records="" requests="" received="" versus="" served.="" api.="" rewarding="" result="" deployed="" inferentia,="" sped="" up="" analysis="" cutting="" costs.="" starting="" first="" explorations="" dl,="" felt="" natural.="" its="" user-friendly="" helped="" smooth="" course="" multimodal="" ensembles.="" lets="" prototype="" build="" quickly,="" vital="" advertising="" service="" evolves="" expands.="" added="" benefit,="" works="" seamlessly="" ml="" stack.="" look="" forward="" building="" cases="" pytorch,="" continue="" clients="" accurate,="" real-time="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年2月24日</p>
+            <h1>
+                <a class="blog-title">案例研究：亚马逊广告利用 PyTorch 和 AWS Inferentia 扩展模型以处理广告</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由雅沙尔·卡努戈 - 应用科学家，卡姆兰·汗 - 高级技术产品经理，舒巴·昆巴达科内 - 高级专家，机器学习框架</p>
+                    <p>亚马逊广告使用 PyTorch、TorchServe 和 AWS Inferentia，将推理成本降低 71%，并推动扩展。</p>
+
+<p>亚马逊广告帮助公司通过在亚马逊商店内外展示的广告建立品牌并连接消费者，包括在 15 多个国家的网站、应用程序和流媒体电视内容。所有规模的企业和品牌，包括注册卖家、供应商、书籍供应商、Kindle Direct Publishing (KDP) 作者、应用程序开发人员和代理机构都可以上传自己的广告创意，这些创意可以包括图片、视频、音频，当然还有在亚马逊上销售的产品。</p>
+
+<p align="center">
+  <img src="/assets/images/amazon-ads-case-study/amazon-advertising.png" width="60%">
+</p>
+
+<p>为了推广准确、安全和愉快的购物体验，这些广告必须遵守内容指南。例如，广告不能闪烁，产品必须在适当的环境中展示，图像和文本应适合一般观众。为了确保广告符合所需的政策和标准，我们需要开发可扩展的机制和工具。</p>
+
+<p>作为解决方案，我们使用了机器学习（ML）模型来展示可能需要修订的广告。随着深度神经网络在过去十年中的蓬勃发展，我们的数据科学团队开始探索更多样化的深度学习（DL）方法，这些方法能够以最小的人为干预处理文本、图像、音频或视频。为此，我们使用了 PyTorch 构建计算机视觉（CV）和自然语言处理（NLP）模型，这些模型可以自动标记可能不符合规定的广告。PyTorch 直观、灵活、用户友好，使我们的深度学习模型使用过渡变得无缝。将这些新模型部署在基于 AWS Inferentia 的 Amazon EC2 Inf1 实例上，而不是基于 GPU 的实例上，将我们的推理延迟降低了 30%，将推理成本降低了 71%，对于相同的工作负载。</p>
+
+<h2 id="transition-to-deep-learning">深度学习转型</h2>
+
+<p>我们的人工智能系统将经典模型与词嵌入相结合，以评估广告文本。但随着提交量的持续增加，我们需要一种足够灵活的方法来与我们的业务一起扩展。此外，我们的模型必须快速，在毫秒内提供广告，以提供最佳的客户体验。</p>
+
+<p>过去十年，深度学习在众多领域变得非常流行，包括自然语言、视觉和音频。由于深度神经网络通过许多层传递数据集——提取更高层次的特征——它们可以比经典机器学习模型做出更细微的推断。例如，深度学习模型不仅可以检测违规语言，还可以拒绝广告中存在虚假宣传的情况。</p>
+
+<p>此外，深度学习技术具有可迁移性——为某一任务训练的模型可以适应执行相关任务。例如，预训练的神经网络可以优化以检测图像中的对象，然后微调以识别不允许在广告中展示的特定对象。</p>
+
+<p>深度神经网络可以自动化经典机器学习中最耗时的两个步骤：特征工程和数据标注。与传统监督学习方法不同，后者需要探索性数据分析和人工程序化特征，深度神经网络可以直接从数据中学习相关特征。深度学习模型还可以分析非结构化数据，如文本和图像，而无需像机器学习那样进行预处理。深度神经网络随着数据的增加而有效扩展，在涉及大量数据集的应用中表现尤为出色。</p>
+
+<p>我们选择 PyTorch 来开发我们的模型，因为它帮助我们最大化了系统的性能。使用 PyTorch，我们可以更好地服务客户，同时利用 Python 最直观的概念。PyTorch 中的编程是面向对象的：它将处理函数与它们修改的数据分组在一起。因此，我们的代码库是模块化的，我们可以在不同的应用程序中重用代码片段。此外，PyTorch 的即时模式允许循环和控制结构，因此模型中可以进行更复杂的操作。即时模式使得原型设计和模型迭代变得容易，我们可以处理各种数据结构。这种灵活性帮助我们快速更新模型以满足不断变化的企业需求。</p>
+
+<p>“在此之前，我们尝试过其他“Pythonic”的框架，但 PyTorch 对我们来说无疑是最佳选择。”应用科学家 Yashal Kanungo 说。“使用 PyTorch 很容易，因为它的结构感觉像是 Python 编程的本地化，这是数据科学家们非常熟悉的。”</p>
+
+<h3 id="training-pipeline">训练流程</h3>
+
+<p>今天，我们完全使用 PyTorch 构建我们的文本模型。为了节省时间和金钱，我们经常通过微调预训练的 NLP 模型来进行语言分析，从而跳过训练的早期阶段。如果我们需要评估图像或视频的新模型，我们首先浏览 PyTorch 的 <a href="https://pytorch.org/vision/stable/index.html">torchvision</a> 库，该库提供了图像和视频分类、目标检测、实例分割和姿态估计的预训练选项。对于专业任务，我们从零开始构建自定义模型。PyTorch 非常适合这项工作，因为即时模式和用户友好的前端使得实验不同的架构变得容易。</p>
+
+<p><em>要了解如何在 PyTorch 中微调神经网络，请参阅<a href="https://maskerprc.github.io/tutorials/intermediate/torchvision_tutorial.html#finetuning-from-a-pretrained-model">这篇教程 </a>。</em></p>
+
+<p>在开始训练之前，我们优化模型的超参数，这些变量定义了网络架构（例如，隐藏层的数量）和训练机制（如学习率批大小）。选择合适的超参数值至关重要，因为它们将塑造模型的训练行为。我们依靠 SageMaker 中的贝叶斯搜索功能，AWS 的机器学习平台，来完成这一步骤。贝叶斯搜索将超参数调整视为回归问题：它提出可能产生最佳结果的超参数组合，并运行训练作业来测试这些值。每次试验后，回归算法确定下一组要测试的超参数值，性能逐步提高。</p>
+
+<p>我们使用 SageMaker Notebooks 对模型进行原型设计和迭代。Eager 模式允许我们快速原型设计模型，为每个训练批次构建一个新的计算图；操作序列可以从一次迭代到下一次迭代改变，以适应不同的数据结构或与中间结果相匹配。这使我们能够在训练过程中调整网络而无需从头开始。这些动态图对于基于可变序列长度的递归计算特别有价值，例如在广告中用 NLP 分析的单词、句子和段落。</p>
+
+<p>当我们最终确定模型架构后，我们将在 <a href="https://aws.amazon.com/sagemaker/">SageMaker</a> 上部署训练作业。PyTorch 通过同时运行多个训练作业来帮助我们更快地开发大型模型。PyTorch 的 <a href="https://sagemaker.readthedocs.io/en/stable/api/training/sdp_versions/v1.0.0/smd_data_parallel_pytorch.html"> 分布式数据并行 </a> (DDP) 模块在 SageMaker 内部多个相互连接的机器上复制单个模型，所有进程同时在其数据集的独特部分上运行前向传递。在反向传递期间，该模块平均所有进程的梯度，因此每个本地模型都使用相同的参数值进行更新。</p>
+
+<h3 id="model-deployment-pipeline">模型部署流程</h3>
+
+<p>当我们在生产环境中部署模型时，我们希望在不影响预测准确性的情况下确保较低的推理成本。PyTorch 的一些特性和 AWS 服务帮助我们解决了这一挑战。</p>
+
+<p>动态图的灵活性丰富了训练过程，但在部署时我们希望最大化性能和可移植性。在 PyTorch 中开发 NLP 模型的一个优势是，它们可以直接通过 <a href="https://pytorch.org/docs/stable/jit.html">TorchScript</a> 转换为静态操作序列，TorchScript 是针对 ML 应用专门优化的 Python 子集。Torchscript 将 PyTorch 模型转换为更高效、更适合生产的中间表示（IR）图，易于编译。我们通过模型运行一个样本输入，TorchScript 记录正向传递期间执行的操作。生成的 IR 图可以在高性能环境中运行，包括 C++和其他多线程的 Python 无环境，并且如算子融合等优化可以加快运行速度。</p>
+
+<h3 id="neuron-sdk-and-aws-inferentia-powered-compute">Neuron SDK 和 AWS Inferentia 驱动的计算</h3>
+
+<p>我们将我们的模型部署在由 AWS Inferentia 驱动的 <a href="https://aws.amazon.com/ec2/instance-types/inf1/">Amazon EC2 Inf1 实例 </a> 上，AWS Inferentia 是亚马逊首款专为加速深度学习推理工作负载而设计的 ML 芯片。与基于 GPU 的 Amazon EC2 实例相比，Inferentia 已证明可以将推理成本降低高达 70%。我们使用了 <a href="https://aws.amazon.com/machine-learning/neuron/">AWS Neuron</a> SDK —— 一套与 Inferentia 一起使用的软件工具，用于编译和优化我们的模型以部署在 EC2 Inf1 实例上。</p>
+
+<p>下面的代码片段展示了如何使用 Neuron 编译 Hugging Face BERT 模型。类似于 torch.jit.trace()，neuron.trace() 在正向传递过程中记录模型在示例输入上的操作，以构建静态 IR 图。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">BertModel</span><span class="p">,</span> <span class="n">BertTokenizer</span>
+<span class="kn">import</span> <span class="nn">torch.neuron</span>
+<span class="n">tokenizer</span> <span class="o">=</span> <span class="n">BertTokenizer</span><span class="p">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s">"path to saved vocab"</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">BertModel</span><span class="p">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s">"path to the saved model"</span><span class="p">,</span> <span class="n">returned_dict</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
+<span class="n">inputs</span> <span class="o">=</span> <span class="n">tokenizer</span> <span class="p">(</span><span class="s">"sample input"</span><span class="p">,</span> <span class="n">return_tensor</span><span class="o">=</span><span class="s">"pt"</span><span class="p">)</span>
+<span class="n">neuron_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">neuron</span><span class="p">.</span><span class="n">trace</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
+                                  <span class="n">example_inputs</span> <span class="o">=</span> <span class="p">(</span><span class="n">inputs</span><span class="p">[</span><span class="s">'input_ids'</span><span class="p">],</span> <span class="n">inputs</span><span class="p">[</span><span class="s">'attention_mask'</span><span class="p">]),</span>
+                                  <span class="n">verbose</span> <span class="o">=</span> <span class="mi">1</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">neuron_model</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">inputs</span><span class="p">[</span><span class="s">'input_ids'</span><span class="p">],</span> <span class="n">inputs</span><span class="p">[</span><span class="s">'attention_mask'</span><span class="p">]))</span>
+</code></pre></div></div>
+
+<h3 id="autocasting-and-recalibration">自动转换和重新校准</h3>
+
+<p>在底层，Neuron 通过将模型自动转换为较小的数据类型来优化我们的模型以获得更好的性能。默认情况下，大多数应用程序使用 32 位单精度浮点数 (FP32) 格式来表示神经网络值。将模型自动转换为 16 位格式——半精度浮点数 (FP16) 或脑浮点数 (BF16)——可以减少模型的内存占用和执行时间。在我们的案例中，我们决定使用 FP16 来优化性能，同时保持高精度。</p>
+
+<p>自动类型转换到更小的数据类型在某些情况下可能会触发模型预测的细微差异。为确保模型的准确性不受影响，Neuron 会比较 FP16 和 FP32 模型的性能指标和预测结果。当自动类型转换降低模型准确性时，我们可以告诉 Neuron 编译器仅将权重和某些数据输入转换为 FP16，其余中间结果保持 FP32。此外，我们通常使用训练数据运行几次迭代以重新校准我们的自动类型转换模型。这个过程比原始训练要简单得多。</p>
+
+<h3 id="deployment">部署</h3>
+
+<p>为了分析多媒体广告，我们运行一组深度学习模型。所有上传到亚马逊的广告都会通过专门模型进行运行，评估它们包含的所有类型的内容：图像、视频和音频、标题、文本、背景，甚至语法、语法和可能的不当语言。我们从这些模型收到的信号表明广告是否符合我们的标准。</p>
+
+<p>部署和监控多个模型非常复杂，因此我们依赖于 <a href="https://github.com/pytorch/serve">TorchServe</a>，这是 SageMaker 的默认 PyTorch 模型服务库。由 Facebook 的 PyTorch 团队和 AWS 共同开发，以简化从原型设计到生产的过渡，TorchServe 帮助我们大规模部署训练好的 PyTorch 模型，无需编写自定义代码。它提供了一套安全的 REST API，用于推理、管理、指标和解释。凭借多模型服务、模型版本控制、集成支持以及自动批处理等功能，TorchServe 非常适合支持我们庞大的工作负载。您可以在本<a href="https://aws.amazon.com/blogs/machine-learning/serving-pytorch-models-in-production-with-the-amazon-sagemaker-native-torchserve-integration/">博客文章</a>中了解更多关于在 SageMaker 上使用原生 TorchServe 集成部署 PyTorch 模型的信息。</p>
+
+<p>在某些用例中，我们利用 PyTorch 的面向对象编程范式将多个深度学习模型封装到一个父对象中——一个 PyTorch nn.Module，并将它们作为一个单一集成提供服务。在其他情况下，我们使用 TorchServe 在单独的 SageMaker 端点上为单个模型提供服务，这些模型运行在 AWS Inf1 实例上。</p>
+
+<h3 id="custom-handlers">自定义处理程序</h3>
+
+<p>我们特别赞赏 TorchServe 允许我们将模型初始化、预处理、推理和后处理代码嵌入到单个 Python 脚本 handler.py 中，该脚本位于服务器上。这个脚本——处理器——对来自广告的无标签数据进行预处理，将数据通过我们的模型运行，并将生成的推理结果传递给下游系统。TorchServe 提供了几个默认处理器，用于加载权重和架构，并准备模型在特定设备上运行。我们可以将所有额外的必需工件，如词汇表文件或标签映射，与模型捆绑在一个单独的存档文件中。</p>
+
+<p>当我们需要部署具有复杂初始化过程或来自第三方库的模型时，我们在 TorchServe 中设计自定义处理器。这些处理器使我们能够加载任何库中的任何模型，并执行任何所需的过程。以下代码片段展示了可以服务于任何 SageMaker 托管端点实例的 Hugging Face BERT 模型的简单处理器。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torch.neuron</span>
+<span class="kn">from</span> <span class="nn">ts.torch_handler.base_handler</span> <span class="kn">import</span> <span class="n">BaseHandler</span>
+<span class="kn">import</span> <span class="nn">transformers</span>
+<span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">,</span><span class="n">AutoTokenizer</span>
+
+<span class="k">class</span> <span class="nc">MyModelHandler</span><span class="p">(</span><span class="n">BaseHandler</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">initialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">manifest</span> <span class="o">=</span> <span class="n">ctx</span><span class="p">.</span><span class="n">manifest</span>
+        <span class="n">properties</span> <span class="o">=</span> <span class="n">ctx</span><span class="p">.</span><span class="n">system_properties</span>
+        <span class="n">model_dir</span> <span class="o">=</span> <span class="n">properties</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"model_dir"</span><span class="p">)</span>
+        <span class="n">serialized_file</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">manifest</span><span class="p">[</span><span class="s">"model"</span><span class="p">][</span><span class="s">"serializedFile"</span><span class="p">]</span>
+        <span class="n">model_pt_path</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">model_dir</span><span class="p">,</span> <span class="n">serialized_file</span><span class="p">)</span>
+
+
+        <span class="bp">self</span><span class="p">.</span><span class="n">tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="p">.</span><span class="n">from_pretrained</span><span class="p">(</span>
+                <span class="n">model_dir</span><span class="p">,</span> <span class="n">do_lower_case</span><span class="o">=</span><span class="bp">True</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">AutoModelForSequenceClassification</span><span class="p">.</span><span class="n">from_pretrained</span><span class="p">(</span>
+                    <span class="n">model_dir</span>
+                <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">preprocess</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+
+        <span class="n">input_text</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"data"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">input_text</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">input_text</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"body"</span><span class="p">)</span>
+            <span class="n">inputs</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">tokenizer</span><span class="p">.</span><span class="n">encode_plus</span><span class="p">(</span><span class="n">input_text</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">max_length</span><span class="p">),</span> <span class="n">pad_to_max_length</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">add_special_tokens</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s">'pt'</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">inputs</span>
+
+    <span class="k">def</span> <span class="nf">inference</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="n">inputs</span><span class="p">):</span>
+        <span class="n">predictions</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">model</span><span class="p">(</span><span class="o">**</span><span class="n">inputs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">predictions</span>
+
+    <span class="k">def</span> <span class="nf">postprocess</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">output</span>
+</code></pre></div></div>
+
+<h3 id="batching">批处理</h3>
+
+<p>硬件加速器针对并行性和批处理进行了优化，将多个输入一次性喂给模型有助于充分利用所有可用容量，通常会导致更高的吞吐量。然而，过大的批处理大小会增加延迟，而吞吐量的提升却微乎其微。通过尝试不同的批处理大小，我们可以找到模型和硬件加速器的最佳平衡点。我们进行实验以确定适合我们模型大小、有效载荷大小和请求流量模式的最佳批处理大小。</p>
+
+<p>现在 Neuron 编译器支持可变批处理大小。之前，对模型进行跟踪时硬编码了预定义的批处理大小，因此我们必须填充数据，这可能会浪费计算资源，降低吞吐量，并加剧延迟。Inferentia 针对小批次的吞吐量最大化进行了优化，通过减轻系统负载来降低延迟。</p>
+
+<h3 id="parallelism">并行性</h3>
+
+<p>模型并行在多核上也能提高吞吐量和延迟，这对于我们的重负载至关重要。每个 Inferentia 芯片包含四个 NeuronCores，它们可以同时运行不同的模型，或者形成一个流水线来流式传输单个模型。在我们的用例中，数据并行配置以最低的成本提供了最高的吞吐量，因为它可以扩展并发处理请求。</p>
+
+<p>数据并行：</p>
+
+<p align="center">
+  <img src="/assets/images/amazon-ads-case-study/data-parallel.png" width="100%">
+</p>
+
+<p>模型并行：</p>
+
+<p align="center">
+  <img src="/assets/images/amazon-ads-case-study/model-parallel.png" width="100%">
+</p>
+
+<h3 id="monitoring">监控</h3>
+
+<p>监控生产中推理的准确性至关重要。最初预测良好的模型在部署过程中可能会因为接触到更广泛的数据而逐渐退化。这种现象称为模型漂移，通常发生在输入数据分布或预测目标发生变化时。</p>
+
+<p>我们使用 <a href="https://aws.amazon.com/sagemaker/model-monitor/">SageMaker 模型监控</a>来跟踪训练数据和生产数据之间的差异。模型监控会在生产中的预测开始偏离训练和验证结果时通知我们。多亏了这种早期预警，我们可以在我们的广告商受到影响之前恢复准确性——如果需要的话，可以通过重新训练模型。为了实时跟踪性能，模型监控还会向我们发送有关预测质量的指标，例如准确性、F 分数和预测类别的分布。</p>
+
+<p>为了确定我们的应用程序是否需要扩展，TorchServe 会定期记录 CPU、内存和磁盘的资源利用率指标；它还会记录收到的请求数与已服务的请求数。对于自定义指标，TorchServe 提供了一个<a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md">指标 API</a>。</p>
+
+<h3 id="a-rewarding-result">一个令人满意的结果</h3>
+
+<p>我们的深度学习模型在 PyTorch 中开发并在 Inferentia 上部署，加速了我们的广告分析同时降低了成本。从我们第一次探索深度学习开始，使用 PyTorch 编程就感觉自然。其用户友好的特性帮助我们顺利地从早期实验到多模态集成部署的过程。PyTorch 让我们能够快速原型设计和构建模型，这对于我们的广告服务发展和扩展至关重要。作为额外的好处，PyTorch 与 Inferentia 和我们的 AWS ML 堆栈无缝协作。我们期待使用 PyTorch 构建更多用例，以便我们能够继续为客户提供准确、实时的结果。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

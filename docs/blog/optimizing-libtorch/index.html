@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Optimizing LibTorch-based inference engine memory usage and thread-pooling | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Outline
+
+In this blog post we show how to optimize LibTorch-based inference engine to maximize throughput by reducing memory usage and optimizing the thread-pooling strategy. We apply these optimizations to Pattern&nbsp;Recognition engines for audio data, for example, music and speech recognition or acoustic fingerprinting. The optimizations discussed in this blog post allow for memory usage reduction by 50% and reduction in end-to-end latency for Inference by 37.5%. These optimizations are applicable to computer vision and natural language processing.
+
+Audio Recognition Inferencing
+
+Audio Recognition (AR) engines can be used to recognize and identify sound patterns. As an example, identifying the type and species of a bird from audio recordings, distinguishing music from the singer’s voice, or detecting an abnormal sound indicating a breach in a building.&nbsp;To identify sounds of interest, AR engines process audio through 4 stages:
+
+
+  File Validation: The AR engine validates the input audio file.
+  Feature Extraction: Features are extracted from each segment within the audio file.
+  Inference: LibTorch performs inference using CPUs or accelerators. In our case Intel processors on an Elastic Cloud Compute (EC2) instance.
+  Post-processing: A post-processing model decodes the results and calculates scores that are used to convert inference output into tags or transcripts.
+
+
+Of these 4 steps, inference is the most computationally intensive and can take up to 50% of the pipeline processing time depending on the model complexity. This means that any optimization at this stage has a significant impact on the overall pipeline.&nbsp;
+
+Optimizing the Audio Recognition engine with concurrency…is not so simple
+
+Our objective for this processing pipeline is to extract audio segments into tags or transcripts through a processing. The input data&nbsp;is&nbsp;an audio file composed of several short sound segments (S1 to S6 in Figure 1). The output data corresponds to tags or transcripts ordered by timestamps.
+
+
+
+Figure 1: Example audio file with segment boundaries
+
+Each segment can be processed independently and in an out-of-order fashion. This offers the opportunity to process segments concurrently and in parallel to optimize the overall inference throughput as well as maximize the usage of the resources.
+
+Parallelization on an instance can be achieved through multi-threading (pThreads, std::threads, OpenMP) or multi-processing. The advantage of multi-threading over multi-processing is the ability to use shared memory. It enables developers to minimize data duplication across threads by sharing data across threads; the AR models in our case (Figure 2). Furthermore, a reduction in memory allows us to run more pipelines in parallel by increasing the number of engine threads in order to utilize all vCPUs on our Amazon EC2 instance (c5.4xlarge&nbsp;in our case, it offers 16 vCPUs). In theory, we expect to see higher hardware utilization and higher throughput for our AR engine as a result.
+
+
+
+Figure 2: Multi-threaded AR Engine
+
+But we found these assumptions to be wrong. Indeed, we found that increasing the number of threads of the application led to an increase of the end-to-end latency for each audio segment and to a decrease of the engine throughput. For example, increasing the concurrency from 1 to 5 threads led to an increase of the latency by 4x which had a proportional effect on decreasing the throughput. In fact, metrics showed that within the pipeline, the latency of the inference stage alone was 3x higher than it’s single thread baseline.&nbsp;
+
+Using a profiler, we found that the CPU Spin Time&nbsp;increased,&nbsp;potentially due to CPU oversubscription which impacts system and application performance. Given our control over the application’s multi-thread implementation, we chose to dive deeper into the stack and identify potential conflicts with LibTorch’s default settings.
+
+Diving deeper on LibTorch’s multi-threading and its impact on concurrency
+
+LibTorch’s parallel implementations on CPU for inference are based on&nbsp;&nbsp;global thread pools. Examples of implementations are Inter-op and intra-op parallelism, which can be chosen depending on the model’s properties. In both cases, it is possible to set&nbsp;the number of threads&nbsp;in each thread-poll to optimize the latency and throughput.&nbsp;
+
+To test if LibTorch’s parallel default implementation settings had a counter effect on our inference latency, we&nbsp;ran an experiment on a 16 vCPus machine&nbsp;with a 35-minute audio file, keeping the LibTorch inter-threads constant at 1 (because our models didn’t utilize the inter-op thread pool). We collected the following data as shown in Figure 3 and 4.&nbsp;
+
+
+
+Figure 3: CPU Utilization for different number&nbsp;of engine threads
+
+
+
+Figure 4: Processing times for different number&nbsp;of engine threads
+
+Execution time in Figure 4&nbsp;is the end-to-end processing time for processing all the segments of the given audio file. We have 4 different configurations of LibTorch intra-threads which are 1, 4, 8, 16 and we change the number of engine threads from 1 to 16 for each intra-thread LibTorch configuration.&nbsp;As we see in Figure 3, CPU utilization increases with an increase in the number of engine threads for all LibTorch intra-thread configurations. But as we see in Figure 4, an increase in CPU utilization doesn’t translate into lower execution time. We found out that&nbsp;in all but one case, as the number of engine threads shot up, so did execution time. The one exception was the case where the intra-thread pool size was 1.
+
+Resolving the global thread pool issue
+
+Using too many threads with a global thread pool led to performance degradation and caused an over-subscription problem. Without disabling LibTorch global thread pools, it was difficult to match the performance of the multi-process engine.
+
+Disabling the LibTorch global thread pool is as simple as setting the intra-op/inter-op parallelism threads to 1, as shown here:
+
+at::set_num_threads(1)&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;// Disables the intraop thread&nbsp;pool.
+at::set_num_interop_threads(1).&nbsp;// Disables the interop thread&nbsp;pool.
+
+
+As shown in Figure 4, the lowest processing time was measured when the LibTorch global thread pool was disabled.
+
+This solution improved AR engine throughput in several cases. However, when evaluating long datasets (audio files longer than 2 hours in load test), we found that the memory footprint of the engine gradually started to increase.
+
+Optimizing memory usage
+
+We ran a load-test on the system with two hours long audio files and found out that the observed memory increase was the result of memory fragmentation within a multi-threaded LibTorch inference. We resolved this using jemalloc, which is a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support. Using jemalloc, our peak memory usage decreased by an average of 34% and average memory usage decreased by 53%.
+
+
+
+Figure 5: Memory usage over time using the same input file with and without jemalloc
+
+Summary
+
+To optimize the performance of multi-threaded LibTorch-based inference engines, we recommend verifying that there is no oversubscription problem in LibTorch. In our case, all threads in the multi-threaded engine were sharing the LibTorch global thread pool, which caused an oversubscription problem. This was remedied by disabling the global thread pool: we disabled the interop and intraop global thread pool by setting threads to 1. To optimize the memory of a multi-threaded engine, we recommend using Jemalloc as a memory allocator tool rather than the default malloc function.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Optimizing LibTorch-based inference engine memory usage and thread-pooling">
+<meta property="og:description" content="Outline
+
+In this blog post we show how to optimize LibTorch-based inference engine to maximize throughput by reducing memory usage and optimizing the thread-pooling strategy. We apply these optimizations to Pattern&nbsp;Recognition engines for audio data, for example, music and speech recognition or acoustic fingerprinting. The optimizations discussed in this blog post allow for memory usage reduction by 50% and reduction in end-to-end latency for Inference by 37.5%. These optimizations are applicable to computer vision and natural language processing.
+
+Audio Recognition Inferencing
+
+Audio Recognition (AR) engines can be used to recognize and identify sound patterns. As an example, identifying the type and species of a bird from audio recordings, distinguishing music from the singer’s voice, or detecting an abnormal sound indicating a breach in a building.&nbsp;To identify sounds of interest, AR engines process audio through 4 stages:
+
+
+  File Validation: The AR engine validates the input audio file.
+  Feature Extraction: Features are extracted from each segment within the audio file.
+  Inference: LibTorch performs inference using CPUs or accelerators. In our case Intel processors on an Elastic Cloud Compute (EC2) instance.
+  Post-processing: A post-processing model decodes the results and calculates scores that are used to convert inference output into tags or transcripts.
+
+
+Of these 4 steps, inference is the most computationally intensive and can take up to 50% of the pipeline processing time depending on the model complexity. This means that any optimization at this stage has a significant impact on the overall pipeline.&nbsp;
+
+Optimizing the Audio Recognition engine with concurrency…is not so simple
+
+Our objective for this processing pipeline is to extract audio segments into tags or transcripts through a processing. The input data&nbsp;is&nbsp;an audio file composed of several short sound segments (S1 to S6 in Figure 1). The output data corresponds to tags or transcripts ordered by timestamps.
+
+
+
+Figure 1: Example audio file with segment boundaries
+
+Each segment can be processed independently and in an out-of-order fashion. This offers the opportunity to process segments concurrently and in parallel to optimize the overall inference throughput as well as maximize the usage of the resources.
+
+Parallelization on an instance can be achieved through multi-threading (pThreads, std::threads, OpenMP) or multi-processing. The advantage of multi-threading over multi-processing is the ability to use shared memory. It enables developers to minimize data duplication across threads by sharing data across threads; the AR models in our case (Figure 2). Furthermore, a reduction in memory allows us to run more pipelines in parallel by increasing the number of engine threads in order to utilize all vCPUs on our Amazon EC2 instance (c5.4xlarge&nbsp;in our case, it offers 16 vCPUs). In theory, we expect to see higher hardware utilization and higher throughput for our AR engine as a result.
+
+
+
+Figure 2: Multi-threaded AR Engine
+
+But we found these assumptions to be wrong. Indeed, we found that increasing the number of threads of the application led to an increase of the end-to-end latency for each audio segment and to a decrease of the engine throughput. For example, increasing the concurrency from 1 to 5 threads led to an increase of the latency by 4x which had a proportional effect on decreasing the throughput. In fact, metrics showed that within the pipeline, the latency of the inference stage alone was 3x higher than it’s single thread baseline.&nbsp;
+
+Using a profiler, we found that the CPU Spin Time&nbsp;increased,&nbsp;potentially due to CPU oversubscription which impacts system and application performance. Given our control over the application’s multi-thread implementation, we chose to dive deeper into the stack and identify potential conflicts with LibTorch’s default settings.
+
+Diving deeper on LibTorch’s multi-threading and its impact on concurrency
+
+LibTorch’s parallel implementations on CPU for inference are based on&nbsp;&nbsp;global thread pools. Examples of implementations are Inter-op and intra-op parallelism, which can be chosen depending on the model’s properties. In both cases, it is possible to set&nbsp;the number of threads&nbsp;in each thread-poll to optimize the latency and throughput.&nbsp;
+
+To test if LibTorch’s parallel default implementation settings had a counter effect on our inference latency, we&nbsp;ran an experiment on a 16 vCPus machine&nbsp;with a 35-minute audio file, keeping the LibTorch inter-threads constant at 1 (because our models didn’t utilize the inter-op thread pool). We collected the following data as shown in Figure 3 and 4.&nbsp;
+
+
+
+Figure 3: CPU Utilization for different number&nbsp;of engine threads
+
+
+
+Figure 4: Processing times for different number&nbsp;of engine threads
+
+Execution time in Figure 4&nbsp;is the end-to-end processing time for processing all the segments of the given audio file. We have 4 different configurations of LibTorch intra-threads which are 1, 4, 8, 16 and we change the number of engine threads from 1 to 16 for each intra-thread LibTorch configuration.&nbsp;As we see in Figure 3, CPU utilization increases with an increase in the number of engine threads for all LibTorch intra-thread configurations. But as we see in Figure 4, an increase in CPU utilization doesn’t translate into lower execution time. We found out that&nbsp;in all but one case, as the number of engine threads shot up, so did execution time. The one exception was the case where the intra-thread pool size was 1.
+
+Resolving the global thread pool issue
+
+Using too many threads with a global thread pool led to performance degradation and caused an over-subscription problem. Without disabling LibTorch global thread pools, it was difficult to match the performance of the multi-process engine.
+
+Disabling the LibTorch global thread pool is as simple as setting the intra-op/inter-op parallelism threads to 1, as shown here:
+
+at::set_num_threads(1)&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;// Disables the intraop thread&nbsp;pool.
+at::set_num_interop_threads(1).&nbsp;// Disables the interop thread&nbsp;pool.
+
+
+As shown in Figure 4, the lowest processing time was measured when the LibTorch global thread pool was disabled.
+
+This solution improved AR engine throughput in several cases. However, when evaluating long datasets (audio files longer than 2 hours in load test), we found that the memory footprint of the engine gradually started to increase.
+
+Optimizing memory usage
+
+We ran a load-test on the system with two hours long audio files and found out that the observed memory increase was the result of memory fragmentation within a multi-threaded LibTorch inference. We resolved this using jemalloc, which is a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support. Using jemalloc, our peak memory usage decreased by an average of 34% and average memory usage decreased by 53%.
+
+
+
+Figure 5: Memory usage over time using the same input file with and without jemalloc
+
+Summary
+
+To optimize the performance of multi-threaded LibTorch-based inference engines, we recommend verifying that there is no oversubscription problem in LibTorch. In our case, all threads in the multi-threaded engine were sharing the LibTorch global thread pool, which caused an oversubscription problem. This was remedied by disabling the global thread pool: we disabled the interop and intraop global thread pool by setting threads to 1. To optimize the memory of a multi-threaded engine, we recommend using Jemalloc as a memory allocator tool rather than the default malloc function.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Optimizing LibTorch-based inference engine memory usage and thread-pooling">
+<meta name="twitter:description" content="Outline
+
+In this blog post we show how to optimize LibTorch-based inference engine to maximize throughput by reducing memory usage and optimizing the thread-pooling strategy. We apply these optimizations to Pattern&nbsp;Recognition engines for audio data, for example, music and speech recognition or acoustic fingerprinting. The optimizations discussed in this blog post allow for memory usage reduction by 50% and reduction in end-to-end latency for Inference by 37.5%. These optimizations are applicable to computer vision and natural language processing.
+
+Audio Recognition Inferencing
+
+Audio Recognition (AR) engines can be used to recognize and identify sound patterns. As an example, identifying the type and species of a bird from audio recordings, distinguishing music from the singer’s voice, or detecting an abnormal sound indicating a breach in a building.&nbsp;To identify sounds of interest, AR engines process audio through 4 stages:
+
+
+  File Validation: The AR engine validates the input audio file.
+  Feature Extraction: Features are extracted from each segment within the audio file.
+  Inference: LibTorch performs inference using CPUs or accelerators. In our case Intel processors on an Elastic Cloud Compute (EC2) instance.
+  Post-processing: A post-processing model decodes the results and calculates scores that are used to convert inference output into tags or transcripts.
+
+
+Of these 4 steps, inference is the most computationally intensive and can take up to 50% of the pipeline processing time depending on the model complexity. This means that any optimization at this stage has a significant impact on the overall pipeline.&nbsp;
+
+Optimizing the Audio Recognition engine with concurrency…is not so simple
+
+Our objective for this processing pipeline is to extract audio segments into tags or transcripts through a processing. The input data&nbsp;is&nbsp;an audio file composed of several short sound segments (S1 to S6 in Figure 1). The output data corresponds to tags or transcripts ordered by timestamps.
+
+
+
+Figure 1: Example audio file with segment boundaries
+
+Each segment can be processed independently and in an out-of-order fashion. This offers the opportunity to process segments concurrently and in parallel to optimize the overall inference throughput as well as maximize the usage of the resources.
+
+Parallelization on an instance can be achieved through multi-threading (pThreads, std::threads, OpenMP) or multi-processing. The advantage of multi-threading over multi-processing is the ability to use shared memory. It enables developers to minimize data duplication across threads by sharing data across threads; the AR models in our case (Figure 2). Furthermore, a reduction in memory allows us to run more pipelines in parallel by increasing the number of engine threads in order to utilize all vCPUs on our Amazon EC2 instance (c5.4xlarge&nbsp;in our case, it offers 16 vCPUs). In theory, we expect to see higher hardware utilization and higher throughput for our AR engine as a result.
+
+
+
+Figure 2: Multi-threaded AR Engine
+
+But we found these assumptions to be wrong. Indeed, we found that increasing the number of threads of the application led to an increase of the end-to-end latency for each audio segment and to a decrease of the engine throughput. For example, increasing the concurrency from 1 to 5 threads led to an increase of the latency by 4x which had a proportional effect on decreasing the throughput. In fact, metrics showed that within the pipeline, the latency of the inference stage alone was 3x higher than it’s single thread baseline.&nbsp;
+
+Using a profiler, we found that the CPU Spin Time&nbsp;increased,&nbsp;potentially due to CPU oversubscription which impacts system and application performance. Given our control over the application’s multi-thread implementation, we chose to dive deeper into the stack and identify potential conflicts with LibTorch’s default settings.
+
+Diving deeper on LibTorch’s multi-threading and its impact on concurrency
+
+LibTorch’s parallel implementations on CPU for inference are based on&nbsp;&nbsp;global thread pools. Examples of implementations are Inter-op and intra-op parallelism, which can be chosen depending on the model’s properties. In both cases, it is possible to set&nbsp;the number of threads&nbsp;in each thread-poll to optimize the latency and throughput.&nbsp;
+
+To test if LibTorch’s parallel default implementation settings had a counter effect on our inference latency, we&nbsp;ran an experiment on a 16 vCPus machine&nbsp;with a 35-minute audio file, keeping the LibTorch inter-threads constant at 1 (because our models didn’t utilize the inter-op thread pool). We collected the following data as shown in Figure 3 and 4.&nbsp;
+
+
+
+Figure 3: CPU Utilization for different number&nbsp;of engine threads
+
+
+
+Figure 4: Processing times for different number&nbsp;of engine threads
+
+Execution time in Figure 4&nbsp;is the end-to-end processing time for processing all the segments of the given audio file. We have 4 different configurations of LibTorch intra-threads which are 1, 4, 8, 16 and we change the number of engine threads from 1 to 16 for each intra-thread LibTorch configuration.&nbsp;As we see in Figure 3, CPU utilization increases with an increase in the number of engine threads for all LibTorch intra-thread configurations. But as we see in Figure 4, an increase in CPU utilization doesn’t translate into lower execution time. We found out that&nbsp;in all but one case, as the number of engine threads shot up, so did execution time. The one exception was the case where the intra-thread pool size was 1.
+
+Resolving the global thread pool issue
+
+Using too many threads with a global thread pool led to performance degradation and caused an over-subscription problem. Without disabling LibTorch global thread pools, it was difficult to match the performance of the multi-process engine.
+
+Disabling the LibTorch global thread pool is as simple as setting the intra-op/inter-op parallelism threads to 1, as shown here:
+
+at::set_num_threads(1)&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;// Disables the intraop thread&nbsp;pool.
+at::set_num_interop_threads(1).&nbsp;// Disables the interop thread&nbsp;pool.
+
+
+As shown in Figure 4, the lowest processing time was measured when the LibTorch global thread pool was disabled.
+
+This solution improved AR engine throughput in several cases. However, when evaluating long datasets (audio files longer than 2 hours in load test), we found that the memory footprint of the engine gradually started to increase.
+
+Optimizing memory usage
+
+We ran a load-test on the system with two hours long audio files and found out that the observed memory increase was the result of memory fragmentation within a multi-threaded LibTorch inference. We resolved this using jemalloc, which is a general purpose malloc(3) implementation that emphasizes fragmentation avoidance and scalable concurrency support. Using jemalloc, our peak memory usage decreased by an average of 34% and average memory usage decreased by 53%.
+
+
+
+Figure 5: Memory usage over time using the same input file with and without jemalloc
+
+Summary
+
+To optimize the performance of multi-threaded LibTorch-based inference engines, we recommend verifying that there is no oversubscription problem in LibTorch. In our case, all threads in the multi-threaded engine were sharing the LibTorch global thread pool, which caused an oversubscription problem. This was remedied by disabling the global thread pool: we disabled the interop and intraop global thread pool by setting threads to 1. To optimize the memory of a multi-threaded engine, we recommend using Jemalloc as a memory allocator tool rather than the default malloc function.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年6月29日</p>
+            <h1>
+                <a class="blog-title">优化基于 LibTorch 的推理引擎内存使用和线程池</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由喜马拉雅·莫汉拉尔·乔里瓦尔、皮埃尔-伊夫·阿基兰蒂、维韦克·戈文达、哈米德·肖贾纳泽里、安基特·古纳帕尔、特里斯坦·赖斯著</p>
+                    <h2 id="outline">概述</h2>
+
+<p>在本文中，我们展示了如何通过减少内存使用和优化线程池策略来优化基于 LibTorch 的推理引擎，以最大化吞吐量。我们将这些优化应用于音频数据模式识别引擎，例如音乐和语音识别或声纹识别。本文中讨论的优化可以将内存使用减少 50%，并将推理的端到端延迟减少 37.5%。这些优化适用于计算机视觉和自然语言处理。</p>
+
+<h2 id="audio-recognition-inferencing">音频识别推理</h2>
+
+<p>音频识别（AR）引擎可以用于识别和识别声音模式。例如，从音频记录中识别鸟类的种类和物种，区分音乐和歌手的声音，或检测建筑安全漏洞的异常声音。为了识别感兴趣的声音，AR 引擎通过以下 4 个阶段处理音频：</p>
+
+<ol>
+  <li><strong>文件验证 </strong>：AR 引擎验证输入音频文件。</li>
+  <li><strong>特征提取 </strong>：从音频文件中的每个片段中提取特征。</li>
+  <li><strong>推理 </strong>：LibTorch 使用 CPU 或加速器进行推理。在我们的案例中，使用弹性云计算（EC2）实例上的英特尔处理器。</li>
+  <li><strong>后处理 </strong>：后处理模型解码结果并计算分数，这些分数用于将推理输出转换为标签或转录。</li>
+</ol>
+
+<p>在这4个步骤中，推理是最耗计算资源的，可能占用整个管道处理时间的50%。这意味着在此阶段进行的任何优化都会对整个管道产生重大影响。</p>
+
+<h2 id="optimizing-the-audio-recognition-engine-with-concurrencyis-not-so-simple">优化音频识别引擎的并发…并不简单</h2>
+
+<p>我们对这个处理管道的目标是通过处理将音频段提取为标签或转录。输入数据是由几个短声音段（图 1 中的 S1 到 S6）组成的音频文件。输出数据对应于按时间戳排序的标签或转录。</p>
+
+<p><img src="/assets/images/optimizing-libtorch/im1.jpg" alt="Figure 1: Example audio file with segment boundaries" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 1</strong>：带有段落边界的示例音频文件</em></small></p>
+
+<p>每个段落都可以独立处理，并且可以乱序处理。这为并行处理段落以及优化整体推理吞吐量和最大化资源利用率提供了机会。</p>
+
+<p>在单个实例上实现并行化可以通过多线程（pThreads、std::threads、OpenMP）或多进程。与多进程相比，多线程的优势在于能够使用共享内存。这使得开发者可以通过在线程间共享数据来最小化数据在各个线程间的重复；在我们的案例中（<em> 图 2</em>）。此外，减少内存允许我们通过增加引擎线程的数量来运行更多的管道并行，从而利用我们 Amazon EC2 实例上的所有 vCPU（在我们的案例中，它提供了 16 个 vCPU）。从理论上讲，我们预计我们的 AR 引擎将看到更高的硬件利用率和更高的吞吐量。</p>
+
+<p><img src="/assets/images/optimizing-libtorch/im2.jpg" alt="Figure 2: Multi-threaded AR Engine" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 2</strong>：多线程 AR 引擎</em></small></p>
+
+<p>但我们发现这些假设是错误的。事实上，我们发现增加应用程序的线程数会导致每个音频段的端到端延迟增加，并且会导致引擎吞吐量下降。例如，将并发从1个线程增加到5个线程，导致延迟增加了4倍，这相应地降低了吞吐量。实际上，指标显示，在管道中，仅推理阶段的延迟就比单线程基线高3倍。</p>
+
+<p>使用分析器，我们发现 CPU<a href="https://www.intel.com/content/www/us/en/develop/documentation/vtune-help/top/reference/cpu-metrics-reference.html#cpu-metrics-reference_SPIN-AND-OVERHEAD-TIME"> 自旋时间</a>增加，这可能是由于 CPU 过载订阅，影响了系统和应用程序的性能。鉴于我们对应用程序多线程实现的控制，我们决定深入研究堆栈，以确定与 LibTorch 默认设置的潜在冲突。</p>
+
+<h3 id="diving-deeper-on-libtorchs-multi-threading-and-its-impact-on-concurrency">深入探讨 LibTorch 的多线程及其对并发的影响</h3>
+
+<p>LibTorch 在 CPU 上的并行推理实现基于<a href="https://pytorch.org/docs/stable/notes/cpu_threading_torchscript_inference.html#cpu-threading-and-torchscript-inference">全局线程池 </a>。实现示例包括跨操作和操作内并行，可以根据模型特性进行选择。在这两种情况下，都可以设置每个线程池中的<a href="https://pytorch.org/docs/stable/notes/cpu_threading_torchscript_inference.html#tuning-the-number-of-threads">线程数量</a>以优化延迟和吞吐量。</p>
+
+<p>为了测试 LibTorch 的并行默认实现设置是否对我们的推理延迟有反作用，我们在 16 核 CPU 机器上运行了一个实验，使用 35 分钟的音频文件，保持 LibTorch 线程间常数为 1（因为我们的模型没有利用跨操作线程池）。我们收集了如图 3 和 4 所示的数据。</p>
+
+<p><img src="/assets/images/optimizing-libtorch/im3.jpg" alt="Figure 3: CPU Utilization for different number&nbsp;of engine threads" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 3</strong>：不同引擎线程数目的 CPU 利用率</em></small></p>
+
+<p><img src="/assets/images/optimizing-libtorch/im4.jpg" alt="Figure 4: Processing times for different number&nbsp;of engine threads" style="max-height:800px; width:100%; margin-top: 4rem;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 4</strong>：不同引擎线程数目的处理时间</em></small></p>
+
+<p>图 4 中的执行时间是指处理给定音频文件所有片段的端到端处理时间。我们针对 LibTorch 的 intra-threads 有 4 种不同的配置，分别是 1、4、8、16，并且我们为每个 intra-thread 的 LibTorch 配置将引擎线程的数量从 1 改为 16。如图 3 所示，对于所有 LibTorch 的 intra-thread 配置，随着引擎线程数量的增加，CPU 利用率也随之提高。但如图 4 所示，CPU 利用率的提高并没有转化为更低的执行时间。我们发现，在所有情况中，除了一个例外，随着引擎线程数量的增加，执行时间也随之增加。唯一的例外是 intra-thread 池大小为 1 的情况。</p>
+
+<h3 id="resolving-the-global-thread-pool-issue">解决全局线程池问题</h3>
+
+<p>使用过多的线程会导致全局线程池性能下降，并引发过度订阅问题。在不禁用 <a href="https://pytorch.org/docs/stable/notes/cpu_threading_torchscript_inference.html">LibTorch 全局线程池</a>的情况下，很难匹配多进程引擎的性能。</p>
+
+<p>禁用 LibTorch 全局线程池就像将 intra-op/inter-op 并行线程数设置为 1 一样简单，如下所示：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>at::set_num_threads(1)&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;// Disables the intraop thread&nbsp;pool.
+at::set_num_interop_threads(1).&nbsp;// Disables the interop thread&nbsp;pool.
+</code></pre></div></div>
+
+<p>如图 4 所示，当禁用 LibTorch 全局线程池时，测得的最低处理时间。</p>
+
+<p>该方案在多个情况下提高了 AR 引擎的吞吐量。然而，在评估长时间数据集（加载测试中超过 2 小时的音频文件）时，我们发现引擎的内存占用逐渐开始增加。</p>
+
+<h3 id="optimizing-memory-usage">优化内存使用</h3>
+
+<p>我们对系统进行了两个小时的音频文件加载测试，发现观察到的内存增加是多线程 LibTorch 推理中的内存碎片化造成的。我们使用 <a href="https://github.com/jemalloc/jemalloc">jemalloc</a> 解决了这个问题，jemalloc 是一种通用的 malloc(3)实现，强调避免碎片化和可扩展的并发支持。使用 <a href="https://maskerprc.github.io/tutorials/recipes/recipes/tuning_guide.html#switch-memory-allocator">jemalloc</a> 后，我们的峰值内存使用量平均下降了 34%，平均内存使用量下降了 53%。</p>
+
+<p><img src="/assets/images/optimizing-libtorch/im5.jpg" alt="Figure 5: Memory usage over time using the same input file with and without jemalloc" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 5</strong>：使用相同输入文件，在有和没有 jemalloc 的情况下，内存使用随时间的变化</em></small></p>
+
+<h2 id="summary">摘要</h2>
+
+<p>为了优化基于 LibTorch 的多线程推理引擎的性能，我们建议验证 LibTorch 中是否存在过度订阅问题。在我们的案例中，多线程引擎中的所有线程都共享 LibTorch 的全局线程池，这导致了过度订阅问题。通过将线程数设置为 1 来禁用全局线程池，我们解决了这个问题：我们禁用了互操作和操作内全局线程池。为了优化多线程引擎的内存，我们建议使用 Jemalloc 作为内存分配器工具，而不是默认的 malloc 函数。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

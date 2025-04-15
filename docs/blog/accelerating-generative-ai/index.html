@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerating Generative AI with PyTorch: Segment Anything, Fast | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="This post is the first part of a multi-series blog focused on how to accelerate generative AI models with pure, native PyTorch. We are excited to share a breadth of newly released PyTorch performance features alongside practical examples of how these features can be combined to see how far we can push PyTorch native performance.
+
+As announced during the PyTorch Developer Conference 2023, the PyTorch team rewrote Meta’s Segment Anything (“SAM”) Model resulting in 8x faster code than the original implementation, with no loss of accuracy, all using native PyTorch optimizations. We leverage a breadth of new PyTorch features:
+
+
+  Torch.compile: A compiler for PyTorch models
+  GPU quantization: Accelerate models with reduced precision operations
+  Scaled Dot Product Attention (SDPA): Memory efficient attention implementations
+  Semi-Structured (2:4) Sparsity: A GPU optimized sparse memory format
+  Nested Tensor: Batch together non-uniformly sized data into a single Tensor, such as images of different sizes.
+  Custom operators with Triton: Write GPU operations using Triton Python DSL and easily integrate it into PyTorch’s various components with custom operator registration.
+
+
+We encourage readers to copy-paste code from our implementation of SAM on Github and ask us questions on Github.
+
+
+
+A quick glimpse of increasing throughput and decreasing memory overhead with our newly released, PyTorch native, features. Benchmarks run on p4d.24xlarge instance (8x A100s).
+
+SegmentAnything Model
+
+SAM is a zero-shot vision model for generating promptable image masks.
+
+
+
+The SAM architecture [described in its paper] includes multiple prompt and image encoders based on the Transformer architecture. Of this, we measured performance across the smallest and largest vision transformer backbones: ViT-B and ViT-H. And for simplicity, we only show traces for the ViT-B model.
+
+Optimizations
+
+Below we tell the story of optimizing SAM: profiling, identifying bottlenecks, and building new features into PyTorch that solve these problems. Throughout, we showcase our new PyTorch features: torch.compile, SDPA, Triton kernels, Nested Tensor and semi-structured sparsity. The following sections are progressively built upon each other, ending with our SAM-fast, now available on Github. We motivate each feature using real kernel and memory traces, using fully PyTorch native tooling, and visualize these traces with Perfetto UI.
+
+Baseline
+
+Our SAM baseline is Facebook Research’s unmodified model, using float32 dtype and a batch size of 1. After some initial warmup, we can look at a kernel trace using the PyTorch Profiler:
+
+
+
+We notice two areas ripe for optimization.
+
+The first is long calls to aten::index, the underlying call resulting from a Tensor index operation (e.g., []). While the actual GPU time spent on aten::index is relatively low. aten::index is launching two kernels, and a blocking cudaStreamSynchronize is happening in between. This means the CPU is waiting for the GPU to finish processing until it launches the second kernel. To optimize SAM, we should aim to remove blocking GPU syncs causing idle time.
+
+The second is significant time spent on GPU in matrix multiplication (dark green on stream 7 7 above). This is common in Transformers. We can significantly speed up SAM if we can reduce the amount of GPU time spent on matrix multiplication.
+
+We can measure the throughput (img/s) and memory overhead (GiB) from out of the box SAM to establish a baseline:
+
+
+
+Bfloat16 Half precision (+GPU syncs and batching)
+
+To address the first issue of less time spent in matrix multiplication, we can turn to bfloat16. Bfloat16 is a commonly used half-precision type. Through less precision per parameter and activations, we can save significant time and memory in computation. With reducing precision of parameters, it’s critical to validate end to end model accuracy.
+
+
+
+Shown here is an example of replacing padding dtypes with half precision, bfloat16. Code is here.
+
+Next to simply setting model.to(torch.bfloat16) we have to change a few small places that assume the default dtype.
+
+Now, in order to remove GPU syncs we need to audit operations that cause them. We can find these pieces of code by searching the GPU traces for calls to cudaStreamSynchronize. In fact, we found two locations that we were able to rewrite to be sync-free.
+
+
+
+
+
+Specifically, we see that within SAM’s image encoder, there are variables acting as coordinate scalers, q_coords and k_coords. These are both allocated and processed on the CPU. However, once these variables are used to index in rel_pos_resized, the index operation automatically moves these variables to the GPU. This copy over causes the GPU sync we’ve observed above. We notice a second call to index in SAM’s prompt encoder: We can use torch.where to rewrite this as shown above.
+
+Kernel trace
+
+After applying these changes, we begin to see significant time between individual kernel calls. This is typically observed with small batch sizes (1 here) due to the GPU overhead of launching kernels. To get a closer look at practical areas for optimization, we can start to profile SAM inference with batch size 8:
+
+
+
+Looking at the time spent per-kernel, we obverse most of SAM’s GPU time&nbsp;spent on elementwise kernels and softmax operation. With this we now see that matrix multiplications have become a much smaller relative overhead.
+
+
+
+Taken the GPU sync and bfloat16 optimizations together, we have now pushed SAM performance by up to 3x
+
+
+
+Torch.compile (+graph breaks and CUDA graphs)
+
+When observing a large number of small operations, such as the elementwise kernels profiled above, turning to a compiler to fuse operations can have strong benefits. PyTorch’s recently released torch.compile does a great job optimizing by:
+
+
+  Fusing together sequences of operations such as nn.LayerNorm or nn.GELU into a single GPU kernel that is called and
+  Epilogues: fusing operations that immediately follow matrix multiplication kernels to reduce the number of GPU kernel calls.
+
+
+Through these optimizations, we reduce the number of GPU global memory roundtrips, thus speeding up inference. We can now try torch.compile on SAM’s image encoder. To maximize performance we use a few advanced compile techniques such as:
+
+
+  using torch.compile’s max-autotune mode enables CUDA graphs and shape-specific kernels with custom epilogues
+  By setting TORCH_LOGS=”graph_breaks,recompiles” we can manually verify that we are not running into graph breaks or recompiles.
+  Padding the batch of images input to the encoder with zeros ensures compile accepts static shapes thus being able to always use shape-specific optimized kernels with custom epilogues without recompilations.
+
+
+predictor.model.image_encoder = \
+    torch.compile(predictor.model.image_encoder, mode=use_compile)
+
+
+Kernel trace
+
+
+
+torch.compile is working beautifully. We launch a single CUDA graph, which makes up a significant portion of GPU time within the timed region. Let’s run our profile again and look at the percentage of GPU time spent in specific kernels:
+
+
+
+We now see softmax makes up a significant portion of the time followed by various GEMM variants. In summary we observe the following measurements for batch size 8 and above changes.
+
+
+
+SDPA: scaled_dot_product_attention
+
+Next up, we can tackle one of the most common areas for transformer performance overhead: the attention mechanism. Naive attention implementations scale quadratically in time and memory with sequence length. PyTorch’s scaled_dot_product_attention operation built upon the principles of Flash Attention, FlashAttentionV2 and xFormer’s memory efficient attention can significantly speed up GPU attention. Combined with torch.compile, this operation allows us to express and fuse a common pattern within variants of MultiheadAttention. After a small set of changes we can adapt the model to use scaled_dot_product_attention.
+
+
+
+PyTorch native attention implementation, see code here.
+
+Kernel trace
+
+We can now see that in particular the memory efficient attention kernel is taking up a large amount of computational time on the GPU:
+
+
+
+Using PyTorch’s native scaled_dot_product_attention, we can significantly increase the batch size. We now observe the following measurements for batch size 32 and above changes.
+
+
+
+Triton: Custom SDPA for fused relative positional encoding
+
+Transitioning away from inference throughput for a moment, we started profiling overall SAM memory. Within the image encoder, we saw significant spikes in memory allocation:
+
+
+
+Zooming in, we see this allocation happens within add_decomposed_rel_pos, on the following line:
+
+
+
+The attn variable here is the addition of two smaller tensors: rel_h of shape (B, q_h, q_w, k_h, 1) and rel_w of shape (B, q_h, q_w, 1, k_w).
+
+It’s not surprising that the memory efficient attention kernel (used via SDPA) is taking a long time with an attention bias size over 3.0GiB. If instead of allocating this large attn tensor, we thread into SDPA the two smaller rel_h and rel_w tensors, and only construct attn as needed, we’d anticipate significant performance gain.
+
+Unfortunately this is not a trivial modification; SDPA kernels are highly optimized and written in CUDA. We can turn to Triton, with their easy to understand and use tutorial on a FlashAttention implementation. After some significant digging and in close collaboration with xFormer’s Daniel Haziza we found one case of input shapes where it is relatively straightforward to implement a fused version of the kernel. The details have been added to the repository. Surprisingly this can be done in under 350 lines of code for the inference case.
+
+This is a great example of extending PyTorch with a new kernel, straightforwardly built with Triton code.
+
+Kernel trace
+
+
+
+With our custom positional Triton kernel we observe the following measurements for batch size 32.
+
+
+
+NT: NestedTensor and batching predict_torch
+
+We have spent a lot of time on the image encoder. This makes sense, since it takes up the most amount of computational time. At this point however it is fairly well optimized and the operator that takes the most time would require significant additional investment to be improved.
+
+We discovered an interesting observation with the mask prediction pipeline: for each image we have there is an associated size, coords, and fg_labels Tensor. Each of these tensors are of different batch sizes. Each image itself is also of a different size. This representation of data looks like Jagged Data. With PyTorch’s recently released NestedTensor, we can modify our data pipeline batch coords and fg_labels Tensors into a single NestedTensor. This can have significant performance benefits for the prompt encoder and mask decoder that follow the image encoder. Invoking:
+
+torch.nested.nested_tensor(data, dtype=dtype, layout=torch.jagged)
+
+
+Kernel trace
+
+
+
+
+
+We can see now that we can launch kernels much faster from the CPU than the GPU can process and that it spends a long time waiting at the end of our timed region for the GPU to finish (cudaDeviceSynchronize). We also don’t see any more idle time (white space) between kernels on the GPU.
+
+With Nested Tensor, we observe the following measurements for batch size 32 and above changes.
+
+
+
+int8: quantization and approximating matmul
+
+We notice in the above trace, that significant time is now spent in GEMM kernels. We’ve optimized enough that we now see matrix multiplication account for more time in inference than scaled dot product attention.
+
+Building on earlier learnings going from fp32 to bfloat16, let’s go a step further, emulating even lower precision with int8 quantization. Looking at quantization methods, we focus on Dynamic quantization wherein our model observes the range of possible inputs and weights of a layer, and subdivides the expressible int8 range to uniformly “spread out” observed values. Ultimately each float input will be mapped to a single integer in the range [-128, 127]. For more information see PyTorch’s tutorial on quantization
+
+Reducing precision can immediately lead to peak memory savings, but to realize inference speedups, we have to make full use of int8 through SAM’s operations. This requires building an efficient int8@int8 matrix multiplication kernel, as well as casting logic to translate from high to low precision (quantization) as well as reversing back from low to high (dequantization). Utilizing the power of torch.compile, we can compile and fuse together these quantization and dequantization routines into efficient single kernels and epilogues of our matrix multiplication. The resulting implementation is fairly short and less than 250 lines of code. For more information on the APIs and usage, see pytorch-labs/ao.
+
+While it’s common to see some accuracy regression when quantizing models at inference time, SAM has been particularly robust to lower precision inference with minimal loss of accuracy. With quantization added, we now observe the following measurements for batch size 32 and above changes.
+
+
+
+sparse: Semi-structured (2:4) sparsity
+
+Matrix multiplications are still our bottleneck. We can turn to the model acceleration playbook with another classic method to approximate matrix multiplication: sparsification. By sparsifying our matrices (i.e., zeroing out values), we could theoretically use fewer bits to store weight and activation tensors. The process by which we decide which weights in the tensor to set to zero is called pruning. The idea behind pruning is that small weights in a weight tensor contribute little to the net output of a layer, typically the product of weights with activations. Pruning away small weights can potentially reduce model size without significant loss of accuracy.
+
+Methods for pruning are varied, from completely unstructured, wherein weights are greedily pruned to highly structured, wherein large sub-components of a tensor are pruned a time. Choice of method is not trivial. While unstructured pruning may have the theoretically least impact on accuracy, GPUs are also highly efficient with multiplying large, dense matrices and may suffer significant performance degradation in sparse regimes. One recent pruning method supported in PyTorch seeks to strike a balance, called semi-structured (or 2:4) sparsity. This sparse storage reduces the original tensor by a significant 50%, while simultaneously resulting in a dense tensor output that can leverage highly performant, 2:4 GPU kernels. See the following picture for an illustration.
+
+
+
+From developer.nvidia.com/blog/exploiting-ampere-structured-sparsity-with-cusparselt
+
+In order to use this sparse storage format and the associated fast kernels we need to prune our weights such that they adhere to the constraints for the format. We pick the two smallest weights to prune in a 1 by 4 region, measuring the performance vs accuracy tradeoff. It is easy to change a weight from its default PyTorch (“strided”) layout to this new, semi-structured sparse layout. To implement apply_sparse(model) we only require 32 lines of Python code:
+
+import torch
+from torch.sparse import to_sparse_semi_structured, SparseSemiStructuredTensor
+
+# Sparsity helper functions
+def apply_fake_sparsity(model):
+    " ""="" this="" function="" simulates="" 2:4="" sparsity="" on="" all="" linear="" layers="" in="" a="" model.="" it="" uses="" the="" torch.ao.pruning="" flow.="" """="" #="" flow="" from="" import="" weightnormsparsifier="" sparse_config="[]" for="" name,="" mod="" model.named_modules():="" if="" isinstance(mod,="" torch.nn.linear):="" sparse_config.append({"tensor_fqn":="" f"{name}.weight"})="" sparsifier="WeightNormSparsifier(sparsity_level=1.0," sparse_block_shape="(1,4)," zeros_per_block="2)" sparsifier.prepare(model,="" sparse_config)="" sparsifier.step()="" sparsifier.squash_mask()="" def="" apply_sparse(model):="" apply_fake_sparsity(model)="" mod.weight="torch.nn.Parameter(to_sparse_semi_structured(mod.weight))" with="" sparsity,="" we="" observe="" peak="" performance="" sam="" vit_b="" and="" batch="" size="" 32:="" conclusion="" wrapping="" up,="" are="" excited="" to="" have="" announced="" our="" fastest="" implementation="" of="" segment="" anything="" date.="" rewrote="" meta’s="" original="" pure="" pytorch="" no="" loss="" accuracy="" using="" breadth="" newly="" released="" features:="" torch.compile="" pytorch’s="" native="" jit="" compiler,="" providing="" fast,="" automated="" fusion="" operations="" [tutorial]="" gpu="" quantization="" accelerate="" models="" reduced="" precision="" [api]="" scaled="" dot="" product="" attention="" (sdpa)="" new,="" memory="" efficient="" semi-structured="" (2:4)="" fewer="" bits="" store="" weights="" activations="" nested="" tensor="" highly="" optimized,="" ragged="" array="" handling="" non-uniform="" image="" sizes="" triton="" kernels.="" custom="" operations,="" easily="" built="" optimized="" via="" more="" details="" how="" reproduce="" data="" presented="" blog="" post,="" check="" out="" experiments="" folder="" segment-anything-fast.="" please="" don’t="" hesitate="" contact="" us="" or="" open="" an="" issue="" you="" run="" into="" any="" technical="" issues.="" next="" share="" similar="" gains="" natively="" authored="" llm!="" acknowledgements="" would="" like="" thank="" xformers="" team="" including="" daniel="" haziza="" francisco="" massa="" authoring="" sdpa="" kernels="" helping="" design="" one-off="" kernel.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerating Generative AI with PyTorch: Segment Anything, Fast">
+<meta property="og:description" content="This post is the first part of a multi-series blog focused on how to accelerate generative AI models with pure, native PyTorch. We are excited to share a breadth of newly released PyTorch performance features alongside practical examples of how these features can be combined to see how far we can push PyTorch native performance.
+
+As announced during the PyTorch Developer Conference 2023, the PyTorch team rewrote Meta’s Segment Anything (“SAM”) Model resulting in 8x faster code than the original implementation, with no loss of accuracy, all using native PyTorch optimizations. We leverage a breadth of new PyTorch features:
+
+
+  Torch.compile: A compiler for PyTorch models
+  GPU quantization: Accelerate models with reduced precision operations
+  Scaled Dot Product Attention (SDPA): Memory efficient attention implementations
+  Semi-Structured (2:4) Sparsity: A GPU optimized sparse memory format
+  Nested Tensor: Batch together non-uniformly sized data into a single Tensor, such as images of different sizes.
+  Custom operators with Triton: Write GPU operations using Triton Python DSL and easily integrate it into PyTorch’s various components with custom operator registration.
+
+
+We encourage readers to copy-paste code from our implementation of SAM on Github and ask us questions on Github.
+
+
+
+A quick glimpse of increasing throughput and decreasing memory overhead with our newly released, PyTorch native, features. Benchmarks run on p4d.24xlarge instance (8x A100s).
+
+SegmentAnything Model
+
+SAM is a zero-shot vision model for generating promptable image masks.
+
+
+
+The SAM architecture [described in its paper] includes multiple prompt and image encoders based on the Transformer architecture. Of this, we measured performance across the smallest and largest vision transformer backbones: ViT-B and ViT-H. And for simplicity, we only show traces for the ViT-B model.
+
+Optimizations
+
+Below we tell the story of optimizing SAM: profiling, identifying bottlenecks, and building new features into PyTorch that solve these problems. Throughout, we showcase our new PyTorch features: torch.compile, SDPA, Triton kernels, Nested Tensor and semi-structured sparsity. The following sections are progressively built upon each other, ending with our SAM-fast, now available on Github. We motivate each feature using real kernel and memory traces, using fully PyTorch native tooling, and visualize these traces with Perfetto UI.
+
+Baseline
+
+Our SAM baseline is Facebook Research’s unmodified model, using float32 dtype and a batch size of 1. After some initial warmup, we can look at a kernel trace using the PyTorch Profiler:
+
+
+
+We notice two areas ripe for optimization.
+
+The first is long calls to aten::index, the underlying call resulting from a Tensor index operation (e.g., []). While the actual GPU time spent on aten::index is relatively low. aten::index is launching two kernels, and a blocking cudaStreamSynchronize is happening in between. This means the CPU is waiting for the GPU to finish processing until it launches the second kernel. To optimize SAM, we should aim to remove blocking GPU syncs causing idle time.
+
+The second is significant time spent on GPU in matrix multiplication (dark green on stream 7 7 above). This is common in Transformers. We can significantly speed up SAM if we can reduce the amount of GPU time spent on matrix multiplication.
+
+We can measure the throughput (img/s) and memory overhead (GiB) from out of the box SAM to establish a baseline:
+
+
+
+Bfloat16 Half precision (+GPU syncs and batching)
+
+To address the first issue of less time spent in matrix multiplication, we can turn to bfloat16. Bfloat16 is a commonly used half-precision type. Through less precision per parameter and activations, we can save significant time and memory in computation. With reducing precision of parameters, it’s critical to validate end to end model accuracy.
+
+
+
+Shown here is an example of replacing padding dtypes with half precision, bfloat16. Code is here.
+
+Next to simply setting model.to(torch.bfloat16) we have to change a few small places that assume the default dtype.
+
+Now, in order to remove GPU syncs we need to audit operations that cause them. We can find these pieces of code by searching the GPU traces for calls to cudaStreamSynchronize. In fact, we found two locations that we were able to rewrite to be sync-free.
+
+
+
+
+
+Specifically, we see that within SAM’s image encoder, there are variables acting as coordinate scalers, q_coords and k_coords. These are both allocated and processed on the CPU. However, once these variables are used to index in rel_pos_resized, the index operation automatically moves these variables to the GPU. This copy over causes the GPU sync we’ve observed above. We notice a second call to index in SAM’s prompt encoder: We can use torch.where to rewrite this as shown above.
+
+Kernel trace
+
+After applying these changes, we begin to see significant time between individual kernel calls. This is typically observed with small batch sizes (1 here) due to the GPU overhead of launching kernels. To get a closer look at practical areas for optimization, we can start to profile SAM inference with batch size 8:
+
+
+
+Looking at the time spent per-kernel, we obverse most of SAM’s GPU time&nbsp;spent on elementwise kernels and softmax operation. With this we now see that matrix multiplications have become a much smaller relative overhead.
+
+
+
+Taken the GPU sync and bfloat16 optimizations together, we have now pushed SAM performance by up to 3x
+
+
+
+Torch.compile (+graph breaks and CUDA graphs)
+
+When observing a large number of small operations, such as the elementwise kernels profiled above, turning to a compiler to fuse operations can have strong benefits. PyTorch’s recently released torch.compile does a great job optimizing by:
+
+
+  Fusing together sequences of operations such as nn.LayerNorm or nn.GELU into a single GPU kernel that is called and
+  Epilogues: fusing operations that immediately follow matrix multiplication kernels to reduce the number of GPU kernel calls.
+
+
+Through these optimizations, we reduce the number of GPU global memory roundtrips, thus speeding up inference. We can now try torch.compile on SAM’s image encoder. To maximize performance we use a few advanced compile techniques such as:
+
+
+  using torch.compile’s max-autotune mode enables CUDA graphs and shape-specific kernels with custom epilogues
+  By setting TORCH_LOGS=”graph_breaks,recompiles” we can manually verify that we are not running into graph breaks or recompiles.
+  Padding the batch of images input to the encoder with zeros ensures compile accepts static shapes thus being able to always use shape-specific optimized kernels with custom epilogues without recompilations.
+
+
+predictor.model.image_encoder = \
+    torch.compile(predictor.model.image_encoder, mode=use_compile)
+
+
+Kernel trace
+
+
+
+torch.compile is working beautifully. We launch a single CUDA graph, which makes up a significant portion of GPU time within the timed region. Let’s run our profile again and look at the percentage of GPU time spent in specific kernels:
+
+
+
+We now see softmax makes up a significant portion of the time followed by various GEMM variants. In summary we observe the following measurements for batch size 8 and above changes.
+
+
+
+SDPA: scaled_dot_product_attention
+
+Next up, we can tackle one of the most common areas for transformer performance overhead: the attention mechanism. Naive attention implementations scale quadratically in time and memory with sequence length. PyTorch’s scaled_dot_product_attention operation built upon the principles of Flash Attention, FlashAttentionV2 and xFormer’s memory efficient attention can significantly speed up GPU attention. Combined with torch.compile, this operation allows us to express and fuse a common pattern within variants of MultiheadAttention. After a small set of changes we can adapt the model to use scaled_dot_product_attention.
+
+
+
+PyTorch native attention implementation, see code here.
+
+Kernel trace
+
+We can now see that in particular the memory efficient attention kernel is taking up a large amount of computational time on the GPU:
+
+
+
+Using PyTorch’s native scaled_dot_product_attention, we can significantly increase the batch size. We now observe the following measurements for batch size 32 and above changes.
+
+
+
+Triton: Custom SDPA for fused relative positional encoding
+
+Transitioning away from inference throughput for a moment, we started profiling overall SAM memory. Within the image encoder, we saw significant spikes in memory allocation:
+
+
+
+Zooming in, we see this allocation happens within add_decomposed_rel_pos, on the following line:
+
+
+
+The attn variable here is the addition of two smaller tensors: rel_h of shape (B, q_h, q_w, k_h, 1) and rel_w of shape (B, q_h, q_w, 1, k_w).
+
+It’s not surprising that the memory efficient attention kernel (used via SDPA) is taking a long time with an attention bias size over 3.0GiB. If instead of allocating this large attn tensor, we thread into SDPA the two smaller rel_h and rel_w tensors, and only construct attn as needed, we’d anticipate significant performance gain.
+
+Unfortunately this is not a trivial modification; SDPA kernels are highly optimized and written in CUDA. We can turn to Triton, with their easy to understand and use tutorial on a FlashAttention implementation. After some significant digging and in close collaboration with xFormer’s Daniel Haziza we found one case of input shapes where it is relatively straightforward to implement a fused version of the kernel. The details have been added to the repository. Surprisingly this can be done in under 350 lines of code for the inference case.
+
+This is a great example of extending PyTorch with a new kernel, straightforwardly built with Triton code.
+
+Kernel trace
+
+
+
+With our custom positional Triton kernel we observe the following measurements for batch size 32.
+
+
+
+NT: NestedTensor and batching predict_torch
+
+We have spent a lot of time on the image encoder. This makes sense, since it takes up the most amount of computational time. At this point however it is fairly well optimized and the operator that takes the most time would require significant additional investment to be improved.
+
+We discovered an interesting observation with the mask prediction pipeline: for each image we have there is an associated size, coords, and fg_labels Tensor. Each of these tensors are of different batch sizes. Each image itself is also of a different size. This representation of data looks like Jagged Data. With PyTorch’s recently released NestedTensor, we can modify our data pipeline batch coords and fg_labels Tensors into a single NestedTensor. This can have significant performance benefits for the prompt encoder and mask decoder that follow the image encoder. Invoking:
+
+torch.nested.nested_tensor(data, dtype=dtype, layout=torch.jagged)
+
+
+Kernel trace
+
+
+
+
+
+We can see now that we can launch kernels much faster from the CPU than the GPU can process and that it spends a long time waiting at the end of our timed region for the GPU to finish (cudaDeviceSynchronize). We also don’t see any more idle time (white space) between kernels on the GPU.
+
+With Nested Tensor, we observe the following measurements for batch size 32 and above changes.
+
+
+
+int8: quantization and approximating matmul
+
+We notice in the above trace, that significant time is now spent in GEMM kernels. We’ve optimized enough that we now see matrix multiplication account for more time in inference than scaled dot product attention.
+
+Building on earlier learnings going from fp32 to bfloat16, let’s go a step further, emulating even lower precision with int8 quantization. Looking at quantization methods, we focus on Dynamic quantization wherein our model observes the range of possible inputs and weights of a layer, and subdivides the expressible int8 range to uniformly “spread out” observed values. Ultimately each float input will be mapped to a single integer in the range [-128, 127]. For more information see PyTorch’s tutorial on quantization
+
+Reducing precision can immediately lead to peak memory savings, but to realize inference speedups, we have to make full use of int8 through SAM’s operations. This requires building an efficient int8@int8 matrix multiplication kernel, as well as casting logic to translate from high to low precision (quantization) as well as reversing back from low to high (dequantization). Utilizing the power of torch.compile, we can compile and fuse together these quantization and dequantization routines into efficient single kernels and epilogues of our matrix multiplication. The resulting implementation is fairly short and less than 250 lines of code. For more information on the APIs and usage, see pytorch-labs/ao.
+
+While it’s common to see some accuracy regression when quantizing models at inference time, SAM has been particularly robust to lower precision inference with minimal loss of accuracy. With quantization added, we now observe the following measurements for batch size 32 and above changes.
+
+
+
+sparse: Semi-structured (2:4) sparsity
+
+Matrix multiplications are still our bottleneck. We can turn to the model acceleration playbook with another classic method to approximate matrix multiplication: sparsification. By sparsifying our matrices (i.e., zeroing out values), we could theoretically use fewer bits to store weight and activation tensors. The process by which we decide which weights in the tensor to set to zero is called pruning. The idea behind pruning is that small weights in a weight tensor contribute little to the net output of a layer, typically the product of weights with activations. Pruning away small weights can potentially reduce model size without significant loss of accuracy.
+
+Methods for pruning are varied, from completely unstructured, wherein weights are greedily pruned to highly structured, wherein large sub-components of a tensor are pruned a time. Choice of method is not trivial. While unstructured pruning may have the theoretically least impact on accuracy, GPUs are also highly efficient with multiplying large, dense matrices and may suffer significant performance degradation in sparse regimes. One recent pruning method supported in PyTorch seeks to strike a balance, called semi-structured (or 2:4) sparsity. This sparse storage reduces the original tensor by a significant 50%, while simultaneously resulting in a dense tensor output that can leverage highly performant, 2:4 GPU kernels. See the following picture for an illustration.
+
+
+
+From developer.nvidia.com/blog/exploiting-ampere-structured-sparsity-with-cusparselt
+
+In order to use this sparse storage format and the associated fast kernels we need to prune our weights such that they adhere to the constraints for the format. We pick the two smallest weights to prune in a 1 by 4 region, measuring the performance vs accuracy tradeoff. It is easy to change a weight from its default PyTorch (“strided”) layout to this new, semi-structured sparse layout. To implement apply_sparse(model) we only require 32 lines of Python code:
+
+import torch
+from torch.sparse import to_sparse_semi_structured, SparseSemiStructuredTensor
+
+# Sparsity helper functions
+def apply_fake_sparsity(model):
+    " ""="" this="" function="" simulates="" 2:4="" sparsity="" on="" all="" linear="" layers="" in="" a="" model.="" it="" uses="" the="" torch.ao.pruning="" flow.="" """="" #="" flow="" from="" import="" weightnormsparsifier="" sparse_config="[]" for="" name,="" mod="" model.named_modules():="" if="" isinstance(mod,="" torch.nn.linear):="" sparse_config.append({"tensor_fqn":="" f"{name}.weight"})="" sparsifier="WeightNormSparsifier(sparsity_level=1.0," sparse_block_shape="(1,4)," zeros_per_block="2)" sparsifier.prepare(model,="" sparse_config)="" sparsifier.step()="" sparsifier.squash_mask()="" def="" apply_sparse(model):="" apply_fake_sparsity(model)="" mod.weight="torch.nn.Parameter(to_sparse_semi_structured(mod.weight))" with="" sparsity,="" we="" observe="" peak="" performance="" sam="" vit_b="" and="" batch="" size="" 32:="" conclusion="" wrapping="" up,="" are="" excited="" to="" have="" announced="" our="" fastest="" implementation="" of="" segment="" anything="" date.="" rewrote="" meta’s="" original="" pure="" pytorch="" no="" loss="" accuracy="" using="" breadth="" newly="" released="" features:="" torch.compile="" pytorch’s="" native="" jit="" compiler,="" providing="" fast,="" automated="" fusion="" operations="" [tutorial]="" gpu="" quantization="" accelerate="" models="" reduced="" precision="" [api]="" scaled="" dot="" product="" attention="" (sdpa)="" new,="" memory="" efficient="" semi-structured="" (2:4)="" fewer="" bits="" store="" weights="" activations="" nested="" tensor="" highly="" optimized,="" ragged="" array="" handling="" non-uniform="" image="" sizes="" triton="" kernels.="" custom="" operations,="" easily="" built="" optimized="" via="" more="" details="" how="" reproduce="" data="" presented="" blog="" post,="" check="" out="" experiments="" folder="" segment-anything-fast.="" please="" don’t="" hesitate="" contact="" us="" or="" open="" an="" issue="" you="" run="" into="" any="" technical="" issues.="" next="" share="" similar="" gains="" natively="" authored="" llm!="" acknowledgements="" would="" like="" thank="" xformers="" team="" including="" daniel="" haziza="" francisco="" massa="" authoring="" sdpa="" kernels="" helping="" design="" one-off="" kernel.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerating Generative AI with PyTorch: Segment Anything, Fast">
+<meta name="twitter:description" content="This post is the first part of a multi-series blog focused on how to accelerate generative AI models with pure, native PyTorch. We are excited to share a breadth of newly released PyTorch performance features alongside practical examples of how these features can be combined to see how far we can push PyTorch native performance.
+
+As announced during the PyTorch Developer Conference 2023, the PyTorch team rewrote Meta’s Segment Anything (“SAM”) Model resulting in 8x faster code than the original implementation, with no loss of accuracy, all using native PyTorch optimizations. We leverage a breadth of new PyTorch features:
+
+
+  Torch.compile: A compiler for PyTorch models
+  GPU quantization: Accelerate models with reduced precision operations
+  Scaled Dot Product Attention (SDPA): Memory efficient attention implementations
+  Semi-Structured (2:4) Sparsity: A GPU optimized sparse memory format
+  Nested Tensor: Batch together non-uniformly sized data into a single Tensor, such as images of different sizes.
+  Custom operators with Triton: Write GPU operations using Triton Python DSL and easily integrate it into PyTorch’s various components with custom operator registration.
+
+
+We encourage readers to copy-paste code from our implementation of SAM on Github and ask us questions on Github.
+
+
+
+A quick glimpse of increasing throughput and decreasing memory overhead with our newly released, PyTorch native, features. Benchmarks run on p4d.24xlarge instance (8x A100s).
+
+SegmentAnything Model
+
+SAM is a zero-shot vision model for generating promptable image masks.
+
+
+
+The SAM architecture [described in its paper] includes multiple prompt and image encoders based on the Transformer architecture. Of this, we measured performance across the smallest and largest vision transformer backbones: ViT-B and ViT-H. And for simplicity, we only show traces for the ViT-B model.
+
+Optimizations
+
+Below we tell the story of optimizing SAM: profiling, identifying bottlenecks, and building new features into PyTorch that solve these problems. Throughout, we showcase our new PyTorch features: torch.compile, SDPA, Triton kernels, Nested Tensor and semi-structured sparsity. The following sections are progressively built upon each other, ending with our SAM-fast, now available on Github. We motivate each feature using real kernel and memory traces, using fully PyTorch native tooling, and visualize these traces with Perfetto UI.
+
+Baseline
+
+Our SAM baseline is Facebook Research’s unmodified model, using float32 dtype and a batch size of 1. After some initial warmup, we can look at a kernel trace using the PyTorch Profiler:
+
+
+
+We notice two areas ripe for optimization.
+
+The first is long calls to aten::index, the underlying call resulting from a Tensor index operation (e.g., []). While the actual GPU time spent on aten::index is relatively low. aten::index is launching two kernels, and a blocking cudaStreamSynchronize is happening in between. This means the CPU is waiting for the GPU to finish processing until it launches the second kernel. To optimize SAM, we should aim to remove blocking GPU syncs causing idle time.
+
+The second is significant time spent on GPU in matrix multiplication (dark green on stream 7 7 above). This is common in Transformers. We can significantly speed up SAM if we can reduce the amount of GPU time spent on matrix multiplication.
+
+We can measure the throughput (img/s) and memory overhead (GiB) from out of the box SAM to establish a baseline:
+
+
+
+Bfloat16 Half precision (+GPU syncs and batching)
+
+To address the first issue of less time spent in matrix multiplication, we can turn to bfloat16. Bfloat16 is a commonly used half-precision type. Through less precision per parameter and activations, we can save significant time and memory in computation. With reducing precision of parameters, it’s critical to validate end to end model accuracy.
+
+
+
+Shown here is an example of replacing padding dtypes with half precision, bfloat16. Code is here.
+
+Next to simply setting model.to(torch.bfloat16) we have to change a few small places that assume the default dtype.
+
+Now, in order to remove GPU syncs we need to audit operations that cause them. We can find these pieces of code by searching the GPU traces for calls to cudaStreamSynchronize. In fact, we found two locations that we were able to rewrite to be sync-free.
+
+
+
+
+
+Specifically, we see that within SAM’s image encoder, there are variables acting as coordinate scalers, q_coords and k_coords. These are both allocated and processed on the CPU. However, once these variables are used to index in rel_pos_resized, the index operation automatically moves these variables to the GPU. This copy over causes the GPU sync we’ve observed above. We notice a second call to index in SAM’s prompt encoder: We can use torch.where to rewrite this as shown above.
+
+Kernel trace
+
+After applying these changes, we begin to see significant time between individual kernel calls. This is typically observed with small batch sizes (1 here) due to the GPU overhead of launching kernels. To get a closer look at practical areas for optimization, we can start to profile SAM inference with batch size 8:
+
+
+
+Looking at the time spent per-kernel, we obverse most of SAM’s GPU time&nbsp;spent on elementwise kernels and softmax operation. With this we now see that matrix multiplications have become a much smaller relative overhead.
+
+
+
+Taken the GPU sync and bfloat16 optimizations together, we have now pushed SAM performance by up to 3x
+
+
+
+Torch.compile (+graph breaks and CUDA graphs)
+
+When observing a large number of small operations, such as the elementwise kernels profiled above, turning to a compiler to fuse operations can have strong benefits. PyTorch’s recently released torch.compile does a great job optimizing by:
+
+
+  Fusing together sequences of operations such as nn.LayerNorm or nn.GELU into a single GPU kernel that is called and
+  Epilogues: fusing operations that immediately follow matrix multiplication kernels to reduce the number of GPU kernel calls.
+
+
+Through these optimizations, we reduce the number of GPU global memory roundtrips, thus speeding up inference. We can now try torch.compile on SAM’s image encoder. To maximize performance we use a few advanced compile techniques such as:
+
+
+  using torch.compile’s max-autotune mode enables CUDA graphs and shape-specific kernels with custom epilogues
+  By setting TORCH_LOGS=”graph_breaks,recompiles” we can manually verify that we are not running into graph breaks or recompiles.
+  Padding the batch of images input to the encoder with zeros ensures compile accepts static shapes thus being able to always use shape-specific optimized kernels with custom epilogues without recompilations.
+
+
+predictor.model.image_encoder = \
+    torch.compile(predictor.model.image_encoder, mode=use_compile)
+
+
+Kernel trace
+
+
+
+torch.compile is working beautifully. We launch a single CUDA graph, which makes up a significant portion of GPU time within the timed region. Let’s run our profile again and look at the percentage of GPU time spent in specific kernels:
+
+
+
+We now see softmax makes up a significant portion of the time followed by various GEMM variants. In summary we observe the following measurements for batch size 8 and above changes.
+
+
+
+SDPA: scaled_dot_product_attention
+
+Next up, we can tackle one of the most common areas for transformer performance overhead: the attention mechanism. Naive attention implementations scale quadratically in time and memory with sequence length. PyTorch’s scaled_dot_product_attention operation built upon the principles of Flash Attention, FlashAttentionV2 and xFormer’s memory efficient attention can significantly speed up GPU attention. Combined with torch.compile, this operation allows us to express and fuse a common pattern within variants of MultiheadAttention. After a small set of changes we can adapt the model to use scaled_dot_product_attention.
+
+
+
+PyTorch native attention implementation, see code here.
+
+Kernel trace
+
+We can now see that in particular the memory efficient attention kernel is taking up a large amount of computational time on the GPU:
+
+
+
+Using PyTorch’s native scaled_dot_product_attention, we can significantly increase the batch size. We now observe the following measurements for batch size 32 and above changes.
+
+
+
+Triton: Custom SDPA for fused relative positional encoding
+
+Transitioning away from inference throughput for a moment, we started profiling overall SAM memory. Within the image encoder, we saw significant spikes in memory allocation:
+
+
+
+Zooming in, we see this allocation happens within add_decomposed_rel_pos, on the following line:
+
+
+
+The attn variable here is the addition of two smaller tensors: rel_h of shape (B, q_h, q_w, k_h, 1) and rel_w of shape (B, q_h, q_w, 1, k_w).
+
+It’s not surprising that the memory efficient attention kernel (used via SDPA) is taking a long time with an attention bias size over 3.0GiB. If instead of allocating this large attn tensor, we thread into SDPA the two smaller rel_h and rel_w tensors, and only construct attn as needed, we’d anticipate significant performance gain.
+
+Unfortunately this is not a trivial modification; SDPA kernels are highly optimized and written in CUDA. We can turn to Triton, with their easy to understand and use tutorial on a FlashAttention implementation. After some significant digging and in close collaboration with xFormer’s Daniel Haziza we found one case of input shapes where it is relatively straightforward to implement a fused version of the kernel. The details have been added to the repository. Surprisingly this can be done in under 350 lines of code for the inference case.
+
+This is a great example of extending PyTorch with a new kernel, straightforwardly built with Triton code.
+
+Kernel trace
+
+
+
+With our custom positional Triton kernel we observe the following measurements for batch size 32.
+
+
+
+NT: NestedTensor and batching predict_torch
+
+We have spent a lot of time on the image encoder. This makes sense, since it takes up the most amount of computational time. At this point however it is fairly well optimized and the operator that takes the most time would require significant additional investment to be improved.
+
+We discovered an interesting observation with the mask prediction pipeline: for each image we have there is an associated size, coords, and fg_labels Tensor. Each of these tensors are of different batch sizes. Each image itself is also of a different size. This representation of data looks like Jagged Data. With PyTorch’s recently released NestedTensor, we can modify our data pipeline batch coords and fg_labels Tensors into a single NestedTensor. This can have significant performance benefits for the prompt encoder and mask decoder that follow the image encoder. Invoking:
+
+torch.nested.nested_tensor(data, dtype=dtype, layout=torch.jagged)
+
+
+Kernel trace
+
+
+
+
+
+We can see now that we can launch kernels much faster from the CPU than the GPU can process and that it spends a long time waiting at the end of our timed region for the GPU to finish (cudaDeviceSynchronize). We also don’t see any more idle time (white space) between kernels on the GPU.
+
+With Nested Tensor, we observe the following measurements for batch size 32 and above changes.
+
+
+
+int8: quantization and approximating matmul
+
+We notice in the above trace, that significant time is now spent in GEMM kernels. We’ve optimized enough that we now see matrix multiplication account for more time in inference than scaled dot product attention.
+
+Building on earlier learnings going from fp32 to bfloat16, let’s go a step further, emulating even lower precision with int8 quantization. Looking at quantization methods, we focus on Dynamic quantization wherein our model observes the range of possible inputs and weights of a layer, and subdivides the expressible int8 range to uniformly “spread out” observed values. Ultimately each float input will be mapped to a single integer in the range [-128, 127]. For more information see PyTorch’s tutorial on quantization
+
+Reducing precision can immediately lead to peak memory savings, but to realize inference speedups, we have to make full use of int8 through SAM’s operations. This requires building an efficient int8@int8 matrix multiplication kernel, as well as casting logic to translate from high to low precision (quantization) as well as reversing back from low to high (dequantization). Utilizing the power of torch.compile, we can compile and fuse together these quantization and dequantization routines into efficient single kernels and epilogues of our matrix multiplication. The resulting implementation is fairly short and less than 250 lines of code. For more information on the APIs and usage, see pytorch-labs/ao.
+
+While it’s common to see some accuracy regression when quantizing models at inference time, SAM has been particularly robust to lower precision inference with minimal loss of accuracy. With quantization added, we now observe the following measurements for batch size 32 and above changes.
+
+
+
+sparse: Semi-structured (2:4) sparsity
+
+Matrix multiplications are still our bottleneck. We can turn to the model acceleration playbook with another classic method to approximate matrix multiplication: sparsification. By sparsifying our matrices (i.e., zeroing out values), we could theoretically use fewer bits to store weight and activation tensors. The process by which we decide which weights in the tensor to set to zero is called pruning. The idea behind pruning is that small weights in a weight tensor contribute little to the net output of a layer, typically the product of weights with activations. Pruning away small weights can potentially reduce model size without significant loss of accuracy.
+
+Methods for pruning are varied, from completely unstructured, wherein weights are greedily pruned to highly structured, wherein large sub-components of a tensor are pruned a time. Choice of method is not trivial. While unstructured pruning may have the theoretically least impact on accuracy, GPUs are also highly efficient with multiplying large, dense matrices and may suffer significant performance degradation in sparse regimes. One recent pruning method supported in PyTorch seeks to strike a balance, called semi-structured (or 2:4) sparsity. This sparse storage reduces the original tensor by a significant 50%, while simultaneously resulting in a dense tensor output that can leverage highly performant, 2:4 GPU kernels. See the following picture for an illustration.
+
+
+
+From developer.nvidia.com/blog/exploiting-ampere-structured-sparsity-with-cusparselt
+
+In order to use this sparse storage format and the associated fast kernels we need to prune our weights such that they adhere to the constraints for the format. We pick the two smallest weights to prune in a 1 by 4 region, measuring the performance vs accuracy tradeoff. It is easy to change a weight from its default PyTorch (“strided”) layout to this new, semi-structured sparse layout. To implement apply_sparse(model) we only require 32 lines of Python code:
+
+import torch
+from torch.sparse import to_sparse_semi_structured, SparseSemiStructuredTensor
+
+# Sparsity helper functions
+def apply_fake_sparsity(model):
+    " ""="" this="" function="" simulates="" 2:4="" sparsity="" on="" all="" linear="" layers="" in="" a="" model.="" it="" uses="" the="" torch.ao.pruning="" flow.="" """="" #="" flow="" from="" import="" weightnormsparsifier="" sparse_config="[]" for="" name,="" mod="" model.named_modules():="" if="" isinstance(mod,="" torch.nn.linear):="" sparse_config.append({"tensor_fqn":="" f"{name}.weight"})="" sparsifier="WeightNormSparsifier(sparsity_level=1.0," sparse_block_shape="(1,4)," zeros_per_block="2)" sparsifier.prepare(model,="" sparse_config)="" sparsifier.step()="" sparsifier.squash_mask()="" def="" apply_sparse(model):="" apply_fake_sparsity(model)="" mod.weight="torch.nn.Parameter(to_sparse_semi_structured(mod.weight))" with="" sparsity,="" we="" observe="" peak="" performance="" sam="" vit_b="" and="" batch="" size="" 32:="" conclusion="" wrapping="" up,="" are="" excited="" to="" have="" announced="" our="" fastest="" implementation="" of="" segment="" anything="" date.="" rewrote="" meta’s="" original="" pure="" pytorch="" no="" loss="" accuracy="" using="" breadth="" newly="" released="" features:="" torch.compile="" pytorch’s="" native="" jit="" compiler,="" providing="" fast,="" automated="" fusion="" operations="" [tutorial]="" gpu="" quantization="" accelerate="" models="" reduced="" precision="" [api]="" scaled="" dot="" product="" attention="" (sdpa)="" new,="" memory="" efficient="" semi-structured="" (2:4)="" fewer="" bits="" store="" weights="" activations="" nested="" tensor="" highly="" optimized,="" ragged="" array="" handling="" non-uniform="" image="" sizes="" triton="" kernels.="" custom="" operations,="" easily="" built="" optimized="" via="" more="" details="" how="" reproduce="" data="" presented="" blog="" post,="" check="" out="" experiments="" folder="" segment-anything-fast.="" please="" don’t="" hesitate="" contact="" us="" or="" open="" an="" issue="" you="" run="" into="" any="" technical="" issues.="" next="" share="" similar="" gains="" natively="" authored="" llm!="" acknowledgements="" would="" like="" thank="" xformers="" team="" including="" daniel="" haziza="" francisco="" massa="" authoring="" sdpa="" kernels="" helping="" design="" one-off="" kernel.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年11月16日</p>
+            <h1>
+                <a class="blog-title">使用 PyTorch 加速生成式 AI：Segment Anything，快速</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>本文是关于如何使用纯原生的 PyTorch 加速生成式 AI 模型的系列博客的第一部分。我们很高兴地分享一系列新发布的 PyTorch 性能特性，以及如何将这些特性结合起来进行实际示例，以展示 PyTorch 原生性能的极限。</p>
+
+<p>如在 2023 年 PyTorch 开发者大会上宣布的那样，PyTorch 团队<a href="https://www.youtube.com/watch?v=IWpM_9AsC-U">重写了 Meta 的 Segment Anything（“SAM”）模型</a><strong>代码速度比原始实现快 8 倍 </strong>，且没有损失精度，全部使用原生 PyTorch 优化。我们利用了 PyTorch 的新特性：</p>
+
+<ul>
+  <li><a href="https://maskerprc.github.io/tutorials/intermediate/torch_compile_tutorial.html">Torch.compile</a>：PyTorch 模型的编译器</li>
+  <li><a href="https://github.com/pytorch-labs/ao/tree/main#torchao">GPU 量化 </a>：使用降低精度操作加速模型</li>
+  <li><a href="https://maskerprc.github.io/tutorials/intermediate/scaled_dot_product_attention_tutorial.html">缩放点积注意力（SDPA）</a>：内存高效的注意力实现</li>
+  <li><a href="https://maskerprc.github.io/tutorials/prototype/semi_structured_sparse.html">半结构化（2:4）稀疏性：</a>GPU 优化的稀疏内存格式</li>
+  <li><a href="https://maskerprc.github.io/tutorials/prototype/nestedtensor.html">嵌套张量：</a> 将不同尺寸的数据批量组合成一个张量，例如不同尺寸的图像。</li>
+  <li><strong>使用 Triton 的定制操作符：</strong> 使用 Triton Python DSL 编写 GPU 操作，并轻松将其集成到 PyTorch 的各种组件中，通过自定义操作符注册。</li>
+</ul>
+
+<p>我们鼓励读者复制粘贴来自<a href="https://github.com/pytorch-labs/segment-anything-fast">我们 GitHub 上的 SAM 实现</a>的代码，并在 <a href="https://github.com/pytorch-labs/segment-anything-fast/issues">GitHub 上向我们提问 </a>。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_7.png" alt="A quick glimpse of increasing throughput and decreasing memory overhead" style="width:100%;"></p>
+
+<p><em>快速了解我们新发布的 PyTorch 原生功能如何提高吞吐量和降低内存开销。基准测试在 p4d.24xlarge 实例（8x A100s）上运行。</em></p>
+
+<h2 id="segmentanything-model">SegmentAnything 模型</h2>
+
+<p><a href="https://github.com/facebookresearch/segment-anything">SAM</a> 是一种零样本视觉模型，用于生成可提示的图像掩码。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/intro_image.jpg" alt="sam image masks" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p>SAM 架构[在<a href="https://arxiv.org/abs/2304.02643">其论文</a>中描述]包括基于 Transformer 架构的多个提示和图像编码器。其中，我们测量了性能，涵盖了最小的和最大的视觉 Transformer 骨干：<a href="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth">ViT-B</a> 和 <a href="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth">ViT-H</a>。为了简单起见，我们只展示了 ViT-B 模型的痕迹。</p>
+
+<h2 id="optimizations">优化</h2>
+
+<p>下面我们讲述优化 SAM 的故事：分析性能、识别瓶颈，并将新的功能构建到 PyTorch 中以解决这些问题。在整个过程中，我们展示了我们的新 PyTorch 功能：<strong>torch.compile，SDPA，Triton 内核，嵌套张量和半结构化稀疏性。</strong> 以下各节依次构建，最终以现在在 <a href="https://github.com/pytorch-labs/segment-anything-fast">Github</a> 上可用的 SAM-fast 为结束。我们使用真实的内核和内存痕迹来激励每个功能，使用完全 PyTorch 原生的工具，并使用 <a href="https://perfetto.dev/">Perfetto UI</a> 可视化这些痕迹。</p>
+
+<h3 id="baseline">基准</h3>
+
+<p>我们的 SAM 基线是 Facebook Research 的<a href="https://github.com/facebookresearch/segment-anything">未修改模型 </a>，使用 float32 数据类型和批大小为 1。经过一些初始预热后，我们可以使用 <a href="https://maskerprc.github.io/tutorials/recipes/recipes/profiler_recipe.html">PyTorch Profiler</a> 查看内核跟踪：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/baseline_trace.jpg" alt="kernel trace" style="width:100%;"></p>
+
+<p>我们注意到两个优化热点。</p>
+
+<p>第一个是 aten::index 的长调用，这是由 Tensor 索引操作（例如[]）导致的底层调用。虽然 aten::index 实际在 GPU 上花费的时间相对较低，但 aten::index 会启动两个内核，并在其中间发生阻塞的 cudaStreamSynchronize。这意味着 CPU 在启动第二个内核之前，需要等待 GPU 完成处理。为了优化 SAM，我们应该旨在移除导致空闲时间的阻塞 GPU 同步。</p>
+
+<p>第二个是在 GPU 上花费的显著时间，用于矩阵乘法（如图中流 7 7 上的深绿色）。这在 Transformers 中很常见。如果我们能减少矩阵乘法在 GPU 上花费的时间，就可以显著加快 SAM 的速度。</p>
+
+<p>我们可以从开箱即用的 SAM 测量吞吐量（img/s）和内存开销（GiB），以建立基线：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_0.png" alt="throughput (img/s) and memory overhead (GiB) from out of the box SAM" style="width:100%;"></p>
+
+<h3 id="bfloat16-half-precision-gpu-syncs-and-batching">Bfloat16 半精度（+GPU 同步和批处理）</h3>
+
+<p>为了解决矩阵乘法耗时较少的第一个问题，我们可以转向 <a href="https://en.wikipedia.org/wiki/Bfloat16_floating-point_format">bfloat16</a>。Bfloat16 是一种常用的半精度类型。通过减少每个参数和激活的精度，我们可以在计算中节省大量时间和内存。在减少参数精度的同时，验证端到端模型精度至关重要。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bfloat16_snippet.jpg" alt="replacing padding dtypes with half precision, bfloat16" style="width:100%;"></p>
+
+<p><em>下面是一个将填充数据类型替换为半精度、bfloat16 的示例。 <a href="https://github.com/pytorch-labs/segment-anything-fast/blame/main/segment_anything_fast/modeling/prompt_encoder.py#L86"> 代码在此 </a>。</em></p>
+
+<p>在简单地设置 <code class="language-plaintext highlighter-rouge">model.to(torch.bfloat16)</code> 之后，我们还需要更改一些假设默认数据类型的微小地方。</p>
+
+<p>现在，为了移除 GPU 同步，我们需要审计导致同步的操作。我们可以通过搜索 GPU 跟踪中的 <code class="language-plaintext highlighter-rouge">cudaStreamSynchronize</code> 调用来找到这些代码片段。实际上，我们找到了两个可以重写为无同步的地点。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/code1.jpg" alt="code sample 1" style="width:100%;"></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bfloat16_snippet2.jpg" alt="replacing padding dtypes with half precision, bfloat16" style="width:100%;"></p>
+
+<p>具体来说，我们在 SAM 的图像编码器中看到，有一些变量作为坐标缩放器，q_coords 和 k_coords。这两个变量都在 CPU 上分配和处理。然而，一旦这些变量用于在 rel_pos_resized 中索引，索引操作会自动将这些变量移动到 GPU。这次复制导致了我们观察到的 GPU 同步。我们注意到 SAM 的提示编码器中有一个索引的第二次调用：我们可以使用 torch.where 将其重写，如上所示。</p>
+
+<p><strong>内核跟踪</strong></p>
+
+<p>在应用这些更改后，我们开始看到各个内核调用之间出现了显著的时间间隔。这通常在小型批次（这里为 1）时观察到，因为启动内核的 GPU 开销。为了更接近地观察优化的实际领域，我们可以从批大小为 8 的 SAM 推理开始进行性能分析：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bfloat16_trace.jpg" alt="profile SAM inference with batch size 8" style="width:100%;"></p>
+
+<p>观察每个内核花费的时间，我们发现 SAM 的大部分 GPU 时间都花在了逐元素内核和 softmax 操作上。有了这个，我们现在可以看到矩阵乘法已经变成了一个相对较小的开销。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bfloat16_kernels.jpg" alt="matrix multiplications have become a much smaller relative overhead" style="width:100%;"></p>
+
+<p>将 GPU 同步和 bfloat16 优化结合起来，我们现在将 SAM 的性能提升了高达 3 倍</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_1.png" alt="SAM performance by up to 3x" style="width:100%;"></p>
+
+<h3 id="torchcompile-graph-breaks-and-cuda-graphs">Torch.compile（+图断点和 CUDA 图）</h3>
+
+<p>当观察大量的小操作，例如上面分析过的逐元素核时，转向编译器进行操作融合可以带来显著的好处。PyTorch 最近发布的 <strong>torch.compile 在优化方面做得非常出色，通过以下方式：</strong></p>
+
+<ol>
+  <li>将 nn.LayerNorm 或 nn.GELU 等操作序列融合成一个单一的 GPU 内核进行调用</li>
+  <li>后记：将紧随矩阵乘法内核的操作进行融合，以减少 GPU 内核调用的次数。</li>
+</ol>
+
+<p>通过这些优化，我们减少了 GPU 全局内存往返次数，从而加快了推理速度。现在我们可以尝试在 SAM 的<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/3bd74614fe7285de4de3d763d8ec2e951c4c589c/experiments/eval_combo.py#L196-L201">图像编码器上使用 torch.compile。为了最大化性能，我们使用了一些高级编译技术，例如：</a></p>
+
+<ul>
+  <li>使用 torch.compile 的 max-autotune 模式可以启用 <a href="https://pytorch.org/blog/accelerating-pytorch-with-cuda-graphs/">CUDA 图</a>和具有自定义 epilogues 的形状特定内核</li>
+  <li>通过设置 TORCH_LOGS="graph_breaks,recompiles"，我们可以手动验证是否遇到了<a href="https://pytorch.org/docs/main/torch.compiler_faq.html#graph-breaks">图中断</a>或重新编译。</li>
+  <li>将输入到编码器的图像批次用零填充确保编译器接受静态形状，从而能够始终使用具有自定义 epilogues 的形状特定优化内核，而无需重新编译。</li>
+</ul>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>predictor.model.image_encoder = \
+    torch.compile(predictor.model.image_encoder, mode=use_compile)
+</code></pre></div></div>
+
+<p><strong>内核跟踪</strong></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/compile_trace.jpg" alt="Kernel trace" style="width:100%;"></p>
+
+<p>torch.compile 运行得非常漂亮。我们启动一个单独的 CUDA 图，这占据了计时区域内 GPU 时间的大部分。让我们再次运行我们的分析，并查看特定内核在 GPU 时间中所占的百分比：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/compile_kernels.jpg" alt="the percentage of GPU time spent in specific kernels" style="width:100%;"></p>
+
+<p>现在，我们看到 softmax 占据了大部分时间，其次是各种 GEMM 变体。总结来说，对于批处理大小为 8 及以上的情况，我们观察到以下测量结果。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_2.png" alt="measurements for batch size 8 and above" style="width:100%;"></p>
+
+<h3 id="sdpa-scaled_dot_product_attention">SDPA：缩放点积注意力</h3>
+
+<p>接下来，我们可以解决变压器性能开销最常见的一个领域：注意力机制。简单的注意力实现随着序列长度的增加在时间和内存上呈二次方增长。PyTorch 的 <a href="https://pytorch.org/docs/master/generated/torch.nn.functional.scaled_dot_product_attention.html?highlight=scaled_dot_product_attention#torch.nn.functional.scaled_dot_product_attention"> 缩放点积注意力 </a> 操作基于 <a href="https://arxiv.org/pdf/2205.14135.pdf">Flash Attention</a>、<a href="https://github.com/Dao-AILab/flash-attention">FlashAttentionV2</a> 和 <a href="https://github.com/facebookresearch/xformers">xFormer 的内存高效注意力 </a> 原则，可以显著加快 GPU 注意力。结合 torch.compile，这个操作允许我们在 MultiheadAttention 的各种变体中表达和融合一个常见的模式。经过 <a href="https://github.com/facebookresearch/segment-anything/compare/50cb459d080bcd783a4b481d3bde4150d35ac497...7dc75fdf283693f73606f2fe7fdcb693afcb16b9"> 一些小的改动 </a> 后，我们可以将模型调整为使用缩放点积注意力。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/sdpa_snippet.jpg" alt="PyTorch native attention implementation" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p><em>PyTorch 原生注意力实现，<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/main/segment_anything_fast/modeling/image_encoder.py#L236"> 查看代码 </a>。</em></p>
+
+<p><strong>内核跟踪</strong></p>
+
+<p>我们现在可以看到，特别是内存高效的注意力内核在 GPU 上占用了大量的计算时间：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/sdpa_kernels.jpg" alt="memory efficient attention kernel is taking up a large amount of computational time on the GPU" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p>使用 PyTorch 的本地缩放点积注意力，我们可以显著增加批处理大小。现在观察到以下批处理大小为 32 及以上的测量结果。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_3.png" alt="batch size 32 and above" style="width:100%;"></p>
+
+<h3 id="triton-custom-sdpa-for-fused-relative-positional-encoding">Triton：自定义融合相对位置编码</h3>
+
+<p>稍微离开一下推理吞吐量的主题，我们开始分析整体 SAM 内存。在图像编码器中，我们看到了内存分配的显著峰值：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/triton_trace.png" alt="spikes in memory allocation" style="width:100%;"></p>
+
+<p>放大查看，我们发现这种分配发生在 add_decomposed_rel_pos 函数中，<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/main/segment_anything_fast/modeling/image_encoder.py#L373"> 如下所示：</a></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/triton_snippet.jpg" alt="we see this allocation happens within add_decomposed_rel_pos" style="width:100%;display: block;max-width:500px; margin-left:auto; margin-right:auto;"></p>
+
+<p>这里的 attn 变量是两个较小张量的加和：rel_h 形状为(B, q_h, q_w, k_h, 1)和 rel_w 形状为(B, q_h, q_w, 1, k_w)。</p>
+
+<p>内存高效的注意力内核（通过 SDPA 使用）在注意力偏差大小超过 3.0GiB 时耗时较长，这并不令人惊讶。如果我们不是分配这个大型的注意力张量，而是将两个较小的 rel_h 和 rel_w 张量线程到 SDPA 中，并且只在需要时构建注意力，我们预计会有显著的性能提升。</p>
+
+<p>很遗憾，这不是一个简单的修改；SDPA 内核高度优化，是用 CUDA 编写的。我们可以转向 Triton，他们有一个关于 FlashAttention 实现的易懂易用的<a href="https://triton-lang.org/main/getting-started/tutorials/06-fused-attention.html">教程 </a>。经过一番深入的挖掘和与 xFormer 的 Daniel Haziza 的紧密合作，我们发现了一种输入形状，其中实现内核的融合版本相对简单。相关<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/main/segment_anything_fast/flash_4.py">详细信息已添加到仓库中 </a>。令人惊讶的是，这可以在 350 行代码以下完成推理案例。</p>
+
+<p>这是一个用 Triton 代码简单构建的新内核扩展 PyTorch 的绝佳例子。</p>
+
+<p><strong>内核跟踪</strong></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/triton_kernels.jpg" alt="kernel trace" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p>使用我们定制的位置信息 Triton 内核，我们观察到以下针对批处理大小为 32 的测量结果。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_4.png" alt="we observe the following measurements for batch size 32" style="width:100%;"></p>
+
+<h3 id="nt-nestedtensor-and-batching-predict_torch">NT：嵌套张量以及批处理 predict_torch</h3>
+
+<p>我们在图像编码器上花费了大量时间。这是有道理的，因为这部分占据了最多的计算时间。然而，到目前为止，它已经相当优化了，而占用最多时间的操作需要大量的额外投资才能得到改善。</p>
+
+<p>我们在<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/7cd6ba3cea451602acb7d36d176da06c70ac68f1/experiments/eval_combo.py#L137-L157">掩码预测管道</a>中发现了一个有趣的观察：对于每个图像，都有一个关联的大小、坐标和 fg_labels 张量。这些张量具有不同的批处理大小。每个图像本身的大小也不同。这种数据表示看起来像<a href="https://en.wikipedia.org/wiki/Jagged_array">交错数据 </a>。利用 PyTorch 最近发布的<a href="https://maskerprc.github.io/tutorials/prototype/nestedtensor.html">嵌套张量 </a>，我们可以将我们的数据管道中的批处理坐标和 fg_labels 张量修改为单个嵌套张量。这可以为随后的图像编码器后的提示编码器和掩码解码器带来显著的性能提升。调用：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch.nested.nested_tensor(data, dtype=dtype, layout=torch.jagged)
+</code></pre></div></div>
+
+<p><strong>内核跟踪</strong></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/trace1.jpg" alt="Kernel trace" style="width:100%;"></p>
+
+<p><img src="/assets/images/accelerating-generative-ai/nt_kernel.jpg" alt="we can launch kernels much faster from the CPU than the GPU can process" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p>现在我们可以看到，从 CPU 启动内核的速度比 GPU 处理速度快得多，并且它花费很长时间在时间区域末尾等待 GPU 完成（cudaDeviceSynchronize）。我们也没有在 GPU 上的内核之间看到任何空闲时间（空白）。</p>
+
+<p>使用嵌套张量，我们观察到在批处理大小为 32 及以上时的以下测量结果。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_5.png" alt="batch size 32 and above changes" style="width:100%;"></p>
+
+<h3 id="int8-quantization-and-approximating-matmul">int8：量化以及近似矩阵乘法</h3>
+
+<p>我们注意到在上面的跟踪中，现在在 GEMM 内核中花费的时间非常显著。我们已经进行了足够的优化，现在看到矩阵乘法在推理中占用的时长超过了缩放点积注意力。</p>
+
+<p>基于从 fp32 到 bfloat16 的早期学习经验，让我们更进一步，通过 int8 量化来模拟更低精度的计算。在查看量化方法时，我们专注于<a href="https://maskerprc.github.io/tutorials/recipes/quantization.html">动态量化 </a>，其中我们的模型观察层可能的输入和权重范围，并将可表示的 int8 范围细分以均匀“分散”观察到的值。最终，每个浮点输入将被映射到[-128, 127]范围内的单个整数。更多信息请参阅 PyTorch 的<a href="https://maskerprc.github.io/tutorials/recipes/quantization.html">量化教程</a></p>
+
+<p>降低精度可以立即带来峰值内存节省，但要实现推理速度提升，我们必须充分利用 SAM 的操作来充分利用 int8。这需要构建一个高效的 int8@int8 矩阵乘法内核，以及将逻辑转换为从高精度到低精度的转换（量化）以及从低精度到高精度的反向转换（反量化）。利用 torch.compile 的力量，我们可以编译并融合这些量化和反量化例程，形成高效的单一内核和矩阵乘法的 epilogues。结果实现相当简短，不到 250 行代码。<a href="https://github.com/pytorch-labs/segment-anything-fast/blob/21b0208ae46eefc5659f7f200a2bf447add8765b/segment_anything_fast/dynamic_quant.py"> 以下链接</a>提供了有关 API 和使用的更多信息。</p>
+
+<p>在推理时量化模型时，通常会出现一些精度下降，但 SAM 对低精度推理的鲁棒性特别强，精度损失最小。添加量化后，我们现在观察到以下测量结果，针对<strong>批处理大小为 32</strong> 及以上的变化。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_6.png" alt="batch size 32 and above changes" style="width:100%;"></p>
+
+<h3 id="sparse-semi-structured-24-sparsity">稀疏：半结构化（2:4）稀疏性</h3>
+
+<p>矩阵乘法仍然是我们的瓶颈。我们可以转向模型加速剧本中的另一种经典方法来近似矩阵乘法：稀疏化。通过稀疏化我们的矩阵（即置零值），理论上我们可以使用更少的位来存储权重和激活张量。决定将张量中的哪些权重设置为零的过程称为剪枝。剪枝背后的想法是，权重张量中的小权重对层的净输出贡献很小，通常是权重与激活的乘积。剪除小权重可以潜在地减少模型大小，而不会导致精度显著下降。</p>
+
+<p>剪枝方法多种多样，从完全无结构的，其中权重贪婪剪枝，到高度结构化的，其中一次剪枝大型的子张量。方法的选择并非易事。虽然无结构化剪枝可能在理论上对准确性的影响最小，但 GPU 在乘以大型密集矩阵时也非常高效，在稀疏状态下可能会出现显著的性能下降。PyTorch 支持的一种最近剪枝方法试图寻求平衡，称为半结构化（或 2:4 稀疏）。这种稀疏存储将原始张量减少了显著的 50%，同时产生一个密集的张量输出，可以借助高性能的 2:4 GPU 内核。以下图片展示了说明。</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/sparse_image.png" alt="dense tensor output that can leverage highly performant, 2:4 GPU kernels" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
+
+<p>来自 <a href="https://developer.nvidia.com/blog/exploiting-ampere-structured-sparsity-with-cusparselt">developer.nvidia.com/blog/exploiting-ampere-structured-sparsity-with-cusparselt</a></p>
+
+<p>为了使用这种稀疏存储格式及其相关的快速内核，我们需要修剪我们的权重，以确保它们符合格式的约束。我们在一个 1x4 区域中选取两个最小的权重进行修剪，测量性能与准确性的权衡。将权重从其默认的 PyTorch（“步进”）布局更改为这种新的半结构化稀疏布局很容易。要实现 <code class="language-plaintext highlighter-rouge">apply_sparse(model)</code>，我们只需要 32 行 Python 代码：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
+from torch.sparse import to_sparse_semi_structured, SparseSemiStructuredTensor
+
+# Sparsity helper functions
+def apply_fake_sparsity(model):
+    """
+    This function simulates 2:4 sparsity on all linear layers in a model.
+    It uses the torch.ao.pruning flow.
+    """
+    # torch.ao.pruning flow
+    from torch.ao.pruning import WeightNormSparsifier
+    sparse_config = []
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear):
+            sparse_config.append({"tensor_fqn": f"{name}.weight"})
+
+    sparsifier = WeightNormSparsifier(sparsity_level=1.0,
+                                      sparse_block_shape=(1,4),
+                                      zeros_per_block=2)
+    sparsifier.prepare(model, sparse_config)
+    sparsifier.step()
+
+    sparsifier.step()
+    sparsifier.squash_mask()
+
+
+def apply_sparse(model):
+    apply_fake_sparsity(model)
+    for name, mod in model.named_modules():
+        if isinstance(mod, torch.nn.Linear):
+            mod.weight = torch.nn.Parameter(to_sparse_semi_structured(mod.weight))
+</code></pre></div></div>
+
+<p>在 2:4 稀疏度下，我们在 SAM 上观察到 vit_b 和批处理大小为 32 时的峰值性能：</p>
+
+<p><img src="/assets/images/accelerating-generative-ai/bar_chart_7.png" alt="With 2:4 sparsity, we observe peak performance on SAM with vit_b and batch size 32" style="width:100%;"></p>
+
+<h3 id="conclusion">结论</h3>
+
+<p>总结来说，我们非常高兴<a href="https://www.youtube.com/watch?v=IWpM_9AsC-U">宣布</a>我们迄今为止最快的 <a href="https://github.com/facebookresearch/segment-anything">Segment Anything</a> 实现。我们用纯 PyTorch 重写了 Meta 的原始 SAM，没有损失准确性，并使用了大量新发布的特性：</p>
+
+<ul>
+  <li><strong>PyTorch 编译器 </strong> PyTorch 的本地 JIT 编译器，提供快速、自动融合 PyTorch 操作 [<a href="https://maskerprc.github.io/tutorials/intermediate/torch_compile_tutorial.html"> 教程 </a>]</li>
+  <li><strong>GPU 量化 </strong> 使用降低精度操作加速模型 [<a href="https://github.com/pytorch-labs/ao/tree/main#torchao">API</a>]</li>
+  <li><strong>缩放点积注意力（SDPA）</strong> 注意力的一种新、内存高效的实现 [<a href="https://maskerprc.github.io/tutorials/intermediate/scaled_dot_product_attention_tutorial.html"> 教程 </a>]</li>
+  <li><strong>半结构化（2:4）稀疏性 </strong> 使用更少的位存储权重和激活来加速模型 [<a href="https://maskerprc.github.io/tutorials/prototype/semi_structured_sparse.html"> 教程 </a>]</li>
+  <li><strong>嵌套张量 </strong> 高度优化的，用于处理非均匀批量和图像大小的稀疏数组 [<a href="https://maskerprc.github.io/tutorials/prototype/nestedtensor.html"> 教程 </a>]</li>
+  <li><strong>Triton 内核 </strong> 通过 Triton 轻松构建和优化的自定义 GPU 操作</li>
+</ul>
+
+<p>想要了解更多关于如何重现本博客文章中展示的数据的细节，请查看 segment-anything-fast 的 <a href="https://github.com/pytorch-labs/segment-anything-fast/tree/main/experiments"> 实验文件夹 </a>。如果在运行过程中遇到任何技术问题，请随时联系我们或 <a href="https://github.com/pytorch-labs/segment-anything-fast/issues/new"> 提交一个问题 </a>。</p>
+
+<p>在我们下一篇文章中，我们非常兴奋地分享与我们的原生 PyTorch 编写的类似性能提升 LLM!</p>
+
+<h3 id="acknowledgements">致谢</h3>
+
+<p>我们想感谢 Meta 的 <a href="https://github.com/facebookresearch/xformers"> xFormers</a> 团队，包括 Daniel Haziza 和 Francisco Massa，他们编写了 SDPA 内核，并帮助我们设计了定制的 Triton 内核。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

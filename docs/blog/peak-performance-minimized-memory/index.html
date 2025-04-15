@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Peak Performance, Minimized Memory: Optimizing torchtune’s performance with torch.compile &amp; Liger Kernel | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="LinkedIn: Shivam Sahni, Byron Hsu, Yanning Chen
+Meta: Ankith Gunapal, Evan Smothers
+
+This blog explores the integration of a custom triton kernel, Liger Kernel with torch.compile to enhance the performance of fine-tuning large language models (LLMs) using torchtune. torchtune, a PyTorch-native library, offers modular building blocks and customizable finetuning recipes which include torch.compile support for various LLMs, while Liger Kernel provides optimized Triton kernels to improve training efficiency and reduce memory usage. The integration involves modifying the TransformerDecoder module in torchtune to bypass the linear layer computation, allowing the Liger Fused Linear Cross Entropy Loss to handle the forward projection weights. Experiments conducted on an NVIDIA A100 instance demonstrate that torch.compile outperforms PyTorch Eager in throughput and memory efficiency, with Liger Kernel further reducing peak memory allocation and enabling larger batch sizes. The results show a 47% reduction in peak memory at batch size 256 and a marginal increase in throughput with meta-llama/Llama-3.2-1B , confirming the effectiveness of the integration without affecting the loss curves.
+
+Introduction to torchtune
+
+torchtune is a PyTorch-native library which has been designed for finetuning LLMs. torchtune provides composable and modular building blocks along with finetuning recipes that can be easily customized for your use case, as will be shown in this blog.  
+torchtune provides:
+
+
+  PyTorch implementations of popular LLM model architectures from Llama, Gemma, Mistral, Phi, and Qwen model families
+  Hackable training recipes for full finetuning, LoRA, QLoRA, DPO, PPO, QAT, knowledge distillation, and more
+  Out-of-the-box memory efficiency, performance improvements, and scaling with the latest PyTorch APIs, including torch.compile
+  YAML configs for easily configuring training, evaluation, quantization or inference recipes
+  Built-in support for many popular dataset formats and prompt templates
+
+
+Introduction to Liger Kernel
+
+Liger Kernel is an open source library of optimized Triton kernels designed to enhance the efficiency and scalability of training Large Language Models (LLMs). It focuses on kernel-level optimizations such as operation fusing and input chunking, achieving significant improvements in training throughput and GPU memory usage compared to existing implementations like those from HuggingFace. By using a single line of code, Liger Kernel can improve training throughput by 20% and reduce memory usage by 60%.
+
+
+
+
+Figure 1: Fused Linear Cross Entropy
+
+
+The bulk of LIger Kernel’s performance improvement comes from the Fused Linear Cross Entropy (FLCE) Loss, whose core idea is as follows:
+
+In LLMs, the vocabulary size has increased significantly, leading to a large logit tensor during cross-entropy (CE) loss computation. This logit tensor consumes excessive memory, causing a bottleneck in training. For example, when training with a batch size of 8 and sequence length of 4096, the 256k vocabulary size results in a 16.8 GB logit tensor. The FLCE kernel breaks down the computation into smaller chunks, reducing memory consumption.
+
+Here’s how it works:
+
+
+  Flattens the 3D hidden states into a 2D matrix by collapsing the batch size and sequence length dimensions.
+  Applies the linear projection head sequentially on the chunked hidden states.
+  Computes the partial loss and returns the chunked logits gradient using the Liger CE kernel.
+  Derives the chunked hidden states gradients and accumulates the projection head gradients.
+
+
+Torchtune’s recipes provide torch.compile support out of the box. It has been shown that utilizing torch.compile with FLCE makes FLCE 2x faster.
+
+Integrating Liger Kernel with torch.compile &amp; torchtune
+
+We demonstrate integration of Liger Kernel with torch.compile &amp;  torchtune by running a full fine-tuning recipe with meta-llama/Llama-3.2-1B.  To make this integration happen, we have defined a custom full finetuning recipe, the details of the changes are mentioned below.
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 tune run --nproc_per_node 4 recipes/full_finetune_distributed.py --config llama3_2/1B_full optimizer=torch.optim.AdamW optimizer.fused=True optimizer_in_bwd=False gradient_accumulation_steps=1  dataset.packed=True compile=True enable_activation_checkpointing=True tokenizer.max_seq_len=512  batch_size=128
+
+
+One of the inputs to the LCE Kernel is the forward projection weights. torchtune is designed as a modular library with composable blocks. There is a TransformerDecoder block where at the end of the block, we pass the final hidden state through a linear layer to get the final output. Since the linear layer is combined with the CE loss in LCE Kernel, we write a custom forward function for TransformerDecoder where we skip the computation through the linear layer.
+
+In the full finetuning recipe, we override the model’s forward method with this custom method
+
+import types
+from liger_kernel.torchtune.modules.transformers import decoder_forward
+self._model.forward = types.MethodType(decoder_forward, self._model)
+
+
+We then pass the model’s forward projection weights to calculate the loss with LCE Kernel
+
+from liger_kernel.transformers.fused_linear_cross_entropy import (
+    LigerFusedLinearCrossEntropyLoss,
+)
+
+# Use LCE loss instead of CE loss
+self._loss_fn = LigerFusedLinearCrossEntropyLoss()
+
+# call torch.compile on the loss function
+if self._compile:
+    training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
+
+# pass the model's forward projection weights for loss computation
+current_loss = (
+     self._loss_fn(
+         self._model.output.tied_module.weight,
+         logits,
+         labels,
+     )
+     * current_num_tokens
+ )
+
+
+The complete code and instructions can be found in the GitHub repo.
+
+Experiments &amp; Benchmarking Results
+
+We conduct 3 types of experiments to demonstrate how Liger Kernel integration with torch.compile enhances the performance of torchtune. We set up our experiments on an instance running NVIDIA A100. We fine-tune a small LLM  meta-llama/Llama-3.2-1B with differing batch sizes. We record the throughput in terms of tokens/second and measure the peak memory allocated during finetuning. Since it’s a small model, we only use 4 A100 GPUs for the benchmarking. The following are the experiments we conducted:
+
+
+  Increase batch_size in powers of 2 with PyTorch eager
+  Increase batch_size in powers of 2 with torch.compile
+  Increase batch_size in powers of 2 with torch.compile &amp; Liger integration
+
+
+We notice that with PyTorch Eager, throughput increases with increasing batch_size till we hit OOM at batch_size 256. With torch.compile, the throughput is higher than PyTorch Eager for each batch_size. We see that the peak memory allocation reduces drastically with increasing batch_size and more than 50% reduction in peak memory at batch_size 128. This results in torch.compile being able to support batch_size 256 and hence, the overall throughput with torch.compile being 36% greater than PyTorch Eager. Integrating Liger Kernel with torch.compile doesn’t drop the throughput at lower batch_size but with increasing batch_size, we notice that torchtune is consuming less memory compared to torch.compile. At batch_size 256, we see a 47% reduction in peak memory allocation with the Liger kernel. This allows us to use batch_size 512 with torch.compile &amp; Liger. We notice that there is a marginal 1-2% increase in throughput compared to torch.compile without custom triton kernels.
+
+
+
+
+Figure 2: Plot of tokens/sec per rank vs batch_size
+
+
+
+
+
+Figure 3: Peak memory allocated vs batch_size
+
+
+To rule out any potential functional issues with our integration of Liger Kernel with torchtune, we plot the loss curve against training steps with &amp; without Liger. We see that there is no visible difference in the loss curves.
+
+
+
+
+Figure 4: Plot of loss vs training steps for batch_size=128
+
+
+Next Steps
+
+
+  Enable Liger kernels for DPO loss and distillation loss in torchtune’s recipes for DPO and knowledge distillation, respectively.
+  Support Liger integration in torchtune with tensor parallel training.
+
+
+Acknowledgments
+
+We thank Hamid Shojanazeri (Meta), Less Wright (Meta), Horace He (Meta) &amp; Gregory Chanan (Meta) for their feedback and support in making this blog post happen.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Peak Performance, Minimized Memory: Optimizing torchtune’s performance with torch.compile &amp; Liger Kernel">
+<meta property="og:description" content="LinkedIn: Shivam Sahni, Byron Hsu, Yanning Chen
+Meta: Ankith Gunapal, Evan Smothers
+
+This blog explores the integration of a custom triton kernel, Liger Kernel with torch.compile to enhance the performance of fine-tuning large language models (LLMs) using torchtune. torchtune, a PyTorch-native library, offers modular building blocks and customizable finetuning recipes which include torch.compile support for various LLMs, while Liger Kernel provides optimized Triton kernels to improve training efficiency and reduce memory usage. The integration involves modifying the TransformerDecoder module in torchtune to bypass the linear layer computation, allowing the Liger Fused Linear Cross Entropy Loss to handle the forward projection weights. Experiments conducted on an NVIDIA A100 instance demonstrate that torch.compile outperforms PyTorch Eager in throughput and memory efficiency, with Liger Kernel further reducing peak memory allocation and enabling larger batch sizes. The results show a 47% reduction in peak memory at batch size 256 and a marginal increase in throughput with meta-llama/Llama-3.2-1B , confirming the effectiveness of the integration without affecting the loss curves.
+
+Introduction to torchtune
+
+torchtune is a PyTorch-native library which has been designed for finetuning LLMs. torchtune provides composable and modular building blocks along with finetuning recipes that can be easily customized for your use case, as will be shown in this blog.  
+torchtune provides:
+
+
+  PyTorch implementations of popular LLM model architectures from Llama, Gemma, Mistral, Phi, and Qwen model families
+  Hackable training recipes for full finetuning, LoRA, QLoRA, DPO, PPO, QAT, knowledge distillation, and more
+  Out-of-the-box memory efficiency, performance improvements, and scaling with the latest PyTorch APIs, including torch.compile
+  YAML configs for easily configuring training, evaluation, quantization or inference recipes
+  Built-in support for many popular dataset formats and prompt templates
+
+
+Introduction to Liger Kernel
+
+Liger Kernel is an open source library of optimized Triton kernels designed to enhance the efficiency and scalability of training Large Language Models (LLMs). It focuses on kernel-level optimizations such as operation fusing and input chunking, achieving significant improvements in training throughput and GPU memory usage compared to existing implementations like those from HuggingFace. By using a single line of code, Liger Kernel can improve training throughput by 20% and reduce memory usage by 60%.
+
+
+
+
+Figure 1: Fused Linear Cross Entropy
+
+
+The bulk of LIger Kernel’s performance improvement comes from the Fused Linear Cross Entropy (FLCE) Loss, whose core idea is as follows:
+
+In LLMs, the vocabulary size has increased significantly, leading to a large logit tensor during cross-entropy (CE) loss computation. This logit tensor consumes excessive memory, causing a bottleneck in training. For example, when training with a batch size of 8 and sequence length of 4096, the 256k vocabulary size results in a 16.8 GB logit tensor. The FLCE kernel breaks down the computation into smaller chunks, reducing memory consumption.
+
+Here’s how it works:
+
+
+  Flattens the 3D hidden states into a 2D matrix by collapsing the batch size and sequence length dimensions.
+  Applies the linear projection head sequentially on the chunked hidden states.
+  Computes the partial loss and returns the chunked logits gradient using the Liger CE kernel.
+  Derives the chunked hidden states gradients and accumulates the projection head gradients.
+
+
+Torchtune’s recipes provide torch.compile support out of the box. It has been shown that utilizing torch.compile with FLCE makes FLCE 2x faster.
+
+Integrating Liger Kernel with torch.compile &amp; torchtune
+
+We demonstrate integration of Liger Kernel with torch.compile &amp;  torchtune by running a full fine-tuning recipe with meta-llama/Llama-3.2-1B.  To make this integration happen, we have defined a custom full finetuning recipe, the details of the changes are mentioned below.
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 tune run --nproc_per_node 4 recipes/full_finetune_distributed.py --config llama3_2/1B_full optimizer=torch.optim.AdamW optimizer.fused=True optimizer_in_bwd=False gradient_accumulation_steps=1  dataset.packed=True compile=True enable_activation_checkpointing=True tokenizer.max_seq_len=512  batch_size=128
+
+
+One of the inputs to the LCE Kernel is the forward projection weights. torchtune is designed as a modular library with composable blocks. There is a TransformerDecoder block where at the end of the block, we pass the final hidden state through a linear layer to get the final output. Since the linear layer is combined with the CE loss in LCE Kernel, we write a custom forward function for TransformerDecoder where we skip the computation through the linear layer.
+
+In the full finetuning recipe, we override the model’s forward method with this custom method
+
+import types
+from liger_kernel.torchtune.modules.transformers import decoder_forward
+self._model.forward = types.MethodType(decoder_forward, self._model)
+
+
+We then pass the model’s forward projection weights to calculate the loss with LCE Kernel
+
+from liger_kernel.transformers.fused_linear_cross_entropy import (
+    LigerFusedLinearCrossEntropyLoss,
+)
+
+# Use LCE loss instead of CE loss
+self._loss_fn = LigerFusedLinearCrossEntropyLoss()
+
+# call torch.compile on the loss function
+if self._compile:
+    training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
+
+# pass the model's forward projection weights for loss computation
+current_loss = (
+     self._loss_fn(
+         self._model.output.tied_module.weight,
+         logits,
+         labels,
+     )
+     * current_num_tokens
+ )
+
+
+The complete code and instructions can be found in the GitHub repo.
+
+Experiments &amp; Benchmarking Results
+
+We conduct 3 types of experiments to demonstrate how Liger Kernel integration with torch.compile enhances the performance of torchtune. We set up our experiments on an instance running NVIDIA A100. We fine-tune a small LLM  meta-llama/Llama-3.2-1B with differing batch sizes. We record the throughput in terms of tokens/second and measure the peak memory allocated during finetuning. Since it’s a small model, we only use 4 A100 GPUs for the benchmarking. The following are the experiments we conducted:
+
+
+  Increase batch_size in powers of 2 with PyTorch eager
+  Increase batch_size in powers of 2 with torch.compile
+  Increase batch_size in powers of 2 with torch.compile &amp; Liger integration
+
+
+We notice that with PyTorch Eager, throughput increases with increasing batch_size till we hit OOM at batch_size 256. With torch.compile, the throughput is higher than PyTorch Eager for each batch_size. We see that the peak memory allocation reduces drastically with increasing batch_size and more than 50% reduction in peak memory at batch_size 128. This results in torch.compile being able to support batch_size 256 and hence, the overall throughput with torch.compile being 36% greater than PyTorch Eager. Integrating Liger Kernel with torch.compile doesn’t drop the throughput at lower batch_size but with increasing batch_size, we notice that torchtune is consuming less memory compared to torch.compile. At batch_size 256, we see a 47% reduction in peak memory allocation with the Liger kernel. This allows us to use batch_size 512 with torch.compile &amp; Liger. We notice that there is a marginal 1-2% increase in throughput compared to torch.compile without custom triton kernels.
+
+
+
+
+Figure 2: Plot of tokens/sec per rank vs batch_size
+
+
+
+
+
+Figure 3: Peak memory allocated vs batch_size
+
+
+To rule out any potential functional issues with our integration of Liger Kernel with torchtune, we plot the loss curve against training steps with &amp; without Liger. We see that there is no visible difference in the loss curves.
+
+
+
+
+Figure 4: Plot of loss vs training steps for batch_size=128
+
+
+Next Steps
+
+
+  Enable Liger kernels for DPO loss and distillation loss in torchtune’s recipes for DPO and knowledge distillation, respectively.
+  Support Liger integration in torchtune with tensor parallel training.
+
+
+Acknowledgments
+
+We thank Hamid Shojanazeri (Meta), Less Wright (Meta), Horace He (Meta) &amp; Gregory Chanan (Meta) for their feedback and support in making this blog post happen.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Peak Performance, Minimized Memory: Optimizing torchtune’s performance with torch.compile &amp; Liger Kernel">
+<meta name="twitter:description" content="LinkedIn: Shivam Sahni, Byron Hsu, Yanning Chen
+Meta: Ankith Gunapal, Evan Smothers
+
+This blog explores the integration of a custom triton kernel, Liger Kernel with torch.compile to enhance the performance of fine-tuning large language models (LLMs) using torchtune. torchtune, a PyTorch-native library, offers modular building blocks and customizable finetuning recipes which include torch.compile support for various LLMs, while Liger Kernel provides optimized Triton kernels to improve training efficiency and reduce memory usage. The integration involves modifying the TransformerDecoder module in torchtune to bypass the linear layer computation, allowing the Liger Fused Linear Cross Entropy Loss to handle the forward projection weights. Experiments conducted on an NVIDIA A100 instance demonstrate that torch.compile outperforms PyTorch Eager in throughput and memory efficiency, with Liger Kernel further reducing peak memory allocation and enabling larger batch sizes. The results show a 47% reduction in peak memory at batch size 256 and a marginal increase in throughput with meta-llama/Llama-3.2-1B , confirming the effectiveness of the integration without affecting the loss curves.
+
+Introduction to torchtune
+
+torchtune is a PyTorch-native library which has been designed for finetuning LLMs. torchtune provides composable and modular building blocks along with finetuning recipes that can be easily customized for your use case, as will be shown in this blog.  
+torchtune provides:
+
+
+  PyTorch implementations of popular LLM model architectures from Llama, Gemma, Mistral, Phi, and Qwen model families
+  Hackable training recipes for full finetuning, LoRA, QLoRA, DPO, PPO, QAT, knowledge distillation, and more
+  Out-of-the-box memory efficiency, performance improvements, and scaling with the latest PyTorch APIs, including torch.compile
+  YAML configs for easily configuring training, evaluation, quantization or inference recipes
+  Built-in support for many popular dataset formats and prompt templates
+
+
+Introduction to Liger Kernel
+
+Liger Kernel is an open source library of optimized Triton kernels designed to enhance the efficiency and scalability of training Large Language Models (LLMs). It focuses on kernel-level optimizations such as operation fusing and input chunking, achieving significant improvements in training throughput and GPU memory usage compared to existing implementations like those from HuggingFace. By using a single line of code, Liger Kernel can improve training throughput by 20% and reduce memory usage by 60%.
+
+
+
+
+Figure 1: Fused Linear Cross Entropy
+
+
+The bulk of LIger Kernel’s performance improvement comes from the Fused Linear Cross Entropy (FLCE) Loss, whose core idea is as follows:
+
+In LLMs, the vocabulary size has increased significantly, leading to a large logit tensor during cross-entropy (CE) loss computation. This logit tensor consumes excessive memory, causing a bottleneck in training. For example, when training with a batch size of 8 and sequence length of 4096, the 256k vocabulary size results in a 16.8 GB logit tensor. The FLCE kernel breaks down the computation into smaller chunks, reducing memory consumption.
+
+Here’s how it works:
+
+
+  Flattens the 3D hidden states into a 2D matrix by collapsing the batch size and sequence length dimensions.
+  Applies the linear projection head sequentially on the chunked hidden states.
+  Computes the partial loss and returns the chunked logits gradient using the Liger CE kernel.
+  Derives the chunked hidden states gradients and accumulates the projection head gradients.
+
+
+Torchtune’s recipes provide torch.compile support out of the box. It has been shown that utilizing torch.compile with FLCE makes FLCE 2x faster.
+
+Integrating Liger Kernel with torch.compile &amp; torchtune
+
+We demonstrate integration of Liger Kernel with torch.compile &amp;  torchtune by running a full fine-tuning recipe with meta-llama/Llama-3.2-1B.  To make this integration happen, we have defined a custom full finetuning recipe, the details of the changes are mentioned below.
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 tune run --nproc_per_node 4 recipes/full_finetune_distributed.py --config llama3_2/1B_full optimizer=torch.optim.AdamW optimizer.fused=True optimizer_in_bwd=False gradient_accumulation_steps=1  dataset.packed=True compile=True enable_activation_checkpointing=True tokenizer.max_seq_len=512  batch_size=128
+
+
+One of the inputs to the LCE Kernel is the forward projection weights. torchtune is designed as a modular library with composable blocks. There is a TransformerDecoder block where at the end of the block, we pass the final hidden state through a linear layer to get the final output. Since the linear layer is combined with the CE loss in LCE Kernel, we write a custom forward function for TransformerDecoder where we skip the computation through the linear layer.
+
+In the full finetuning recipe, we override the model’s forward method with this custom method
+
+import types
+from liger_kernel.torchtune.modules.transformers import decoder_forward
+self._model.forward = types.MethodType(decoder_forward, self._model)
+
+
+We then pass the model’s forward projection weights to calculate the loss with LCE Kernel
+
+from liger_kernel.transformers.fused_linear_cross_entropy import (
+    LigerFusedLinearCrossEntropyLoss,
+)
+
+# Use LCE loss instead of CE loss
+self._loss_fn = LigerFusedLinearCrossEntropyLoss()
+
+# call torch.compile on the loss function
+if self._compile:
+    training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
+
+# pass the model's forward projection weights for loss computation
+current_loss = (
+     self._loss_fn(
+         self._model.output.tied_module.weight,
+         logits,
+         labels,
+     )
+     * current_num_tokens
+ )
+
+
+The complete code and instructions can be found in the GitHub repo.
+
+Experiments &amp; Benchmarking Results
+
+We conduct 3 types of experiments to demonstrate how Liger Kernel integration with torch.compile enhances the performance of torchtune. We set up our experiments on an instance running NVIDIA A100. We fine-tune a small LLM  meta-llama/Llama-3.2-1B with differing batch sizes. We record the throughput in terms of tokens/second and measure the peak memory allocated during finetuning. Since it’s a small model, we only use 4 A100 GPUs for the benchmarking. The following are the experiments we conducted:
+
+
+  Increase batch_size in powers of 2 with PyTorch eager
+  Increase batch_size in powers of 2 with torch.compile
+  Increase batch_size in powers of 2 with torch.compile &amp; Liger integration
+
+
+We notice that with PyTorch Eager, throughput increases with increasing batch_size till we hit OOM at batch_size 256. With torch.compile, the throughput is higher than PyTorch Eager for each batch_size. We see that the peak memory allocation reduces drastically with increasing batch_size and more than 50% reduction in peak memory at batch_size 128. This results in torch.compile being able to support batch_size 256 and hence, the overall throughput with torch.compile being 36% greater than PyTorch Eager. Integrating Liger Kernel with torch.compile doesn’t drop the throughput at lower batch_size but with increasing batch_size, we notice that torchtune is consuming less memory compared to torch.compile. At batch_size 256, we see a 47% reduction in peak memory allocation with the Liger kernel. This allows us to use batch_size 512 with torch.compile &amp; Liger. We notice that there is a marginal 1-2% increase in throughput compared to torch.compile without custom triton kernels.
+
+
+
+
+Figure 2: Plot of tokens/sec per rank vs batch_size
+
+
+
+
+
+Figure 3: Peak memory allocated vs batch_size
+
+
+To rule out any potential functional issues with our integration of Liger Kernel with torchtune, we plot the loss curve against training steps with &amp; without Liger. We see that there is no visible difference in the loss curves.
+
+
+
+
+Figure 4: Plot of loss vs training steps for batch_size=128
+
+
+Next Steps
+
+
+  Enable Liger kernels for DPO loss and distillation loss in torchtune’s recipes for DPO and knowledge distillation, respectively.
+  Support Liger integration in torchtune with tensor parallel training.
+
+
+Acknowledgments
+
+We thank Hamid Shojanazeri (Meta), Less Wright (Meta), Horace He (Meta) &amp; Gregory Chanan (Meta) for their feedback and support in making this blog post happen.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2025年3月6日</p>
+            <h1>
+                <a class="blog-title">极致性能，最小化内存：使用 torch.compile 和 Liger 内核优化 torchtune 的性能</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由领英和 Meta 提供</p>
+                    <p><strong>领英 </strong>：Shivam Sahni, Byron Hsu, Yanning Chen<br>
+<strong>Meta</strong>：Ankith Gunapal, Evan Smothers</p>
+
+<p>本博客探讨了将自定义的 Triton 内核 Liger Kernel 与 <code class="language-plaintext highlighter-rouge">torch.compile</code> 集成，以增强使用 torchtune 进行大型语言模型微调的性能（LLMs）。torchtune 是一个 PyTorch 原生库，提供模块化构建块和可定制的微调配方，其中包括对各种LLMs的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 支持，而 Liger Kernel 提供了优化的 Triton 内核，以提高训练效率并减少内存使用。集成涉及修改 torchtune 中的 <code class="language-plaintext highlighter-rouge">TransformerDecoder</code> 模块，以绕过线性层计算，允许 Liger Fused Linear Cross Entropy Loss 处理前向投影权重。在 NVIDIA A100 实例上进行的实验表明，<code class="language-plaintext highlighter-rouge">torch.compile</code> 在吞吐量和内存效率方面优于 PyTorch Eager，而 Liger Kernel 进一步减少了峰值内存分配，并允许更大的批量大小。 结果显示，在批处理大小为 256 的情况下，峰值内存减少了 47%，同时吞吐量略有提升，使用 meta-llama/Llama-3.2-1B 确认了集成效果，且不影响损失曲线。</p>
+
+<h2 id="introduction-to-torchtune">torchtune 简介</h2>
+
+<p>torchtune 是一个为微调LLMs设计的 PyTorch 原生库。torchtune 提供了可组合和模块化的构建块，以及易于定制的微调配方，这些配方可以轻松地适应您的用例，正如本博客所示。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">torchtune 提供：</p>
+
+<ul>
+  <li>PyTorch 实现流行的LLM模型架构，包括 Llama、Gemma、Mistral、Phi 和 Qwen 模型系列</li>
+  <li>可定制的训练食谱，包括全微调、LoRA、QLoRA、DPO、PPO、QAT、知识蒸馏等</li>
+  <li>使用最新的 PyTorch API（包括 <code class="language-plaintext highlighter-rouge">torch.compile</code>）实现即用型内存效率、性能提升和扩展</li>
+  <li>YAML 配置，便于配置训练、评估、量化或推理食谱</li>
+  <li>内置对许多流行数据集格式和提示模板的支持</li>
+</ul>
+
+<h2 id="introduction-to-liger-kernel">Liger 内核简介</h2>
+
+<p>Liger 内核是一个开源的优化 Triton 内核库，旨在提高大型语言模型训练的效率和可扩展性（LLMs）。它专注于内核级别的优化，如操作融合和输入分块，与 HuggingFace 等现有实现相比，在训练吞吐量和 GPU 内存使用方面实现了显著提升。通过一行代码，Liger 内核可以将<a href="https://www.linkedin.com/blog/engineering/open-source/liger-kernel-open-source-ecosystem-for-efficient-llm-training">训练吞吐量提高 20%并减少内存使用 60%</a>。</p>
+
+<p><img src="/assets/images/peak-performance-minimized-memory/fg1.png" alt="Fused Linear Cross Entropy" style="width:100%"></p>
+
+<div class="text-center mb-3">
+<p>图 1：<a href="https://arxiv.org/pdf/2410.10989" target="_blank"> 融合线性交叉熵</a></p>
+</div>
+
+<p>Liger 内核性能提升的大部分来自融合线性交叉熵（FLCE）损失，其核心思想如下：</p>
+
+<p>在LLMs中，词汇量显著增加，导致交叉熵（CE）损失计算过程中的 logit 张量很大。这个 logit 张量消耗了过多的内存，导致训练瓶颈。例如，当使用 8 个批量和 4096 个序列长度进行训练时，256k 的词汇量会导致 16.8GB 的 logit 张量。FLCE 内核将计算分解成更小的块，从而减少内存消耗。</p>
+
+<p>它的工作原理如下：</p>
+
+<ol>
+  <li>通过折叠批量和序列长度维度，将 3D 隐藏状态展平为 2D 矩阵。</li>
+  <li>依次对分块隐藏状态应用线性投影头。</li>
+  <li>使用 Liger CE 核计算部分损失并返回分块 logits 梯度。</li>
+  <li>推导分块隐藏状态梯度并累积投影头梯度。</li>
+</ol>
+
+<p>Torchtune 的配方提供开箱即用的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 支持。研究表明，使用 FLCE 与 <code class="language-plaintext highlighter-rouge">torch.compile</code> 结合可以使 <a href="https://github.com/linkedin/Liger-Kernel/issues/227">FLCE 速度提升 2 倍 </a>。</p>
+
+<h2 id="integrating-liger-kernel-with-torchcompile--torchtune">将 Liger 内核与 torch.compile 和 torchtune 集成</h2>
+
+<p>我们通过运行一个完整的微调配方，展示了 Liger 内核与 <code class="language-plaintext highlighter-rouge">torch.compile</code> &amp; torchtune 的集成。为了实现这一集成，我们定义了一个自定义的完整微调配方，以下是变更的详细信息。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>CUDA_VISIBLE_DEVICES=0,1,2,3 tune run --nproc_per_node 4 recipes/full_finetune_distributed.py --config llama3_2/1B_full optimizer=torch.optim.AdamW optimizer.fused=True optimizer_in_bwd=False gradient_accumulation_steps=1  dataset.packed=True compile=True enable_activation_checkpointing=True tokenizer.max_seq_len=512  batch_size=128
+</code></pre></div></div>
+
+<p>LCE 内核的一个输入是前向投影权重。torchtune 设计为一个模块化库，具有可组合的块。其中有一个 <code class="language-plaintext highlighter-rouge">TransformerDecoder</code><a href="https://github.com/pytorch/torchtune/blob/main/torchtune/modules/transformer.py#L322"> 块 </a>，在该块的末尾，我们将最终隐藏状态通过一个线性层来获取最终输出。由于线性层与 LCE 内核中的 CE 损失相结合，我们为 <code class="language-plaintext highlighter-rouge">TransformerDecoder</code> 编写了一个自定义的 <code class="language-plaintext highlighter-rouge">forward</code> 函数，其中我们跳过了通过线性层的计算。</p>
+
+<p>在完整的微调配方中，我们用这个自定义方法覆盖了模型的 forward 方法</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import types
+from liger_kernel.torchtune.modules.transformers import decoder_forward
+self._model.forward = types.MethodType(decoder_forward, self._model)
+</code></pre></div></div>
+
+<p>我们然后将模型的正向投影权重传递给 LCE 核来计算损失</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from liger_kernel.transformers.fused_linear_cross_entropy import (
+    LigerFusedLinearCrossEntropyLoss,
+)
+
+# Use LCE loss instead of CE loss
+self._loss_fn = LigerFusedLinearCrossEntropyLoss()
+
+# call torch.compile on the loss function
+if self._compile:
+    training.compile_loss(self._loss_fn, verbose=self._is_rank_zero)
+
+# pass the model's forward projection weights for loss computation
+current_loss = (
+     self._loss_fn(
+         self._model.output.tied_module.weight,
+         logits,
+         labels,
+     )
+     * current_num_tokens
+ )
+</code></pre></div></div>
+
+<p>完整的代码和说明可以在 <a href="https://github.com/pytorch-labs/applied-ai/tree/liger_kernel/third_party">GitHub 仓库</a>中找到。</p>
+
+<h2 id="experiments--benchmarking-results">实验与基准测试结果</h2>
+
+<p>我们进行了 3 种类型的实验，以展示 Liger 核与 <code class="language-plaintext highlighter-rouge">torch.compile</code> 集成如何增强 torchtune 的性能。我们在运行 NVIDIA A100 的实例上设置了我们的实验。我们对一个小的LLM <code class="language-plaintext highlighter-rouge">meta-llama/Llama-3.2-1B </code> 模型进行了微调，并使用了不同的批处理大小。我们记录了每秒处理的 token 数量，并在微调期间测量了分配的峰值内存。由于这是一个小型模型，我们只使用了 4 个 A100 GPU 进行基准测试。以下是我们进行的实验：</p>
+
+<ol>
+  <li>以 2 的幂次增加 batch_size，使用 PyTorch eager</li>
+  <li>使用 torch.compile 以 2 的幂次增加 batch_size</li>
+  <li>使用 torch.compile 和 Liger 集成以 2 的幂次增加 batch_size</li>
+</ol>
+
+<p>我们注意到，在 PyTorch Eager 中，随着 batch_size 的增加，吞吐量也会增加，直到 batch_size 为 256 时出现 OOM。使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 后，每个 batch_size 的吞吐量都高于 PyTorch Eager。我们发现，随着 batch_size 的增加，峰值内存分配会大幅减少，在 batch_size 为 128 时，峰值内存减少了超过 50%。这使得 <code class="language-plaintext highlighter-rouge">torch.compile</code> 能够支持 batch_size 为 256，因此，使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的整体吞吐量比 PyTorch Eager 高 36%。将 Liger 内核与 <code class="language-plaintext highlighter-rouge">torch.compile</code> 集成后，在较低的 batch_size 下不会降低吞吐量，但随着 batch_size 的增加，我们注意到 torchtune 相比 torch.compile 消耗的内存更少。在 batch_size 为 256 时，我们观察到峰值内存分配减少了 47%，这使得我们可以使用 batch_size 为 512 的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 和 Liger。我们发现，与没有自定义 triton 内核的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 相比，吞吐量增加了 1-2%。</p>
+
+<p><img src="/assets/images/peak-performance-minimized-memory/fg2.png" alt="Plot of tokens/sec per rank vs batch_size" style="width:100%"></p>
+
+<div class="text-center mb-3">
+<p>图 2：每个 rank 的 tokens/sec 与 batch_size 的关系图</p>
+</div>
+
+<p><img src="/assets/images/peak-performance-minimized-memory/fg3.png" alt="Peak memory allocated vs batch_size" style="width:100%;margin-top: 60px;"></p>
+
+<div class="text-center mb-3">
+<p>图 3：峰值内存分配与 batch_size 的关系图</p>
+</div>
+
+<p>为了排除 Liger 内核与 torchtune 集成可能存在的任何潜在功能问题，我们将损失曲线与有无 Liger 的训练步骤进行对比。我们发现损失曲线之间没有明显差异。</p>
+
+<p><img src="/assets/images/peak-performance-minimized-memory/fg4.png" alt="Plot of loss vs training steps for batch_size=128" style="width:100%"></p>
+
+<div class="text-center mb-3">
+<p>图 4：损失与训练步骤的关系图，batch_size=128</p>
+</div>
+
+<h2 id="next-steps">下一步</h2>
+
+<ul>
+  <li>在 torchtune 的 <a href="https://pytorch.org/torchtune/main/recipes/dpo.html">DPO</a> 和<a href="https://pytorch.org/blog/llama-into-torchtune/">知识蒸馏</a>配方中启用 Liger 内核，分别针对 <a href="https://github.com/linkedin/Liger-Kernel/blob/main/src/liger_kernel/chunked_loss/dpo_loss.py#L7">DPO 损失</a>和<a href="https://github.com/linkedin/Liger-Kernel/blob/main/src/liger_kernel/chunked_loss/fused_linear_distillation.py#L9">蒸馏损失 </a>。</li>
+  <li>支持在 torchtune 中使用<a href="https://github.com/pytorch/torchtune/pull/2330">张量并行训练</a>集成 Liger。</li>
+</ul>
+
+<h2 id="acknowledgments">致谢</h2>
+
+<p>我们感谢 Hamid Shojanazeri（Meta）、Less Wright（Meta）、Horace He（Meta）和 Gregory Chanan（Meta）在使这篇博客文章得以实现方面的反馈和支持。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

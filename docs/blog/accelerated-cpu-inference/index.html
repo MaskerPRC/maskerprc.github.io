@@ -1,0 +1,2334 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerated CPU Inference with PyTorch Inductor using torch.compile | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Story at a Glance
+
+
+  Although the PyTorch* Inductor C++/OpenMP* backend has enabled users to take advantage of modern CPU architectures and parallel processing, it has lacked optimizations, resulting in the backend performing worse than eager mode in terms of end-to-end performance.
+  Intel optimized the Inductor backend using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops.
+  For popular deep learning models, this hybrid strategy demonstrates promising performance improvements compared to eager mode and improves the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+
+Inductor Backend Challenges
+
+The PyTorch Inductor C++/OpenMP backend enables users to take advantage of modern CPU architectures and parallel processing to accelerate computations.
+
+However, during the early stages of its development, the backend lacked some optimizations, which prevented it from fully utilizing the CPU computation capabilities. As a result, for most models the C++/OpenMP backend performed worse than eager mode in terms of end-to-end performance, with 45% of TorchBench, 100% of Hugging Face, and 75% of TIMM models performing worse than eager mode.
+
+In this post, we highlight Intel’s optimizations to the Inductor CPU backend, including the technologies and results.
+
+We optimized the backend by using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops. Post-op fusion and weight prepacking using the oneDNN performance library were utilized to optimize the former, while explicit vectorization in C++ codegen was used to optimize the latter.
+
+This hybrid strategy demonstrated promising performance improvements compared to eager mode, particularly on popular deep learning models such as Inductor Hugging Face, Inductor TorchBench and Inductor TIMM. Overall, Intel’s optimizations improve the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+Figure 1: Performance Speedup Ratio Trend
+
+Performance Status of Intel Hybrid Optimizations
+
+Compared to eager mode with the hybrid optimizations, the C++/OpenMP backend shows promising performance improvements. We measured the performance of the three Inductor benchmark suites—TorchBench, Hugging Face, and TIMM—and the results are as follows. (Note: we publish our performance data twice per week on GitHub.)
+
+Overall, these optimizations help to ensure that the C++/OpenMP backend provides efficient and reliable support for PyTorch models.
+
+Passrate
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor | 93%, 56/60 | 96%, 44/46  | 100%, 61/61 |
++----------+------------+-------------+-------------+
+
+
+Geometric mean speedup (Single-Socket Multi-threads)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |   1.39x    |    1.20x    |    1.73x    |
++----------+------------+-------------+-------------+
+
+
+Individual Model Performance
+
+
+
+Figure 2: TorchBench FP32 Performance (Single-Socket Multi-threads)
+
+
+
+Figure 3: Hugging Face FP32 Performance (Single-Socket Multi-thread)
+
+
+
+Figure 4: TIMM FP32 Performance (Single-Socket Multi-threads)
+
+Geometric mean speedup (Single-core Single-thread)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |    1.29x   |    1.15x    |    1.37x    |
++----------+------------+-------------+-------------+
+
+
+
+
+Figure 5: TorchBench FP32 Performance (Single-Socket Single-thread)
+
+
+
+Figure 6: Hugging Face FP32 Performance (Single-Socket Single Thread)
+
+
+
+Figure 7: TIMM FP32 Performance (Single-Socket Single-thread)
+
+Technical Deep Dive
+
+Now, let’s take a closer look at the two primary optimizations used in the Inductor C++/OpenMP backend:
+
+
+  weight prepacking and post-operation fusion via oneDNN library
+  explicit vectorization in Inductor C++ codegen
+
+
+Weight Prepackaging &amp; Post-op Fusion via oneDNN
+
+Shorthand for Intel® oneAPI Deep Neural Network Library, oneDNN library provides a range of post-op fusions (i.e., fuse convolution and matmal with its consecutive operation) that can benefit popular models. The Intel® Extension for PyTorch has implemented most of these fusions and has achieved significant performance improvements. As a result, we have upstreamed all of these fusions that have been applied in Intel’s PyTorch extension to Inductor, enabling a wider range of models to benefit from these optimizations. We have defined these fusions as operators under the mkldnn namespace. This allows the Python module to invoke these mkldnn operations directly.
+
+Currently, the defined fused operations are as follows. You can find these defined fused operations at RegisterMkldnnOpContextClass.cpp.
+
+
+  _linear_pointwise: Fuses Linear and its post-unary element-wise operations
+  _linear_pointwise.binary: Fuses Linear and its post-binary element-wise operations
+  _convolution_pointwise: Fuses Convolution and its post-unary element-wise operations
+  _convolution_pointwise.binary: Fuses Convolution and its post-binary element-wise operations
+
+
+The detailed fusion patterns are defined in the mkldnn.py file: convolution/linear + sigmoid/hardsigmoid/tanh/hardtanh/hardswish/leaky_relu/gelu/relu/relu6/siluconvolution/linear + add/add_/iadd/sub/sub_
+
+On the Inductor side, we apply these fusions on the FX graph that has been lowered. We have defined mkldnn_fuse_fx as the entry point to apply all the fusions. The code snippet for this is as follows:
+
+def mkldnn_fuse_fx(gm: torch.fx.GraphModule, example_inputs):
+    ...
+    gm = fuse_unary(gm)
+    gm = fuse_binary(gm)
+    ...
+    if config.cpp.weight_prepack:
+        gm = pack_module(gm)
+    return gm
+
+
+In the mkldnn_fuse_fx function, we apply fusion on the FX graph that hasn’t been lowered yet. To fuse convolution/linear and its consecutive elementwise operations, we invoke fuse_unary and fuse_binary as follows:
+
+   gm = fuse_unary(gm)
+   gm = fuse_binary(gm)
+
+
+In addition to the post-op fusion, we apply weight prepacking to improve the Conv/GEMM performance further:
+
+   gm = pack_module(gm)
+
+
+Weight prepacking involves rearranging the weight tensor in a blocked layout, which:
+
+
+  can improve vectorization and cache reuse compared to plain formats like NCHW or NHWC and;
+  can help avoid weight reordering at runtime, which can reduce overhead and improve performance and;
+  increases memory usage as the tradeoff.
+
+
+For these reasons, we provide config.cpp.weight_prepack flag in Inductor to provide users with more control over this optimization, allowing them to enable it based on their specific needs.
+
+Explicit Vectorization in Inductor C++ Codegen
+
+Vectorization is a key optimization technique that can significantly improve the performance of numerical computations. By utilizing SIMD (Single Instruction, Multiple Data) instructions, vectorization enables multiple computations to be performed simultaneously on a single processor core, which can lead to significant performance improvements.
+
+In the Inductor C++/OpenMP backend, we use Intel® AVX2 and Intel® AVX-512 ISA (Instruction Set Architecture) options for vectorization by leveraging the aten vectorization library to facilitate the implementation. Aten vectorization supports multiple platforms, including x86 and Arm, as well as multiple data types. It can be extended to support other ISAs easily by adding more VecISA sub-classes. This allows Inductor to easily support other platforms and data types in the future.
+
+Due to differences in platforms, the C++/OpenMP backend of Inductor starts by detecting the CPU features to determine the vectorization bit width at the beginning of code generation. By default, if the machine supports both AVX-512 and AVX2, the backend will choose 512-bit vectorization.
+
+If the hardware supports vectorization, the C++/OpenMP backend first detects if the loop body can be vectorized or not. There are primarily three scenarios that we are not able to generate kernel with vectorization:
+
+
+  Loop body lacks vector intrinsics support, e.g., rand and atomic_add.
+  Loop body lacks efficient vector intrinsics support, e.g., non-contiguous load/store.
+  Data types with vectorization not yet supported but work in progress, e.g., integer, double, half, and bfloat16.
+
+
+To address this issue, the C++/OpenMP backend uses CppVecKernelChecker to detect whether all operations in a particular loop body can be vectorized or not. In general, we classified the operations into two categories by identifying if they depend on the context.
+
+For most elementwise operations such as add, sub, relu, vectorization is straightforward, and their execution does not depend on context.
+
+However, for certain other operations, their semantics are more complex and their execution depends on context through static analysis.
+
+For example, let’s consider the where operation that takes in mask, true_value, and false_value while the mask value is loaded from a uint8 tensor. The fx graph could be as follows:
+
+graph():
+    %ops : [#users=9] = placeholder[target=ops]
+    %get_index : [#users=1] = call_module[target=get_index](args = (index0,), kwargs = {})
+    %load : [#users=1] = call_method[target=load](args = (%ops, arg1_1, %get_index), kwargs = {})
+    %to_dtype : [#users=1] = call_method[target=to_dtype](args = (%ops, %load, torch.bool), kwargs = {})
+    ...
+    %where : [#users=1] = call_method[target=where](args = (%ops, %to_dtype, %to_dtype_2, %to_dtype_3), kwargs = {})
+
+
+Regarding uint8, it is a general data type and could be used for computation but is not limited to being used as Boolean for mask. Hence, we need to analyze its context statically. In particular, the CppVecKernelChecker will check whether a uint8 tensor is only used by to_dtype and to_dtype is only used by where. If yes, it could be vectorized. Otherwise, it will fall back to the scalar version. The generated code could be as follows:
+
+Scalar Version
+
+auto tmp0 = in_ptr0[i1 + (17*i0)];
+auto tmp3 = in_ptr1[i1 + (17*i0)];
+auto tmp1 = static_cast<bool>(tmp0);
+auto tmp2 = static_cast<float>(-33.0);
+auto tmp4 = tmp1 ? tmp2 : tmp3;
+tmp5 = std::max(tmp5, tmp4);
+
+
+Vectorization Version
+
+float g_tmp_buffer_in_ptr0[16] = {0};
+// Convert the flag to float for vectorization. 
+flag_to_float(in_ptr0 + (16*i1) + (17*i0), g_tmp_buffer_in_ptr0, 16);
+auto tmp0 = at::vec::Vectorized<float>::loadu(g_tmp_buffer_in_ptr0);
+auto tmp3 = at::vec::Vectorized<float>::loadu(in_ptr1 + (16*i1) + (17*i0));
+auto tmp1 = (tmp0);
+auto tmp2 = at::vec::Vectorized<float>(static_cast<float>(-33.0));
+auto tmp4 = decltype(tmp2)::blendv(tmp3, tmp2, tmp1);
+
+
+In addition to context analysis, the C++/OpenMP backend also incorporates several other vectorization-related optimizations. These include:
+
+
+  Tiled kernel implementation for supporting transpose load - cpp.py
+  Data type demotion based on value range - cpp.py
+  Replacement of sleef implementation with oneDNN/oneMKL implementation for optimizing aten vectorization - #94577, #92289, #91613
+
+
+In summary, we examined vectorization optimization in Inductor C++ backend for FP32 training and inference of 150 benchmark models with 90% of inference kernels and 71% of training kernels being vectorized.
+
+In terms of inference, a total of 28,185 CPP kernels were generated, with 25,579 (90%) of them being vectorized, while the remaining 10% were scalar. As for training, 103,084 kernels were generated, with 73,909 (71%) being vectorized and 29% not vectorized.
+
+The results indicate that the vectorization of inference kernels is quite impressive (there is still some work to be done in training kernels since we just started to work on the training). The remaining non-vectorized kernels are analyzed in different categories, highlighting the next steps to improve vectorization coverage: index-related operations, int64 support, vertical reduction, vectorization with fallback, and more.
+
+In addition, we also optimized the C++/OpenMP backend with other optimizations like buffer-reuse and CppWrapper.
+
+Future Work
+
+The next step, we will continue optimizing the C++/OpenMP backend and extend it to support more data types as the next step. This includes:
+
+
+  Improve vectorization coverage
+  Support and optimize low precision kernel including BF16, FP16, Quantization
+  Training optimization
+  Loop tiling
+  Autotune
+  Further fusion optimization of Conv/GEMM kernels.
+  Explore alternative codegen paths: clang/llvm/triton
+
+
+Summary
+
+Inductor C++/OpenMP backend is a flexible and efficient backend for the CPU. This blog describes the optimizations used in the C++/OpenMP backend of Inductor for inference and training of three benchmark suites – TorchBench, Hugging
+
+Face and TIMM. The primary optimizations include weight prepacking and post-operation fusion via the oneDNN library, as well as explicit vectorization in Inductor C++ codegen using AVX2 and AVX-512 instructions.
+
+The results show that 90% of inference kernels and 71% of training kernels are vectorized, indicating impressive vectorization for inference and room for improvement in training. In addition, we also applied other optimizations like buffer-reuse and CppWrapper. And we will continuously focus on the future work mentioned above to further improve the performance.
+
+Acknowledgements
+
+The results presented in this blog post are the culmination of a collaborative effort between the Intel PyTorch team and Meta. We would like to express our sincere gratitude to @jansel, @desertfire, and @Chillee for their invaluable contributions and unwavering support throughout the development process. Their expertise and dedication have been instrumental in achieving the optimizations and performance improvements discussed here.
+
+Configuration Details
+
+Hardware Details
+
+
+  
+   
+Item 
+   
+   
+Value 
+   
+  
+  
+   
+Manufacturer 
+   
+   
+Amazon EC2 
+   
+  
+  
+   
+Product Name 
+   
+   
+c6i.16xlarge 
+   
+  
+  
+   
+CPU Model 
+   
+   
+Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz 
+   
+  
+  
+   
+Installed Memory 
+   
+   
+128GB (1x128GB DDR4 3200 MT/s [Unknown]) 
+   
+  
+  
+   
+OS 
+   
+   
+Ubuntu 22.04.2 LTS 
+   
+  
+  
+   
+Kernel 
+   
+   
+5.19.0-1022-aws 
+   
+  
+  
+   
+Microcode 
+   
+   
+0xd000389 
+   
+  
+  
+   
+GCC 
+   
+   
+gcc (Ubuntu 11.3.0-1ubuntu1~22.04) 11.3.0 
+   
+  
+  
+   
+GLIBC 
+   
+   
+ldd (Ubuntu GLIBC 2.35-0ubuntu3.1) 2.35 
+   
+  
+  
+   
+Binutils 
+   
+   
+GNU ld (GNU Binutils for Ubuntu) 2.38 
+   
+  
+  
+   
+Python 
+   
+   
+Python 3.10.6 
+   
+  
+  
+   
+OpenSSL 
+   
+   
+OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022) 
+   
+  
+
+
+Software Details
+
+
+  
+   
+SW
+   
+   
+Nightly commit
+   
+   
+Main commit
+   
+  
+  
+   
+Pytorch
+   
+   
+a977a12
+   
+   
+0b1b063
+   
+  
+  
+   
+Torchbench
+   
+   
+/
+   
+   
+a0848e19
+   
+  
+  
+   
+torchaudio
+   
+   
+0a652f5
+   
+   
+d5b2996
+   
+  
+  
+   
+torchtext
+   
+   
+c4ad5dd
+   
+   
+79100a6
+   
+  
+  
+   
+torchvision
+   
+   
+f2009ab
+   
+   
+b78d98b
+   
+  
+  
+   
+torchdata
+   
+   
+5cb3e6d
+   
+   
+f2bfd3d
+   
+  
+  
+   
+dynamo_benchmarks
+   
+   
+fea73cb
+   
+   
+/
+   
+  
+
+
+Configuration
+
+
+  Intel OpenMP
+  Jemalloc - oversize_threshold:1,background_thread:true,metadata_thp:auto,dirty_decay_ms:-1,muzzy_decay_ms:-1
+  Single-Socket Multi-threads: #of Instances: 1; Cores/Instance: 32
+  Single-Core Single-thread: #of Instances: 1; Cores/Instance: 1
+
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerated CPU Inference with PyTorch Inductor using torch.compile">
+<meta property="og:description" content="Story at a Glance
+
+
+  Although the PyTorch* Inductor C++/OpenMP* backend has enabled users to take advantage of modern CPU architectures and parallel processing, it has lacked optimizations, resulting in the backend performing worse than eager mode in terms of end-to-end performance.
+  Intel optimized the Inductor backend using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops.
+  For popular deep learning models, this hybrid strategy demonstrates promising performance improvements compared to eager mode and improves the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+
+Inductor Backend Challenges
+
+The PyTorch Inductor C++/OpenMP backend enables users to take advantage of modern CPU architectures and parallel processing to accelerate computations.
+
+However, during the early stages of its development, the backend lacked some optimizations, which prevented it from fully utilizing the CPU computation capabilities. As a result, for most models the C++/OpenMP backend performed worse than eager mode in terms of end-to-end performance, with 45% of TorchBench, 100% of Hugging Face, and 75% of TIMM models performing worse than eager mode.
+
+In this post, we highlight Intel’s optimizations to the Inductor CPU backend, including the technologies and results.
+
+We optimized the backend by using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops. Post-op fusion and weight prepacking using the oneDNN performance library were utilized to optimize the former, while explicit vectorization in C++ codegen was used to optimize the latter.
+
+This hybrid strategy demonstrated promising performance improvements compared to eager mode, particularly on popular deep learning models such as Inductor Hugging Face, Inductor TorchBench and Inductor TIMM. Overall, Intel’s optimizations improve the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+Figure 1: Performance Speedup Ratio Trend
+
+Performance Status of Intel Hybrid Optimizations
+
+Compared to eager mode with the hybrid optimizations, the C++/OpenMP backend shows promising performance improvements. We measured the performance of the three Inductor benchmark suites—TorchBench, Hugging Face, and TIMM—and the results are as follows. (Note: we publish our performance data twice per week on GitHub.)
+
+Overall, these optimizations help to ensure that the C++/OpenMP backend provides efficient and reliable support for PyTorch models.
+
+Passrate
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor | 93%, 56/60 | 96%, 44/46  | 100%, 61/61 |
++----------+------------+-------------+-------------+
+
+
+Geometric mean speedup (Single-Socket Multi-threads)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |   1.39x    |    1.20x    |    1.73x    |
++----------+------------+-------------+-------------+
+
+
+Individual Model Performance
+
+
+
+Figure 2: TorchBench FP32 Performance (Single-Socket Multi-threads)
+
+
+
+Figure 3: Hugging Face FP32 Performance (Single-Socket Multi-thread)
+
+
+
+Figure 4: TIMM FP32 Performance (Single-Socket Multi-threads)
+
+Geometric mean speedup (Single-core Single-thread)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |    1.29x   |    1.15x    |    1.37x    |
++----------+------------+-------------+-------------+
+
+
+
+
+Figure 5: TorchBench FP32 Performance (Single-Socket Single-thread)
+
+
+
+Figure 6: Hugging Face FP32 Performance (Single-Socket Single Thread)
+
+
+
+Figure 7: TIMM FP32 Performance (Single-Socket Single-thread)
+
+Technical Deep Dive
+
+Now, let’s take a closer look at the two primary optimizations used in the Inductor C++/OpenMP backend:
+
+
+  weight prepacking and post-operation fusion via oneDNN library
+  explicit vectorization in Inductor C++ codegen
+
+
+Weight Prepackaging &amp; Post-op Fusion via oneDNN
+
+Shorthand for Intel® oneAPI Deep Neural Network Library, oneDNN library provides a range of post-op fusions (i.e., fuse convolution and matmal with its consecutive operation) that can benefit popular models. The Intel® Extension for PyTorch has implemented most of these fusions and has achieved significant performance improvements. As a result, we have upstreamed all of these fusions that have been applied in Intel’s PyTorch extension to Inductor, enabling a wider range of models to benefit from these optimizations. We have defined these fusions as operators under the mkldnn namespace. This allows the Python module to invoke these mkldnn operations directly.
+
+Currently, the defined fused operations are as follows. You can find these defined fused operations at RegisterMkldnnOpContextClass.cpp.
+
+
+  _linear_pointwise: Fuses Linear and its post-unary element-wise operations
+  _linear_pointwise.binary: Fuses Linear and its post-binary element-wise operations
+  _convolution_pointwise: Fuses Convolution and its post-unary element-wise operations
+  _convolution_pointwise.binary: Fuses Convolution and its post-binary element-wise operations
+
+
+The detailed fusion patterns are defined in the mkldnn.py file: convolution/linear + sigmoid/hardsigmoid/tanh/hardtanh/hardswish/leaky_relu/gelu/relu/relu6/siluconvolution/linear + add/add_/iadd/sub/sub_
+
+On the Inductor side, we apply these fusions on the FX graph that has been lowered. We have defined mkldnn_fuse_fx as the entry point to apply all the fusions. The code snippet for this is as follows:
+
+def mkldnn_fuse_fx(gm: torch.fx.GraphModule, example_inputs):
+    ...
+    gm = fuse_unary(gm)
+    gm = fuse_binary(gm)
+    ...
+    if config.cpp.weight_prepack:
+        gm = pack_module(gm)
+    return gm
+
+
+In the mkldnn_fuse_fx function, we apply fusion on the FX graph that hasn’t been lowered yet. To fuse convolution/linear and its consecutive elementwise operations, we invoke fuse_unary and fuse_binary as follows:
+
+   gm = fuse_unary(gm)
+   gm = fuse_binary(gm)
+
+
+In addition to the post-op fusion, we apply weight prepacking to improve the Conv/GEMM performance further:
+
+   gm = pack_module(gm)
+
+
+Weight prepacking involves rearranging the weight tensor in a blocked layout, which:
+
+
+  can improve vectorization and cache reuse compared to plain formats like NCHW or NHWC and;
+  can help avoid weight reordering at runtime, which can reduce overhead and improve performance and;
+  increases memory usage as the tradeoff.
+
+
+For these reasons, we provide config.cpp.weight_prepack flag in Inductor to provide users with more control over this optimization, allowing them to enable it based on their specific needs.
+
+Explicit Vectorization in Inductor C++ Codegen
+
+Vectorization is a key optimization technique that can significantly improve the performance of numerical computations. By utilizing SIMD (Single Instruction, Multiple Data) instructions, vectorization enables multiple computations to be performed simultaneously on a single processor core, which can lead to significant performance improvements.
+
+In the Inductor C++/OpenMP backend, we use Intel® AVX2 and Intel® AVX-512 ISA (Instruction Set Architecture) options for vectorization by leveraging the aten vectorization library to facilitate the implementation. Aten vectorization supports multiple platforms, including x86 and Arm, as well as multiple data types. It can be extended to support other ISAs easily by adding more VecISA sub-classes. This allows Inductor to easily support other platforms and data types in the future.
+
+Due to differences in platforms, the C++/OpenMP backend of Inductor starts by detecting the CPU features to determine the vectorization bit width at the beginning of code generation. By default, if the machine supports both AVX-512 and AVX2, the backend will choose 512-bit vectorization.
+
+If the hardware supports vectorization, the C++/OpenMP backend first detects if the loop body can be vectorized or not. There are primarily three scenarios that we are not able to generate kernel with vectorization:
+
+
+  Loop body lacks vector intrinsics support, e.g., rand and atomic_add.
+  Loop body lacks efficient vector intrinsics support, e.g., non-contiguous load/store.
+  Data types with vectorization not yet supported but work in progress, e.g., integer, double, half, and bfloat16.
+
+
+To address this issue, the C++/OpenMP backend uses CppVecKernelChecker to detect whether all operations in a particular loop body can be vectorized or not. In general, we classified the operations into two categories by identifying if they depend on the context.
+
+For most elementwise operations such as add, sub, relu, vectorization is straightforward, and their execution does not depend on context.
+
+However, for certain other operations, their semantics are more complex and their execution depends on context through static analysis.
+
+For example, let’s consider the where operation that takes in mask, true_value, and false_value while the mask value is loaded from a uint8 tensor. The fx graph could be as follows:
+
+graph():
+    %ops : [#users=9] = placeholder[target=ops]
+    %get_index : [#users=1] = call_module[target=get_index](args = (index0,), kwargs = {})
+    %load : [#users=1] = call_method[target=load](args = (%ops, arg1_1, %get_index), kwargs = {})
+    %to_dtype : [#users=1] = call_method[target=to_dtype](args = (%ops, %load, torch.bool), kwargs = {})
+    ...
+    %where : [#users=1] = call_method[target=where](args = (%ops, %to_dtype, %to_dtype_2, %to_dtype_3), kwargs = {})
+
+
+Regarding uint8, it is a general data type and could be used for computation but is not limited to being used as Boolean for mask. Hence, we need to analyze its context statically. In particular, the CppVecKernelChecker will check whether a uint8 tensor is only used by to_dtype and to_dtype is only used by where. If yes, it could be vectorized. Otherwise, it will fall back to the scalar version. The generated code could be as follows:
+
+Scalar Version
+
+auto tmp0 = in_ptr0[i1 + (17*i0)];
+auto tmp3 = in_ptr1[i1 + (17*i0)];
+auto tmp1 = static_cast<bool>(tmp0);
+auto tmp2 = static_cast<float>(-33.0);
+auto tmp4 = tmp1 ? tmp2 : tmp3;
+tmp5 = std::max(tmp5, tmp4);
+
+
+Vectorization Version
+
+float g_tmp_buffer_in_ptr0[16] = {0};
+// Convert the flag to float for vectorization. 
+flag_to_float(in_ptr0 + (16*i1) + (17*i0), g_tmp_buffer_in_ptr0, 16);
+auto tmp0 = at::vec::Vectorized<float>::loadu(g_tmp_buffer_in_ptr0);
+auto tmp3 = at::vec::Vectorized<float>::loadu(in_ptr1 + (16*i1) + (17*i0));
+auto tmp1 = (tmp0);
+auto tmp2 = at::vec::Vectorized<float>(static_cast<float>(-33.0));
+auto tmp4 = decltype(tmp2)::blendv(tmp3, tmp2, tmp1);
+
+
+In addition to context analysis, the C++/OpenMP backend also incorporates several other vectorization-related optimizations. These include:
+
+
+  Tiled kernel implementation for supporting transpose load - cpp.py
+  Data type demotion based on value range - cpp.py
+  Replacement of sleef implementation with oneDNN/oneMKL implementation for optimizing aten vectorization - #94577, #92289, #91613
+
+
+In summary, we examined vectorization optimization in Inductor C++ backend for FP32 training and inference of 150 benchmark models with 90% of inference kernels and 71% of training kernels being vectorized.
+
+In terms of inference, a total of 28,185 CPP kernels were generated, with 25,579 (90%) of them being vectorized, while the remaining 10% were scalar. As for training, 103,084 kernels were generated, with 73,909 (71%) being vectorized and 29% not vectorized.
+
+The results indicate that the vectorization of inference kernels is quite impressive (there is still some work to be done in training kernels since we just started to work on the training). The remaining non-vectorized kernels are analyzed in different categories, highlighting the next steps to improve vectorization coverage: index-related operations, int64 support, vertical reduction, vectorization with fallback, and more.
+
+In addition, we also optimized the C++/OpenMP backend with other optimizations like buffer-reuse and CppWrapper.
+
+Future Work
+
+The next step, we will continue optimizing the C++/OpenMP backend and extend it to support more data types as the next step. This includes:
+
+
+  Improve vectorization coverage
+  Support and optimize low precision kernel including BF16, FP16, Quantization
+  Training optimization
+  Loop tiling
+  Autotune
+  Further fusion optimization of Conv/GEMM kernels.
+  Explore alternative codegen paths: clang/llvm/triton
+
+
+Summary
+
+Inductor C++/OpenMP backend is a flexible and efficient backend for the CPU. This blog describes the optimizations used in the C++/OpenMP backend of Inductor for inference and training of three benchmark suites – TorchBench, Hugging
+
+Face and TIMM. The primary optimizations include weight prepacking and post-operation fusion via the oneDNN library, as well as explicit vectorization in Inductor C++ codegen using AVX2 and AVX-512 instructions.
+
+The results show that 90% of inference kernels and 71% of training kernels are vectorized, indicating impressive vectorization for inference and room for improvement in training. In addition, we also applied other optimizations like buffer-reuse and CppWrapper. And we will continuously focus on the future work mentioned above to further improve the performance.
+
+Acknowledgements
+
+The results presented in this blog post are the culmination of a collaborative effort between the Intel PyTorch team and Meta. We would like to express our sincere gratitude to @jansel, @desertfire, and @Chillee for their invaluable contributions and unwavering support throughout the development process. Their expertise and dedication have been instrumental in achieving the optimizations and performance improvements discussed here.
+
+Configuration Details
+
+Hardware Details
+
+
+  
+   
+Item 
+   
+   
+Value 
+   
+  
+  
+   
+Manufacturer 
+   
+   
+Amazon EC2 
+   
+  
+  
+   
+Product Name 
+   
+   
+c6i.16xlarge 
+   
+  
+  
+   
+CPU Model 
+   
+   
+Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz 
+   
+  
+  
+   
+Installed Memory 
+   
+   
+128GB (1x128GB DDR4 3200 MT/s [Unknown]) 
+   
+  
+  
+   
+OS 
+   
+   
+Ubuntu 22.04.2 LTS 
+   
+  
+  
+   
+Kernel 
+   
+   
+5.19.0-1022-aws 
+   
+  
+  
+   
+Microcode 
+   
+   
+0xd000389 
+   
+  
+  
+   
+GCC 
+   
+   
+gcc (Ubuntu 11.3.0-1ubuntu1~22.04) 11.3.0 
+   
+  
+  
+   
+GLIBC 
+   
+   
+ldd (Ubuntu GLIBC 2.35-0ubuntu3.1) 2.35 
+   
+  
+  
+   
+Binutils 
+   
+   
+GNU ld (GNU Binutils for Ubuntu) 2.38 
+   
+  
+  
+   
+Python 
+   
+   
+Python 3.10.6 
+   
+  
+  
+   
+OpenSSL 
+   
+   
+OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022) 
+   
+  
+
+
+Software Details
+
+
+  
+   
+SW
+   
+   
+Nightly commit
+   
+   
+Main commit
+   
+  
+  
+   
+Pytorch
+   
+   
+a977a12
+   
+   
+0b1b063
+   
+  
+  
+   
+Torchbench
+   
+   
+/
+   
+   
+a0848e19
+   
+  
+  
+   
+torchaudio
+   
+   
+0a652f5
+   
+   
+d5b2996
+   
+  
+  
+   
+torchtext
+   
+   
+c4ad5dd
+   
+   
+79100a6
+   
+  
+  
+   
+torchvision
+   
+   
+f2009ab
+   
+   
+b78d98b
+   
+  
+  
+   
+torchdata
+   
+   
+5cb3e6d
+   
+   
+f2bfd3d
+   
+  
+  
+   
+dynamo_benchmarks
+   
+   
+fea73cb
+   
+   
+/
+   
+  
+
+
+Configuration
+
+
+  Intel OpenMP
+  Jemalloc - oversize_threshold:1,background_thread:true,metadata_thp:auto,dirty_decay_ms:-1,muzzy_decay_ms:-1
+  Single-Socket Multi-threads: #of Instances: 1; Cores/Instance: 32
+  Single-Core Single-thread: #of Instances: 1; Cores/Instance: 1
+
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerated CPU Inference with PyTorch Inductor using torch.compile">
+<meta name="twitter:description" content="Story at a Glance
+
+
+  Although the PyTorch* Inductor C++/OpenMP* backend has enabled users to take advantage of modern CPU architectures and parallel processing, it has lacked optimizations, resulting in the backend performing worse than eager mode in terms of end-to-end performance.
+  Intel optimized the Inductor backend using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops.
+  For popular deep learning models, this hybrid strategy demonstrates promising performance improvements compared to eager mode and improves the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+
+Inductor Backend Challenges
+
+The PyTorch Inductor C++/OpenMP backend enables users to take advantage of modern CPU architectures and parallel processing to accelerate computations.
+
+However, during the early stages of its development, the backend lacked some optimizations, which prevented it from fully utilizing the CPU computation capabilities. As a result, for most models the C++/OpenMP backend performed worse than eager mode in terms of end-to-end performance, with 45% of TorchBench, 100% of Hugging Face, and 75% of TIMM models performing worse than eager mode.
+
+In this post, we highlight Intel’s optimizations to the Inductor CPU backend, including the technologies and results.
+
+We optimized the backend by using a hybrid strategy that classified operations into two categories: Conv/GEMM and non-Conv/GEMM element-wise and reduction ops. Post-op fusion and weight prepacking using the oneDNN performance library were utilized to optimize the former, while explicit vectorization in C++ codegen was used to optimize the latter.
+
+This hybrid strategy demonstrated promising performance improvements compared to eager mode, particularly on popular deep learning models such as Inductor Hugging Face, Inductor TorchBench and Inductor TIMM. Overall, Intel’s optimizations improve the C++/OpenMP backend’s efficiency and reliability for PyTorch models.
+
+
+
+Figure 1: Performance Speedup Ratio Trend
+
+Performance Status of Intel Hybrid Optimizations
+
+Compared to eager mode with the hybrid optimizations, the C++/OpenMP backend shows promising performance improvements. We measured the performance of the three Inductor benchmark suites—TorchBench, Hugging Face, and TIMM—and the results are as follows. (Note: we publish our performance data twice per week on GitHub.)
+
+Overall, these optimizations help to ensure that the C++/OpenMP backend provides efficient and reliable support for PyTorch models.
+
+Passrate
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor | 93%, 56/60 | 96%, 44/46  | 100%, 61/61 |
++----------+------------+-------------+-------------+
+
+
+Geometric mean speedup (Single-Socket Multi-threads)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |   1.39x    |    1.20x    |    1.73x    |
++----------+------------+-------------+-------------+
+
+
+Individual Model Performance
+
+
+
+Figure 2: TorchBench FP32 Performance (Single-Socket Multi-threads)
+
+
+
+Figure 3: Hugging Face FP32 Performance (Single-Socket Multi-thread)
+
+
+
+Figure 4: TIMM FP32 Performance (Single-Socket Multi-threads)
+
+Geometric mean speedup (Single-core Single-thread)
+
++----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |    1.29x   |    1.15x    |    1.37x    |
++----------+------------+-------------+-------------+
+
+
+
+
+Figure 5: TorchBench FP32 Performance (Single-Socket Single-thread)
+
+
+
+Figure 6: Hugging Face FP32 Performance (Single-Socket Single Thread)
+
+
+
+Figure 7: TIMM FP32 Performance (Single-Socket Single-thread)
+
+Technical Deep Dive
+
+Now, let’s take a closer look at the two primary optimizations used in the Inductor C++/OpenMP backend:
+
+
+  weight prepacking and post-operation fusion via oneDNN library
+  explicit vectorization in Inductor C++ codegen
+
+
+Weight Prepackaging &amp; Post-op Fusion via oneDNN
+
+Shorthand for Intel® oneAPI Deep Neural Network Library, oneDNN library provides a range of post-op fusions (i.e., fuse convolution and matmal with its consecutive operation) that can benefit popular models. The Intel® Extension for PyTorch has implemented most of these fusions and has achieved significant performance improvements. As a result, we have upstreamed all of these fusions that have been applied in Intel’s PyTorch extension to Inductor, enabling a wider range of models to benefit from these optimizations. We have defined these fusions as operators under the mkldnn namespace. This allows the Python module to invoke these mkldnn operations directly.
+
+Currently, the defined fused operations are as follows. You can find these defined fused operations at RegisterMkldnnOpContextClass.cpp.
+
+
+  _linear_pointwise: Fuses Linear and its post-unary element-wise operations
+  _linear_pointwise.binary: Fuses Linear and its post-binary element-wise operations
+  _convolution_pointwise: Fuses Convolution and its post-unary element-wise operations
+  _convolution_pointwise.binary: Fuses Convolution and its post-binary element-wise operations
+
+
+The detailed fusion patterns are defined in the mkldnn.py file: convolution/linear + sigmoid/hardsigmoid/tanh/hardtanh/hardswish/leaky_relu/gelu/relu/relu6/siluconvolution/linear + add/add_/iadd/sub/sub_
+
+On the Inductor side, we apply these fusions on the FX graph that has been lowered. We have defined mkldnn_fuse_fx as the entry point to apply all the fusions. The code snippet for this is as follows:
+
+def mkldnn_fuse_fx(gm: torch.fx.GraphModule, example_inputs):
+    ...
+    gm = fuse_unary(gm)
+    gm = fuse_binary(gm)
+    ...
+    if config.cpp.weight_prepack:
+        gm = pack_module(gm)
+    return gm
+
+
+In the mkldnn_fuse_fx function, we apply fusion on the FX graph that hasn’t been lowered yet. To fuse convolution/linear and its consecutive elementwise operations, we invoke fuse_unary and fuse_binary as follows:
+
+   gm = fuse_unary(gm)
+   gm = fuse_binary(gm)
+
+
+In addition to the post-op fusion, we apply weight prepacking to improve the Conv/GEMM performance further:
+
+   gm = pack_module(gm)
+
+
+Weight prepacking involves rearranging the weight tensor in a blocked layout, which:
+
+
+  can improve vectorization and cache reuse compared to plain formats like NCHW or NHWC and;
+  can help avoid weight reordering at runtime, which can reduce overhead and improve performance and;
+  increases memory usage as the tradeoff.
+
+
+For these reasons, we provide config.cpp.weight_prepack flag in Inductor to provide users with more control over this optimization, allowing them to enable it based on their specific needs.
+
+Explicit Vectorization in Inductor C++ Codegen
+
+Vectorization is a key optimization technique that can significantly improve the performance of numerical computations. By utilizing SIMD (Single Instruction, Multiple Data) instructions, vectorization enables multiple computations to be performed simultaneously on a single processor core, which can lead to significant performance improvements.
+
+In the Inductor C++/OpenMP backend, we use Intel® AVX2 and Intel® AVX-512 ISA (Instruction Set Architecture) options for vectorization by leveraging the aten vectorization library to facilitate the implementation. Aten vectorization supports multiple platforms, including x86 and Arm, as well as multiple data types. It can be extended to support other ISAs easily by adding more VecISA sub-classes. This allows Inductor to easily support other platforms and data types in the future.
+
+Due to differences in platforms, the C++/OpenMP backend of Inductor starts by detecting the CPU features to determine the vectorization bit width at the beginning of code generation. By default, if the machine supports both AVX-512 and AVX2, the backend will choose 512-bit vectorization.
+
+If the hardware supports vectorization, the C++/OpenMP backend first detects if the loop body can be vectorized or not. There are primarily three scenarios that we are not able to generate kernel with vectorization:
+
+
+  Loop body lacks vector intrinsics support, e.g., rand and atomic_add.
+  Loop body lacks efficient vector intrinsics support, e.g., non-contiguous load/store.
+  Data types with vectorization not yet supported but work in progress, e.g., integer, double, half, and bfloat16.
+
+
+To address this issue, the C++/OpenMP backend uses CppVecKernelChecker to detect whether all operations in a particular loop body can be vectorized or not. In general, we classified the operations into two categories by identifying if they depend on the context.
+
+For most elementwise operations such as add, sub, relu, vectorization is straightforward, and their execution does not depend on context.
+
+However, for certain other operations, their semantics are more complex and their execution depends on context through static analysis.
+
+For example, let’s consider the where operation that takes in mask, true_value, and false_value while the mask value is loaded from a uint8 tensor. The fx graph could be as follows:
+
+graph():
+    %ops : [#users=9] = placeholder[target=ops]
+    %get_index : [#users=1] = call_module[target=get_index](args = (index0,), kwargs = {})
+    %load : [#users=1] = call_method[target=load](args = (%ops, arg1_1, %get_index), kwargs = {})
+    %to_dtype : [#users=1] = call_method[target=to_dtype](args = (%ops, %load, torch.bool), kwargs = {})
+    ...
+    %where : [#users=1] = call_method[target=where](args = (%ops, %to_dtype, %to_dtype_2, %to_dtype_3), kwargs = {})
+
+
+Regarding uint8, it is a general data type and could be used for computation but is not limited to being used as Boolean for mask. Hence, we need to analyze its context statically. In particular, the CppVecKernelChecker will check whether a uint8 tensor is only used by to_dtype and to_dtype is only used by where. If yes, it could be vectorized. Otherwise, it will fall back to the scalar version. The generated code could be as follows:
+
+Scalar Version
+
+auto tmp0 = in_ptr0[i1 + (17*i0)];
+auto tmp3 = in_ptr1[i1 + (17*i0)];
+auto tmp1 = static_cast<bool>(tmp0);
+auto tmp2 = static_cast<float>(-33.0);
+auto tmp4 = tmp1 ? tmp2 : tmp3;
+tmp5 = std::max(tmp5, tmp4);
+
+
+Vectorization Version
+
+float g_tmp_buffer_in_ptr0[16] = {0};
+// Convert the flag to float for vectorization. 
+flag_to_float(in_ptr0 + (16*i1) + (17*i0), g_tmp_buffer_in_ptr0, 16);
+auto tmp0 = at::vec::Vectorized<float>::loadu(g_tmp_buffer_in_ptr0);
+auto tmp3 = at::vec::Vectorized<float>::loadu(in_ptr1 + (16*i1) + (17*i0));
+auto tmp1 = (tmp0);
+auto tmp2 = at::vec::Vectorized<float>(static_cast<float>(-33.0));
+auto tmp4 = decltype(tmp2)::blendv(tmp3, tmp2, tmp1);
+
+
+In addition to context analysis, the C++/OpenMP backend also incorporates several other vectorization-related optimizations. These include:
+
+
+  Tiled kernel implementation for supporting transpose load - cpp.py
+  Data type demotion based on value range - cpp.py
+  Replacement of sleef implementation with oneDNN/oneMKL implementation for optimizing aten vectorization - #94577, #92289, #91613
+
+
+In summary, we examined vectorization optimization in Inductor C++ backend for FP32 training and inference of 150 benchmark models with 90% of inference kernels and 71% of training kernels being vectorized.
+
+In terms of inference, a total of 28,185 CPP kernels were generated, with 25,579 (90%) of them being vectorized, while the remaining 10% were scalar. As for training, 103,084 kernels were generated, with 73,909 (71%) being vectorized and 29% not vectorized.
+
+The results indicate that the vectorization of inference kernels is quite impressive (there is still some work to be done in training kernels since we just started to work on the training). The remaining non-vectorized kernels are analyzed in different categories, highlighting the next steps to improve vectorization coverage: index-related operations, int64 support, vertical reduction, vectorization with fallback, and more.
+
+In addition, we also optimized the C++/OpenMP backend with other optimizations like buffer-reuse and CppWrapper.
+
+Future Work
+
+The next step, we will continue optimizing the C++/OpenMP backend and extend it to support more data types as the next step. This includes:
+
+
+  Improve vectorization coverage
+  Support and optimize low precision kernel including BF16, FP16, Quantization
+  Training optimization
+  Loop tiling
+  Autotune
+  Further fusion optimization of Conv/GEMM kernels.
+  Explore alternative codegen paths: clang/llvm/triton
+
+
+Summary
+
+Inductor C++/OpenMP backend is a flexible and efficient backend for the CPU. This blog describes the optimizations used in the C++/OpenMP backend of Inductor for inference and training of three benchmark suites – TorchBench, Hugging
+
+Face and TIMM. The primary optimizations include weight prepacking and post-operation fusion via the oneDNN library, as well as explicit vectorization in Inductor C++ codegen using AVX2 and AVX-512 instructions.
+
+The results show that 90% of inference kernels and 71% of training kernels are vectorized, indicating impressive vectorization for inference and room for improvement in training. In addition, we also applied other optimizations like buffer-reuse and CppWrapper. And we will continuously focus on the future work mentioned above to further improve the performance.
+
+Acknowledgements
+
+The results presented in this blog post are the culmination of a collaborative effort between the Intel PyTorch team and Meta. We would like to express our sincere gratitude to @jansel, @desertfire, and @Chillee for their invaluable contributions and unwavering support throughout the development process. Their expertise and dedication have been instrumental in achieving the optimizations and performance improvements discussed here.
+
+Configuration Details
+
+Hardware Details
+
+
+  
+   
+Item 
+   
+   
+Value 
+   
+  
+  
+   
+Manufacturer 
+   
+   
+Amazon EC2 
+   
+  
+  
+   
+Product Name 
+   
+   
+c6i.16xlarge 
+   
+  
+  
+   
+CPU Model 
+   
+   
+Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz 
+   
+  
+  
+   
+Installed Memory 
+   
+   
+128GB (1x128GB DDR4 3200 MT/s [Unknown]) 
+   
+  
+  
+   
+OS 
+   
+   
+Ubuntu 22.04.2 LTS 
+   
+  
+  
+   
+Kernel 
+   
+   
+5.19.0-1022-aws 
+   
+  
+  
+   
+Microcode 
+   
+   
+0xd000389 
+   
+  
+  
+   
+GCC 
+   
+   
+gcc (Ubuntu 11.3.0-1ubuntu1~22.04) 11.3.0 
+   
+  
+  
+   
+GLIBC 
+   
+   
+ldd (Ubuntu GLIBC 2.35-0ubuntu3.1) 2.35 
+   
+  
+  
+   
+Binutils 
+   
+   
+GNU ld (GNU Binutils for Ubuntu) 2.38 
+   
+  
+  
+   
+Python 
+   
+   
+Python 3.10.6 
+   
+  
+  
+   
+OpenSSL 
+   
+   
+OpenSSL 3.0.2 15 Mar 2022 (Library: OpenSSL 3.0.2 15 Mar 2022) 
+   
+  
+
+
+Software Details
+
+
+  
+   
+SW
+   
+   
+Nightly commit
+   
+   
+Main commit
+   
+  
+  
+   
+Pytorch
+   
+   
+a977a12
+   
+   
+0b1b063
+   
+  
+  
+   
+Torchbench
+   
+   
+/
+   
+   
+a0848e19
+   
+  
+  
+   
+torchaudio
+   
+   
+0a652f5
+   
+   
+d5b2996
+   
+  
+  
+   
+torchtext
+   
+   
+c4ad5dd
+   
+   
+79100a6
+   
+  
+  
+   
+torchvision
+   
+   
+f2009ab
+   
+   
+b78d98b
+   
+  
+  
+   
+torchdata
+   
+   
+5cb3e6d
+   
+   
+f2bfd3d
+   
+  
+  
+   
+dynamo_benchmarks
+   
+   
+fea73cb
+   
+   
+/
+   
+  
+
+
+Configuration
+
+
+  Intel OpenMP
+  Jemalloc - oversize_threshold:1,background_thread:true,metadata_thp:auto,dirty_decay_ms:-1,muzzy_decay_ms:-1
+  Single-Socket Multi-threads: #of Instances: 1; Cores/Instance: 32
+  Single-Core Single-thread: #of Instances: 1; Cores/Instance: 1
+
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年9月13日</p>
+            <h1>
+                <a class="blog-title">使用 torch.compile 加速 CPU 推理的 PyTorch Inductor</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由英特尔提供</p>
+                    <h2 id="story-at-a-glance">概述</h2>
+
+<ul>
+  <li><em>尽管 PyTorch* Inductor C++/OpenMP*后端使用户能够利用现代 CPU 架构和并行处理，但它缺乏优化，导致后端在端到端性能方面表现不如 eager 模式。</em></li>
+  <li><em>英特尔采用混合策略优化了电感器后端，将操作分为两类：卷积/GEMM 和非卷积/GEMM 逐元素和归约操作。</em></li>
+  <li><em>对于流行的深度学习模型，这种混合策略与急切模式相比表现出有前景的性能提升，并提高了 C++/OpenMP 后端对 PyTorch 模型的效率和可靠性。</em></li>
+</ul>
+
+<hr>
+
+<h2 id="inductor-backend-challenges">电感器后端挑战</h2>
+
+<p>PyTorch 电感器 C++/OpenMP 后端使用户能够利用现代 CPU 架构和并行处理来加速计算。</p>
+
+<p>然而，在其开发初期，后端缺乏一些优化，这阻碍了其充分利用 CPU 计算能力。因此，对于大多数模型来说，C++/OpenMP 后端在端到端性能方面表现不如 eager 模式，其中 45%的 TorchBench、100%的 Hugging Face 和 75%的 TIMM 模型的表现不如 eager 模式。</p>
+
+<p>在本文中，我们重点介绍了英特尔对 Inductor CPU 后端的优化，包括技术和结果。</p>
+
+<p>我们通过采用混合策略优化了后端，将操作分为两类：卷积/GEMM 和非卷积/GEMM 逐元素和归约操作。利用 oneDNN 性能库进行后操作融合和权重预打包来优化前者，而使用 C++代码生成中的显式向量化来优化后者。</p>
+
+<p>与 eager 模式相比，这种混合策略在流行的深度学习模型（如 Inductor Hugging Face、Inductor TorchBench 和 Inductor TIMM）上展示了有希望的性能提升。总体而言，英特尔的优化提高了 C++/OpenMP 后端对 PyTorch 模型的效率和可靠性。</p>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f1-pytorch-inference-speedup-ratio-trend-multi.png.rendition.intel.web.1648.927.png" alt="Figure 1. Performance Speedup Ratio Trend" style="width:100%;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 1</strong>：性能加速比趋势</em></small></p>
+
+<h3 id="performance-status-of-intel-hybrid-optimizations">英特尔混合优化性能状态</h3>
+
+<p>与具有混合优化的急切模式相比，C++/OpenMP 后端显示出有希望的性能提升。我们测量了三个电感器基准测试套件——TorchBench、Hugging Face 和 TIMM——的性能，结果如下。（<em> 注意：我们每周在 <a href="http://github.com/pytorch/pytorch/issues/93531">GitHub</a> 上发布两次性能数据。</em>）</p>
+
+<p>总体而言，这些优化有助于确保 C++/OpenMP 后端为 PyTorch 模型提供高效和可靠的支持。</p>
+
+<h3 id="passrate">通过率</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>+----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor | 93%, 56/60 | 96%, 44/46  | 100%, 61/61 |
++----------+------------+-------------+-------------+
+</code></pre></div></div>
+
+<h3 id="geometric-mean-speedup-single-socket-multi-threads">几何平均速度提升（单 Socket 多线程）</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>+----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |   1.39x    |    1.20x    |    1.73x    |
++----------+------------+-------------+-------------+
+</code></pre></div></div>
+
+<h3 id="individual-model-performance">单个模型性能</h3>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f2-torchbench-fp32-performance-multithread.png.rendition.intel.web.1648.927.png" alt="Figure 2. TorchBench FP32 Performance (Single-Socket Multi-threads)" style="width:100%;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 2</strong>：TorchBench FP32 性能（单 Socket 多线程）</em></small></p>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f3-huggingface-fp32-performance-multithread.png.rendition.intel.web.1648.927.png" alt="Figure 3. Hugging Face FP32 Performance (Single-Socket Multi-thread)" style="width:100%;margin-top: 3em;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 3</strong>：Hugging Face FP32 性能（单 socket 多线程）</em></small></p>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f4-timm-fp32-performance-multithread.png.rendition.intel.web.1648.927.png" alt="Figure 4. TIMM FP32 Performance (Single-Socket Multi-threads)" style="width:100%;margin-top: 3em;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 4</strong>：TIMM FP32 性能（单 socket 多线程）</em></small></p>
+
+<h3 id="geometric-mean-speedup-single-core-single-thread">几何平均加速率（单核单线程）</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>+----------+------------+-------------+-------------+
+| Compiler | torchbench | huggingface | timm_models |
++----------+------------+-------------+-------------+
+| inductor |    1.29x   |    1.15x    |    1.37x    |
++----------+------------+-------------+-------------+
+</code></pre></div></div>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f5-torchbench-fp32-performance-single-thread.png.rendition.intel.web.1648.927.png" alt="Figure 5. TorchBench FP32 Performance (Single-Socket Single-thread)" style="width:100%;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 5</strong>：TorchBench FP32 性能（单 socket 单线程）</em></small></p>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f6-huggingface-fp32-performance-single-thread.png.rendition.intel.web.1648.927.png" alt="Figure 6. Hugging Face FP32 Performance (Single-Socket Single Thread)" style="width:100%;margin-top: 3em;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 6</strong>：Hugging Face FP32 性能（单 socket 单线程）</em></small></p>
+
+<p><img src="/assets/images/accelerated-cpu-inference/f7-timm-fp32-performance-single-thread.png.rendition.intel.web.1648.927.png" alt="Figure 7. TIMM FP32 Performance (Single-Socket Single-thread)" style="width:100%;margin-top: 3em;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 7</strong>：TIMM FP32 性能（单 socket 单线程）</em></small></p>
+
+<h2 id="technical-deep-dive">技术深度解析</h2>
+
+<p>现在，让我们更深入地了解 Inductor C++/OpenMP 后端中使用的两种主要优化：</p>
+
+<ol>
+  <li>通过 oneDNN 库进行权重预打包和后操作融合</li>
+  <li>Inductor C++代码生成中的显式向量化</li>
+</ol>
+
+<h3 id="weight-prepackaging--post-op-fusion-via-onednn">通过 oneDNN 进行权重预打包和后操作融合</h3>
+
+<p>简称 Intel® oneAPI 深度神经网络库，oneDNN 库提供了一系列后操作融合（例如，融合卷积和矩阵乘法及其后续操作），这些融合可以提升流行模型的表现。Intel® Extension for PyTorch 已经实现了这些融合中的大部分，并取得了显著的性能提升。因此，我们将这些在 Intel 的 PyTorch 扩展中应用过的融合都上推到了 Inductor，使得更广泛的模型能够受益于这些优化。我们已将这些融合定义为 mkldnn 命名空间下的操作符。这允许 Python 模块直接调用这些 mkldnn 操作。关于 <a href="https://github.com/intel/intel-extension-for-pytorch">Intel® Extension for PyTorch</a> 的详细信息，请访问<a href="https://github.com/intel/intel-extension-for-pytorch">此处 </a>。</p>
+
+<p>目前定义的融合操作如下。您可以在 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/aten/src/ATen/native/mkldnn/RegisterMkldnnOpContextClass.cpp#L35-#L48">RegisterMkldnnOpContextClass.cpp</a> 中找到这些定义的融合操作。</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">_linear_pointwise</code>：融合线性及其后一元元素级操作</li>
+  <li><code class="language-plaintext highlighter-rouge">_linear_pointwise.binary</code>：融合线性及其后二元元素级操作</li>
+  <li><code class="language-plaintext highlighter-rouge">_convolution_pointwise</code>：融合卷积及其后一元元素级操作</li>
+  <li><code class="language-plaintext highlighter-rouge">_convolution_pointwise.binary</code>：融合卷积及其后续二进制元素级操作</li>
+</ul>
+
+<p>详细融合模式定义在 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/mkldnn.py#L774-#L818">mkldnn.py</a> 文件中： <code class="language-plaintext highlighter-rouge">convolution/linear + sigmoid/hardsigmoid/tanh/hardtanh/hardswish/leaky_relu/gelu/relu/relu6/siluconvolution/linear + add/add_/iadd/sub/sub_</code> </p>
+
+<p>在电感器一侧，我们在已降低的 FX 图上应用这些融合。我们已将 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/mkldnn.py#L491">mkldnn_fuse_fx</a> 定义为应用所有融合的入口点。以下是其代码片段：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def mkldnn_fuse_fx(gm: torch.fx.GraphModule, example_inputs):
+    ...
+    gm = fuse_unary(gm)
+    gm = fuse_binary(gm)
+    ...
+    if config.cpp.weight_prepack:
+        gm = pack_module(gm)
+    return gm
+</code></pre></div></div>
+
+<p>在 <code class="language-plaintext highlighter-rouge">mkldnn_fuse_fx</code> 函数中，我们对尚未降低的 FX 图应用融合。为了融合卷积/线性及其后续元素级操作，我们调用 <code class="language-plaintext highlighter-rouge">fuse_unary</code> 和 <code class="language-plaintext highlighter-rouge">fuse_binary</code>，如下所示：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   gm = fuse_unary(gm)
+   gm = fuse_binary(gm)
+</code></pre></div></div>
+
+<p>除了术后融合，我们还应用权重预打包来进一步提高 Conv/GEMM 性能：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   gm = pack_module(gm)
+</code></pre></div></div>
+
+<p>权重预打包涉及将权重张量重新排列成块状布局，这：</p>
+
+<ul>
+  <li>与 NCHW 或 NHWC 等平面格式相比，可以改进向量化并提高缓存重用率；</li>
+  <li>可以帮助避免运行时权重重排，从而减少开销并提高性能；</li>
+  <li>但会增加内存使用量作为权衡。</li>
+</ul>
+
+<p>因此，我们在 Inductor 中提供了 <code class="language-plaintext highlighter-rouge">config.cpp.weight_prepack</code> 标志，以使用户能够根据具体需求对这种优化有更多的控制权，允许他们根据需要启用它。</p>
+
+<h3 id="explicit-vectorization-in-inductor-c-codegen">显式向量化在电感器 C++代码生成中的应用</h3>
+
+<p>向量化是一种关键的优化技术，可以显著提高数值计算的性能。通过利用 SIMD（单指令，多数据）指令，向量化可以在单个处理器核心上同时执行多个计算，从而带来显著的性能提升。</p>
+
+<p>在电感器 C++/OpenMP 后端，我们通过利用 aten 向量化库来促进实现，使用 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codecache.py#L372">Intel® AVX2</a> 和 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codecache.py#L359">Intel® AVX-512</a> 指令集架构（ISA）选项进行向量化。Aten 向量化支持多个平台，包括 x86 和 Arm，以及多种数据类型。它可以通过添加更多的 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codecache.py#L275">VecISA</a> 子类来轻松扩展以支持其他 ISA。这使得 Inductor 可以轻松支持未来的其他平台和数据类型。</p>
+
+<p>由于平台之间的差异，电感器 C++/OpenMP 后端在代码生成开始时首先检测 CPU 特性，以确定向量化位宽。默认情况下，如果机器同时支持 AVX-512 和 AVX2，后端将选择 512 位向量化。</p>
+
+<p>如果硬件支持向量化，C++/OpenMP 后端首先检测循环体是否可以向量化。我们无法生成具有向量化的内核主要有以下三种情况：</p>
+
+<ol>
+  <li>循环体缺少向量内建函数支持，例如 <code class="language-plaintext highlighter-rouge">rand</code> 和 <code class="language-plaintext highlighter-rouge">atomic_add</code>。</li>
+  <li>循环体缺少高效的向量内建函数支持，例如非连续的 <code class="language-plaintext highlighter-rouge">load/store</code>。</li>
+  <li>尚未支持向量化的数据类型，但正在开发中，例如整数、双精度、半精度和 bf16。</li>
+</ol>
+
+<p>为了解决这个问题，C++/OpenMP 后端使用 <a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codegen/cpp.py#L1396">CppVecKernelChecker</a> 来检测特定循环体内的所有操作是否都可以进行向量化。一般来说，我们通过识别它们是否依赖于上下文将操作分为两类。</p>
+
+<p>对于大多数逐元素操作，如 <code class="language-plaintext highlighter-rouge">add</code>、<code class="language-plaintext highlighter-rouge">sub</code>、<code class="language-plaintext highlighter-rouge">relu</code>，向量化很简单，它们的执行不依赖于上下文。</p>
+
+<p>然而，对于某些其他操作，它们的语义更复杂，它们的执行通过静态分析依赖于上下文。</p>
+
+<p>例如，让我们考虑一个操作，它接受掩码、<code class="language-plaintext highlighter-rouge">true_value</code> 和 <code class="language-plaintext highlighter-rouge">false_value</code>，而掩码值是从一个 <code class="language-plaintext highlighter-rouge">uint8</code> 张量中加载的。fx 图可能如下所示：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>graph():
+    %ops : [#users=9] = placeholder[target=ops]
+    %get_index : [#users=1] = call_module[target=get_index](args = (index0,), kwargs = {})
+    %load : [#users=1] = call_method[target=load](args = (%ops, arg1_1, %get_index), kwargs = {})
+    %to_dtype : [#users=1] = call_method[target=to_dtype](args = (%ops, %load, torch.bool), kwargs = {})
+    ...
+    %where : [#users=1] = call_method[target=where](args = (%ops, %to_dtype, %to_dtype_2, %to_dtype_3), kwargs = {})
+</code></pre></div></div>
+
+<p>关于 <code class="language-plaintext highlighter-rouge">uint8</code>，它是一种通用数据类型，可用于计算，但不仅限于用作掩码的布尔值。因此，我们需要对其上下文进行静态分析。特别是，<a href="https://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codegen/cpp.py#L1396">C++VecKernelChecker</a> 将检查 uint8 张量是否仅由 <code class="language-plaintext highlighter-rouge">to_dtype</code> 和 <code class="language-plaintext highlighter-rouge">to_dtype</code> 使用，并且 <code class="language-plaintext highlighter-rouge">to_dtype</code> 仅在 where 中使用。如果是这样，它就可以进行向量化。否则，将回退到标量版本。生成的代码可能如下所示：</p>
+
+<p>标量版本</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>auto tmp0 = in_ptr0[i1 + (17*i0)];
+auto tmp3 = in_ptr1[i1 + (17*i0)];
+auto tmp1 = static_cast&lt;bool&gt;(tmp0);
+auto tmp2 = static_cast&lt;float&gt;(-33.0);
+auto tmp4 = tmp1 ? tmp2 : tmp3;
+tmp5 = std::max(tmp5, tmp4);
+</code></pre></div></div>
+
+<p>向量化版本</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>float g_tmp_buffer_in_ptr0[16] = {0};
+// Convert the flag to float for vectorization. 
+flag_to_float(in_ptr0 + (16*i1) + (17*i0), g_tmp_buffer_in_ptr0, 16);
+auto tmp0 = at::vec::Vectorized&lt;float&gt;::loadu(g_tmp_buffer_in_ptr0);
+auto tmp3 = at::vec::Vectorized&lt;float&gt;::loadu(in_ptr1 + (16*i1) + (17*i0));
+auto tmp1 = (tmp0);
+auto tmp2 = at::vec::Vectorized&lt;float&gt;(static_cast&lt;float&gt;(-33.0));
+auto tmp4 = decltype(tmp2)::blendv(tmp3, tmp2, tmp1);
+</code></pre></div></div>
+
+<p>除了上下文分析之外，C++/OpenMP 后端还集成了其他几个与向量化相关的优化。这包括：</p>
+
+<ul>
+  <li>支持转置加载的瓦片内核实现 - <a href="http://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codegen/cpp.py#L1211">cpp.py</a></li>
+  <li>基于值范围的类型降级 - <a href="http://github.com/pytorch/pytorch/blob/fe05266fda4f908130dea7cbac37e9264c0429a2/torch/_inductor/codegen/cpp.py#L1647-#L1672">cpp.py</a></li>
+  <li>用 oneDNN/oneMKL 实现替换 <a href="http://github.com/shibatch/sleef/tree/e0a003ee838b75d11763aa9c3ef17bf71a725bff">sleef</a> 实现以优化 aten 向量化 - <a href="http://github.com/pytorch/pytorch/pull/94577">#94577</a>，<a href="http://github.com/pytorch/pytorch/pull/92289">#92289</a>，<a href="http://github.com/pytorch/pytorch/pull/91613">#91613</a></li>
+</ul>
+
+<p>总结来说，我们检查了 Inductor C++后端中 FP32 训练和推理的 150 个基准模型的向量化优化，其中 90%的推理内核和 71%的训练内核被向量化。</p>
+
+<p>在推理方面，共生成了 28,185 个 CPP 内核，其中 25,579 个（90%）进行了向量化，剩余的 10%为标量。至于训练，生成了 103,084 个内核，其中 73,909 个（71%）进行了向量化，29%未进行向量化。</p>
+
+<p>结果表明，<strong> 推理内核的向量化效果相当令人印象深刻 </strong>（由于我们刚开始处理训练，因此在训练内核方面仍有工作要做）。剩余的未向量化内核被分析在不同的类别中，突出了提高向量化覆盖率的下一步：索引相关操作、int64 支持、垂直减少、带有回退的向量化等。</p>
+
+<p>此外，我们还对 C++/OpenMP 后端进行了优化，并采用了其他优化措施，如缓冲区重用和 CppWrapper。</p>
+
+<h4 id="future-work">未来工作</h4>
+
+<p>下一步，我们将继续优化 C++/OpenMP 后端，并将其扩展以支持更多数据类型。这包括：</p>
+
+<ol>
+  <li>提高向量化覆盖范围</li>
+  <li>支持和优化低精度内核，包括 BF16、FP16、量化</li>
+  <li>训练优化</li>
+  <li>循环分块</li>
+  <li>自动调谐</li>
+  <li>进一步融合优化 Conv/GEMM 内核。</li>
+  <li>探索替代的代码生成路径：clang/llvm/triton</li>
+</ol>
+
+<h2 id="summary">摘要</h2>
+
+<p>电感器 C++/OpenMP 后端是 CPU 的一个灵活且高效的后端。本文档描述了电感器 C++/OpenMP 后端在三个基准测试套件（TorchBench、Hugging）的推理和训练中使用的优化。</p>
+
+<p>面部识别和 TIMM。主要的优化包括通过 oneDNN 库进行权重预打包和后操作融合，以及在 Inductor C++代码生成中使用 AVX2 和 AVX-512 指令进行显式向量化。</p>
+
+<p>结果显示，90%的推理内核和 71%的训练内核已向量化，表明推理方面具有令人印象深刻的向量化，同时在训练方面仍有改进空间。此外，我们还应用了其他优化，如缓冲区重用和 CppWrapper。我们还将持续关注上述未来工作，以进一步提高性能。</p>
+
+<h3 id="acknowledgements">致谢</h3>
+
+<p>本博客文章中展示的结果是英特尔 PyTorch 团队和 Meta 之间协作努力的结晶。我们想对以下人员表示衷心的感谢：<a href="http://dev-discuss.pytorch.org/u/jansel">@jansel</a>、<a href="http://dev-discuss.pytorch.org/u/desertfire">@desertfire</a> 和 <a href="http://dev-discuss.pytorch.org/u/chillee">@Chillee</a>，他们在整个开发过程中提供了宝贵的贡献和坚定不移的支持。他们的专业知识和奉献精神对于实现此处讨论的优化和性能改进至关重要。</p>
+
+<h3 id="configuration-details">配置详情</h3>
+
+<h4 id="hardware-details">硬件详情</h4>
+
+<table>
+  <tbody><tr>
+   <td>
+<strong>项目</strong>
+   </td>
+   <td>
+<strong>值</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>制造商</td>
+   <td>亚马逊 EC2</td>
+  </tr>
+  <tr>
+   <td>产品名称</td>
+   <td>
+c6i.16xlarge 
+   </td>
+  </tr>
+  <tr>
+   <td>CPU 型号</td>
+   <td>英特尔®至强®铂金 8375C CPU @ 2.90GHz</td>
+  </tr>
+  <tr>
+   <td>已安装内存</td>
+   <td>128GB（1x128GB DDR4 3200 MT/s [未知]）</td>
+  </tr>
+  <tr>
+   <td>
+OS 
+   </td>
+   <td>
+Ubuntu 22.04.2 LTS 
+   </td>
+  </tr>
+  <tr>
+   <td>内核</td>
+   <td>
+5.19.0-1022-aws 
+   </td>
+  </tr>
+  <tr>
+   <td>微代码</td>
+   <td>218104713</td>
+  </tr>
+  <tr>
+   <td>
+GCC 
+   </td>
+   <td>
+gcc (Ubuntu 11.3.0-1ubuntu1~22.04) 11.3.0 
+   </td>
+  </tr>
+  <tr>
+   <td>
+GLIBC 
+   </td>
+   <td>
+ldd (Ubuntu GLIBC 2.35-0ubuntu3.1) 2.35 
+   </td>
+  </tr>
+  <tr>
+   <td>
+Binutils 
+   </td>
+   <td>GNU ld（GNU Binutils for Ubuntu）2.38</td>
+  </tr>
+  <tr>
+   <td>
+Python 
+   </td>
+   <td>
+Python 3.10.6 
+   </td>
+  </tr>
+  <tr>
+   <td>
+OpenSSL 
+   </td>
+   <td>OpenSSL 3.0.2 2022 年 3 月 15 日（库：OpenSSL 3.0.2 2022 年 3 月 15 日）</td>
+  </tr>
+</tbody></table>
+
+<h4 id="software-details">软件详情</h4>
+
+<table>
+  <tbody><tr>
+   <td>
+<strong>SW</strong>
+   </td>
+   <td>
+<strong>每晚提交</strong>
+   </td>
+   <td>
+<strong>主要提交</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>
+Pytorch
+   </td>
+   <td>
+a977a12
+   </td>
+   <td>
+0b1b063
+   </td>
+  </tr>
+  <tr>
+   <td>火炬基准</td>
+   <td>
+/
+   </td>
+   <td>
+a0848e19
+   </td>
+  </tr>
+  <tr>
+   <td>
+torchaudio
+   </td>
+   <td>
+0a652f5
+   </td>
+   <td>
+d5b2996
+   </td>
+  </tr>
+  <tr>
+   <td>
+torchtext
+   </td>
+   <td>
+c4ad5dd
+   </td>
+   <td>
+79100a6
+   </td>
+  </tr>
+  <tr>
+   <td>
+torchvision
+   </td>
+   <td>
+f2009ab
+   </td>
+   <td>9c396a7</td>
+  </tr>
+  <tr>
+   <td>torch 数据</td>
+   <td>
+5cb3e6d
+   </td>
+   <td>
+f2bfd3d
+   </td>
+  </tr>
+  <tr>
+   <td>动态基准测试</td>
+   <td>
+fea73cb
+   </td>
+   <td>
+/
+   </td>
+  </tr>
+</tbody></table>
+
+<h4 id="configuration">配置</h4>
+
+<ul>
+  <li>英特尔 OpenMP</li>
+  <li>Jemalloc - oversize_threshold:1,background_thread:true,metadata_thp:auto,dirty_decay_ms:-1,muzzy_decay_ms:-1</li>
+  <li><strong>单核多线程：</strong> 实例数量：1；每个实例的内核数：32</li>
+  <li><strong>单核单线程：</strong> 实例数量：1；每个实例的内核数：1</li>
+</ul>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Scaling PyTorch FSDP for Training Foundation Models on IBM Cloud | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Large model training using a cloud native approach is of growing interest for many enterprises given the emergence and success of foundation models. Some AI practitioners may assume that the only way they can achieve high GPU utilization for distributed training jobs is to run them on HPC systems, such as those inter-connected with Infiniband and may not consider Ethernet connected systems. We demonstrate how the latest distributed training technique, Fully Sharded Data Parallel (FSDP) from PyTorch, successfully scales to models of size 10B+ parameters using commodity Ethernet networking in IBM Cloud.
+
+PyTorch FSDP Scaling
+
+As models get larger, the standard techniques for data parallel training work only if the GPU can hold a full replica of the model, along with its training state (optimizer, activations, etc.). However, GPU memory increases have not kept up with the model size increases and new techniques for training such models have emerged (e.g., Fully Sharded Data Parallel, DeepSpeed), which allow us to efficiently distribute the model and data over multiple GPUs during training. In this blog post, we demonstrate a path to achieve remarkable scaling of model training to 64 nodes (512 GPUs) using PyTorch native FSDP APIs as we increase model sizes to 11B.
+
+What is Fully Sharded Data Parallel?
+
+FSDP extends the distributed data parallel training (DDP) approach by sharding model parameters, gradient and optimizer states into K FSDP units, determined by using a wrapping policy. FSDP achieves large model training efficiency in terms of resources and performance by significantly reducing the memory footprint on each GPU and overlapping computation and communication.
+
+Resource efficiency is achieved with memory footprint reduction by having all GPUs own a portion of each FSDP unit. To process a given FSDP unit, all GPUs share their locally owned portion via all_gather communication calls.
+
+Performance efficiency is accomplished by overlapping all_gather communication calls for upcoming FSDP units with computation of the current FSDP unit. Once the current FSDP unit has been processed, the non-locally owned parameters are dropped, freeing memory for the upcoming FSDP units.  This process achieves training efficiency by the overlap of computation and communication, while also reducing the peak memory needed by each GPU.
+
+In what follows, we demonstrate how FSDP allows us to keep hundreds of GPUs highly utilized throughout a distributed training job, while running over standard Ethernet networking (system description towards the end of the blog). We chose the T5 architecture for our experiments and leveraged the code from the FSDP workshop. In each of our experiments, we start with a single node experiment to create a baseline and report the metric seconds/iteration normalized by the batch size as well as compute the teraflops based on the Megatron-LM paper (see Appendix for details of teraflop computation for T5). Our experiments aim to maximize the batch size (while avoiding cudaMalloc retries) to take full advantage of overlap in computation and communications, as discussed below. Scaling is defined as the ratio of the seconds/iteration normalized by batch size for N nodes versus a single node, representing how well we can utilize the additional GPUs as more nodes are added.
+
+Experimental Results
+
+Our first set of experiments using the T5-3B configuration (mixed precision with BF16, activation checkpointing, and transformer wrapping policy) demonstrated scaling efficiency of 95% as we increased the number of GPUs from 8 to 512 (1 to 64 nodes, respectively). We achieved these results without any modifications to the existing FSDP APIs. We observed that, for this scale, over Ethernet based network, there is sufficient bandwidth to enable continuous overlap of communication and computation.
+
+However, when we increased the T5 model size to 11B, the scaling efficiency declined substantially to 20%. The PyTorch profiler shows that overlap of communication and computation was very limited. Further investigation into the network bandwidth usage revealed that the poor overlap is being caused by latency in the communication of individual packets and not the bandwidth required (in fact, our peak bandwidth utilization is 1/4th of that available). This led us to hypothesize that if we can increase the compute time by increasing the batch size, we can better overlap communication and computation. However, given we are already at maximum GPU memory allocation, we must identify opportunities to rebalance the memory allocation to allow for increase in batch size. We identified that the model state was being allocated a lot more memory than was needed. The primary function of these reservations is to have pre-reserved memory ready to aggressively send/receive tensors during the communication periods and too few buffers can result in increased wait times, whereas too many buffers result in smaller batch sizes.
+
+To achieve better efficiency, the PyTorch distributed team introduced a new control knob, the rate_limiter which controls how much memory is allocated for send/receive of tensors, alleviating the memory pressure and providing room for higher batch sizes.  In our case, the rate_limiter could increase the batch size from 20 to 50, thus increasing compute time by 2.5x and allowing for much greater overlap of communication and computation. With this fix, we increased the scaling efficiency to >75% (at 32 nodes)!
+
+Continued investigation into the factors limiting scaling efficiency uncovered that the rate limiter was creating a recurring pipeline bubble of GPU idle time. This was due to the rate limiter using a block and flush approach for the allocation and release of each set of memory buffers. By waiting for the entire block to complete before initiating a new all_gather, the GPU was idling at the start of each block, while waiting for the new set of all_gather parameters to arrive. This bubble was alleviated by moving to a sliding window approach. Upon the completion of a single all_gather step and its computation (rather than a block of them), the memory is freed and the next all_gather is immediately issued in a much more uniform manner.  This improvement eliminated the pipeline bubble and boosted the scaling efficiencies to >90% (at 32 nodes).
+
+
+
+
+
+
+Figure 1: Scaling of T5-XL (3B) and T5-XXL (11B) from 1 node to 64 nodes
+
+
+
+
+
+
+
+Figure 2: TFLOPs/sec usage for T5-XL(3B) and T5-XXL (11B) as we increase number of nodes
+
+
+IBM Cloud AI System and Middleware
+
+The AI infrastructure used for this work is a large-scale AI system on IBM Cloud consisting of nearly 200 nodes, each node with 8 NVIDIA A100 80GB cards, 96 vCPUs, and 1.2TB CPU RAM. The GPU cards within a node are connected via NVLink with a card-to-card bandwidth of 600GBps. Nodes are connected by 2 x 100Gbps Ethernet links with SRIOV based TCP/IP stack, providing a usable bandwidth of 120Gbps.
+
+The IBM Cloud AI System has been production-ready since May of 2022 and is configured with the OpenShift container platform to run AI workloads. We also built a software stack for production AI workloads that provide end-to-end tools for training workloads. The middleware leverages Ray for pre and post processing workloads and PyTorch for training of models. We also integrate a Kubernetes native scheduler, MCAD, that manages multiple jobs with job queuing, gang scheduling, prioritization, and quota management. A multi-NIC CNI discovers all available network interfaces and handles them as a single NIC pool enabling optimized use of the network interfaces in Kubernetes. Finally, CodeFlare CLI supports a single pane for observability of the full stack using a desktop CLI (e.g., GPU utilization, application metrics like loss, gradient norm).
+
+
+  
+
+
+
+Figure 3: Foundation Model Middleware Stack
+
+
+Conclusion and Future Work
+
+In conclusion, we demonstrated how we can achieve remarkable scaling of FSDP APIs over non-InfiniBand networks. We identified the bottleneck that had limited scaling to less than 20% efficiency for 11B parameter model training.  After identifying the issue, we were able to correct this with a new rate limiter control to ensure a more optimal balance of reserved memory and communication overlap relative to compute time. With this improvement, we were able to achieve 90% scaling efficiency (a 4.5x improvement), at 256 GPUs and 80% at 512 GPUs for training of the 11B parameter model. In addition, the 3B parameter model scales extremely well with 95% efficiency even as we increase the number of GPUs to 512.
+
+This is a first in the industry to achieve such scaling efficiencies for up to 11B parameter models using Kubernetes with vanilla Ethernet and PyTorch native FSDP API’s. This improvement enables users to train huge models on a Hybrid Cloud platform in a cost efficient and sustainable manner.
+
+We plan on continuing to investigate scaling with decoder only models and increasing the size of these models to 100B+ parameters. From a system design perspective, we are exploring capabilities such as RoCE and GDR that can improve latencies of communications over Ethernet networks.
+
+Acknowledgements
+
+This blog was possible because of contributions from both PyTorch Distributed and IBM Research teams.
+
+From the PyTorch Distributed team, we would like to thank Less Wright, Hamid Shojanazeri, Geeta Chauhan, Shen Li, Rohan Varma, Yanli Zhao, Andrew Gu, Anjali Sridhar, Chien-Chin Huang, and Bernard Nguyen.
+
+From the IBM Research team, we would like to thank Linsong Chu, Sophia Wen, Lixiang (Eric) Luo, Marquita Ellis, Davis Wertheimer, Supriyo Chakraborty, Raghu Ganti, Mudhakar Srivatsa, Seetharami Seelam, Carlos Costa, Abhishek Malvankar, Diana Arroyo, Alaa Youssef, Nick Mitchell.
+
+Appendix
+
+Teraflop computation
+
+The T5-XXL (11B) architecture has two types of T5 blocks, one is an encoder and the second is a decoder. Following the approach of Megatron-LM, where each matrix multiplication requires 2m×k×n FLOPs, where the first matrix is of size m×k and the second is k×n. The encoder block consists of self-attention and feed forward layers, whereas the decoder block consists of self-attention, cross-attention, and feed forward layers.
+
+The attention (both self and cross) block consists of a QKV projection, which requires 6Bsh2 operations, an attention matrix computation requiring 2Bs2h operations, an attention over values which needs 2Bs2h computations, and the post-attention linear projection requires 2Bsh2 operations. Finally, the feed forward layer requires 15Bsh2 operations.
+
+The total for an encoder block is 23Bsh2+4Bs2h, whereas for a decoder block, it comes to 31Bsh2+8Bs2h. With a total of 24 encoder and 24 decoder blocks and 2 forward passes (as we discard the activations) and one backward pass (equivalent to two forward passes), the final FLOPs computation comes to be 96×(54Bsh2+ 12Bs2h) + 6BshV. Here, B is the batch size per GPU, s is sequence length, h is hidden state size, and V is vocabulary size. 
+We repeat a similar computation for T5-XL (3B) architecture, which is slightly different.
+">
+
+  <meta property="og:image" content="http://localhost:4000//assets/images/scaling-pytorch-fsdp-image1-IBM_scaling_FSDP_visual_new.png">
+  <meta name="twitter:image" content="http://localhost:4000//assets/images/scaling-pytorch-fsdp-image1-IBM_scaling_FSDP_visual_new.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Scaling PyTorch FSDP for Training Foundation Models on IBM Cloud">
+<meta property="og:description" content="Large model training using a cloud native approach is of growing interest for many enterprises given the emergence and success of foundation models. Some AI practitioners may assume that the only way they can achieve high GPU utilization for distributed training jobs is to run them on HPC systems, such as those inter-connected with Infiniband and may not consider Ethernet connected systems. We demonstrate how the latest distributed training technique, Fully Sharded Data Parallel (FSDP) from PyTorch, successfully scales to models of size 10B+ parameters using commodity Ethernet networking in IBM Cloud.
+
+PyTorch FSDP Scaling
+
+As models get larger, the standard techniques for data parallel training work only if the GPU can hold a full replica of the model, along with its training state (optimizer, activations, etc.). However, GPU memory increases have not kept up with the model size increases and new techniques for training such models have emerged (e.g., Fully Sharded Data Parallel, DeepSpeed), which allow us to efficiently distribute the model and data over multiple GPUs during training. In this blog post, we demonstrate a path to achieve remarkable scaling of model training to 64 nodes (512 GPUs) using PyTorch native FSDP APIs as we increase model sizes to 11B.
+
+What is Fully Sharded Data Parallel?
+
+FSDP extends the distributed data parallel training (DDP) approach by sharding model parameters, gradient and optimizer states into K FSDP units, determined by using a wrapping policy. FSDP achieves large model training efficiency in terms of resources and performance by significantly reducing the memory footprint on each GPU and overlapping computation and communication.
+
+Resource efficiency is achieved with memory footprint reduction by having all GPUs own a portion of each FSDP unit. To process a given FSDP unit, all GPUs share their locally owned portion via all_gather communication calls.
+
+Performance efficiency is accomplished by overlapping all_gather communication calls for upcoming FSDP units with computation of the current FSDP unit. Once the current FSDP unit has been processed, the non-locally owned parameters are dropped, freeing memory for the upcoming FSDP units.  This process achieves training efficiency by the overlap of computation and communication, while also reducing the peak memory needed by each GPU.
+
+In what follows, we demonstrate how FSDP allows us to keep hundreds of GPUs highly utilized throughout a distributed training job, while running over standard Ethernet networking (system description towards the end of the blog). We chose the T5 architecture for our experiments and leveraged the code from the FSDP workshop. In each of our experiments, we start with a single node experiment to create a baseline and report the metric seconds/iteration normalized by the batch size as well as compute the teraflops based on the Megatron-LM paper (see Appendix for details of teraflop computation for T5). Our experiments aim to maximize the batch size (while avoiding cudaMalloc retries) to take full advantage of overlap in computation and communications, as discussed below. Scaling is defined as the ratio of the seconds/iteration normalized by batch size for N nodes versus a single node, representing how well we can utilize the additional GPUs as more nodes are added.
+
+Experimental Results
+
+Our first set of experiments using the T5-3B configuration (mixed precision with BF16, activation checkpointing, and transformer wrapping policy) demonstrated scaling efficiency of 95% as we increased the number of GPUs from 8 to 512 (1 to 64 nodes, respectively). We achieved these results without any modifications to the existing FSDP APIs. We observed that, for this scale, over Ethernet based network, there is sufficient bandwidth to enable continuous overlap of communication and computation.
+
+However, when we increased the T5 model size to 11B, the scaling efficiency declined substantially to 20%. The PyTorch profiler shows that overlap of communication and computation was very limited. Further investigation into the network bandwidth usage revealed that the poor overlap is being caused by latency in the communication of individual packets and not the bandwidth required (in fact, our peak bandwidth utilization is 1/4th of that available). This led us to hypothesize that if we can increase the compute time by increasing the batch size, we can better overlap communication and computation. However, given we are already at maximum GPU memory allocation, we must identify opportunities to rebalance the memory allocation to allow for increase in batch size. We identified that the model state was being allocated a lot more memory than was needed. The primary function of these reservations is to have pre-reserved memory ready to aggressively send/receive tensors during the communication periods and too few buffers can result in increased wait times, whereas too many buffers result in smaller batch sizes.
+
+To achieve better efficiency, the PyTorch distributed team introduced a new control knob, the rate_limiter which controls how much memory is allocated for send/receive of tensors, alleviating the memory pressure and providing room for higher batch sizes.  In our case, the rate_limiter could increase the batch size from 20 to 50, thus increasing compute time by 2.5x and allowing for much greater overlap of communication and computation. With this fix, we increased the scaling efficiency to >75% (at 32 nodes)!
+
+Continued investigation into the factors limiting scaling efficiency uncovered that the rate limiter was creating a recurring pipeline bubble of GPU idle time. This was due to the rate limiter using a block and flush approach for the allocation and release of each set of memory buffers. By waiting for the entire block to complete before initiating a new all_gather, the GPU was idling at the start of each block, while waiting for the new set of all_gather parameters to arrive. This bubble was alleviated by moving to a sliding window approach. Upon the completion of a single all_gather step and its computation (rather than a block of them), the memory is freed and the next all_gather is immediately issued in a much more uniform manner.  This improvement eliminated the pipeline bubble and boosted the scaling efficiencies to >90% (at 32 nodes).
+
+
+
+
+
+
+Figure 1: Scaling of T5-XL (3B) and T5-XXL (11B) from 1 node to 64 nodes
+
+
+
+
+
+
+
+Figure 2: TFLOPs/sec usage for T5-XL(3B) and T5-XXL (11B) as we increase number of nodes
+
+
+IBM Cloud AI System and Middleware
+
+The AI infrastructure used for this work is a large-scale AI system on IBM Cloud consisting of nearly 200 nodes, each node with 8 NVIDIA A100 80GB cards, 96 vCPUs, and 1.2TB CPU RAM. The GPU cards within a node are connected via NVLink with a card-to-card bandwidth of 600GBps. Nodes are connected by 2 x 100Gbps Ethernet links with SRIOV based TCP/IP stack, providing a usable bandwidth of 120Gbps.
+
+The IBM Cloud AI System has been production-ready since May of 2022 and is configured with the OpenShift container platform to run AI workloads. We also built a software stack for production AI workloads that provide end-to-end tools for training workloads. The middleware leverages Ray for pre and post processing workloads and PyTorch for training of models. We also integrate a Kubernetes native scheduler, MCAD, that manages multiple jobs with job queuing, gang scheduling, prioritization, and quota management. A multi-NIC CNI discovers all available network interfaces and handles them as a single NIC pool enabling optimized use of the network interfaces in Kubernetes. Finally, CodeFlare CLI supports a single pane for observability of the full stack using a desktop CLI (e.g., GPU utilization, application metrics like loss, gradient norm).
+
+
+  
+
+
+
+Figure 3: Foundation Model Middleware Stack
+
+
+Conclusion and Future Work
+
+In conclusion, we demonstrated how we can achieve remarkable scaling of FSDP APIs over non-InfiniBand networks. We identified the bottleneck that had limited scaling to less than 20% efficiency for 11B parameter model training.  After identifying the issue, we were able to correct this with a new rate limiter control to ensure a more optimal balance of reserved memory and communication overlap relative to compute time. With this improvement, we were able to achieve 90% scaling efficiency (a 4.5x improvement), at 256 GPUs and 80% at 512 GPUs for training of the 11B parameter model. In addition, the 3B parameter model scales extremely well with 95% efficiency even as we increase the number of GPUs to 512.
+
+This is a first in the industry to achieve such scaling efficiencies for up to 11B parameter models using Kubernetes with vanilla Ethernet and PyTorch native FSDP API’s. This improvement enables users to train huge models on a Hybrid Cloud platform in a cost efficient and sustainable manner.
+
+We plan on continuing to investigate scaling with decoder only models and increasing the size of these models to 100B+ parameters. From a system design perspective, we are exploring capabilities such as RoCE and GDR that can improve latencies of communications over Ethernet networks.
+
+Acknowledgements
+
+This blog was possible because of contributions from both PyTorch Distributed and IBM Research teams.
+
+From the PyTorch Distributed team, we would like to thank Less Wright, Hamid Shojanazeri, Geeta Chauhan, Shen Li, Rohan Varma, Yanli Zhao, Andrew Gu, Anjali Sridhar, Chien-Chin Huang, and Bernard Nguyen.
+
+From the IBM Research team, we would like to thank Linsong Chu, Sophia Wen, Lixiang (Eric) Luo, Marquita Ellis, Davis Wertheimer, Supriyo Chakraborty, Raghu Ganti, Mudhakar Srivatsa, Seetharami Seelam, Carlos Costa, Abhishek Malvankar, Diana Arroyo, Alaa Youssef, Nick Mitchell.
+
+Appendix
+
+Teraflop computation
+
+The T5-XXL (11B) architecture has two types of T5 blocks, one is an encoder and the second is a decoder. Following the approach of Megatron-LM, where each matrix multiplication requires 2m×k×n FLOPs, where the first matrix is of size m×k and the second is k×n. The encoder block consists of self-attention and feed forward layers, whereas the decoder block consists of self-attention, cross-attention, and feed forward layers.
+
+The attention (both self and cross) block consists of a QKV projection, which requires 6Bsh2 operations, an attention matrix computation requiring 2Bs2h operations, an attention over values which needs 2Bs2h computations, and the post-attention linear projection requires 2Bsh2 operations. Finally, the feed forward layer requires 15Bsh2 operations.
+
+The total for an encoder block is 23Bsh2+4Bs2h, whereas for a decoder block, it comes to 31Bsh2+8Bs2h. With a total of 24 encoder and 24 decoder blocks and 2 forward passes (as we discard the activations) and one backward pass (equivalent to two forward passes), the final FLOPs computation comes to be 96×(54Bsh2+ 12Bs2h) + 6BshV. Here, B is the batch size per GPU, s is sequence length, h is hidden state size, and V is vocabulary size. 
+We repeat a similar computation for T5-XL (3B) architecture, which is slightly different.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Scaling PyTorch FSDP for Training Foundation Models on IBM Cloud">
+<meta name="twitter:description" content="Large model training using a cloud native approach is of growing interest for many enterprises given the emergence and success of foundation models. Some AI practitioners may assume that the only way they can achieve high GPU utilization for distributed training jobs is to run them on HPC systems, such as those inter-connected with Infiniband and may not consider Ethernet connected systems. We demonstrate how the latest distributed training technique, Fully Sharded Data Parallel (FSDP) from PyTorch, successfully scales to models of size 10B+ parameters using commodity Ethernet networking in IBM Cloud.
+
+PyTorch FSDP Scaling
+
+As models get larger, the standard techniques for data parallel training work only if the GPU can hold a full replica of the model, along with its training state (optimizer, activations, etc.). However, GPU memory increases have not kept up with the model size increases and new techniques for training such models have emerged (e.g., Fully Sharded Data Parallel, DeepSpeed), which allow us to efficiently distribute the model and data over multiple GPUs during training. In this blog post, we demonstrate a path to achieve remarkable scaling of model training to 64 nodes (512 GPUs) using PyTorch native FSDP APIs as we increase model sizes to 11B.
+
+What is Fully Sharded Data Parallel?
+
+FSDP extends the distributed data parallel training (DDP) approach by sharding model parameters, gradient and optimizer states into K FSDP units, determined by using a wrapping policy. FSDP achieves large model training efficiency in terms of resources and performance by significantly reducing the memory footprint on each GPU and overlapping computation and communication.
+
+Resource efficiency is achieved with memory footprint reduction by having all GPUs own a portion of each FSDP unit. To process a given FSDP unit, all GPUs share their locally owned portion via all_gather communication calls.
+
+Performance efficiency is accomplished by overlapping all_gather communication calls for upcoming FSDP units with computation of the current FSDP unit. Once the current FSDP unit has been processed, the non-locally owned parameters are dropped, freeing memory for the upcoming FSDP units.  This process achieves training efficiency by the overlap of computation and communication, while also reducing the peak memory needed by each GPU.
+
+In what follows, we demonstrate how FSDP allows us to keep hundreds of GPUs highly utilized throughout a distributed training job, while running over standard Ethernet networking (system description towards the end of the blog). We chose the T5 architecture for our experiments and leveraged the code from the FSDP workshop. In each of our experiments, we start with a single node experiment to create a baseline and report the metric seconds/iteration normalized by the batch size as well as compute the teraflops based on the Megatron-LM paper (see Appendix for details of teraflop computation for T5). Our experiments aim to maximize the batch size (while avoiding cudaMalloc retries) to take full advantage of overlap in computation and communications, as discussed below. Scaling is defined as the ratio of the seconds/iteration normalized by batch size for N nodes versus a single node, representing how well we can utilize the additional GPUs as more nodes are added.
+
+Experimental Results
+
+Our first set of experiments using the T5-3B configuration (mixed precision with BF16, activation checkpointing, and transformer wrapping policy) demonstrated scaling efficiency of 95% as we increased the number of GPUs from 8 to 512 (1 to 64 nodes, respectively). We achieved these results without any modifications to the existing FSDP APIs. We observed that, for this scale, over Ethernet based network, there is sufficient bandwidth to enable continuous overlap of communication and computation.
+
+However, when we increased the T5 model size to 11B, the scaling efficiency declined substantially to 20%. The PyTorch profiler shows that overlap of communication and computation was very limited. Further investigation into the network bandwidth usage revealed that the poor overlap is being caused by latency in the communication of individual packets and not the bandwidth required (in fact, our peak bandwidth utilization is 1/4th of that available). This led us to hypothesize that if we can increase the compute time by increasing the batch size, we can better overlap communication and computation. However, given we are already at maximum GPU memory allocation, we must identify opportunities to rebalance the memory allocation to allow for increase in batch size. We identified that the model state was being allocated a lot more memory than was needed. The primary function of these reservations is to have pre-reserved memory ready to aggressively send/receive tensors during the communication periods and too few buffers can result in increased wait times, whereas too many buffers result in smaller batch sizes.
+
+To achieve better efficiency, the PyTorch distributed team introduced a new control knob, the rate_limiter which controls how much memory is allocated for send/receive of tensors, alleviating the memory pressure and providing room for higher batch sizes.  In our case, the rate_limiter could increase the batch size from 20 to 50, thus increasing compute time by 2.5x and allowing for much greater overlap of communication and computation. With this fix, we increased the scaling efficiency to >75% (at 32 nodes)!
+
+Continued investigation into the factors limiting scaling efficiency uncovered that the rate limiter was creating a recurring pipeline bubble of GPU idle time. This was due to the rate limiter using a block and flush approach for the allocation and release of each set of memory buffers. By waiting for the entire block to complete before initiating a new all_gather, the GPU was idling at the start of each block, while waiting for the new set of all_gather parameters to arrive. This bubble was alleviated by moving to a sliding window approach. Upon the completion of a single all_gather step and its computation (rather than a block of them), the memory is freed and the next all_gather is immediately issued in a much more uniform manner.  This improvement eliminated the pipeline bubble and boosted the scaling efficiencies to >90% (at 32 nodes).
+
+
+
+
+
+
+Figure 1: Scaling of T5-XL (3B) and T5-XXL (11B) from 1 node to 64 nodes
+
+
+
+
+
+
+
+Figure 2: TFLOPs/sec usage for T5-XL(3B) and T5-XXL (11B) as we increase number of nodes
+
+
+IBM Cloud AI System and Middleware
+
+The AI infrastructure used for this work is a large-scale AI system on IBM Cloud consisting of nearly 200 nodes, each node with 8 NVIDIA A100 80GB cards, 96 vCPUs, and 1.2TB CPU RAM. The GPU cards within a node are connected via NVLink with a card-to-card bandwidth of 600GBps. Nodes are connected by 2 x 100Gbps Ethernet links with SRIOV based TCP/IP stack, providing a usable bandwidth of 120Gbps.
+
+The IBM Cloud AI System has been production-ready since May of 2022 and is configured with the OpenShift container platform to run AI workloads. We also built a software stack for production AI workloads that provide end-to-end tools for training workloads. The middleware leverages Ray for pre and post processing workloads and PyTorch for training of models. We also integrate a Kubernetes native scheduler, MCAD, that manages multiple jobs with job queuing, gang scheduling, prioritization, and quota management. A multi-NIC CNI discovers all available network interfaces and handles them as a single NIC pool enabling optimized use of the network interfaces in Kubernetes. Finally, CodeFlare CLI supports a single pane for observability of the full stack using a desktop CLI (e.g., GPU utilization, application metrics like loss, gradient norm).
+
+
+  
+
+
+
+Figure 3: Foundation Model Middleware Stack
+
+
+Conclusion and Future Work
+
+In conclusion, we demonstrated how we can achieve remarkable scaling of FSDP APIs over non-InfiniBand networks. We identified the bottleneck that had limited scaling to less than 20% efficiency for 11B parameter model training.  After identifying the issue, we were able to correct this with a new rate limiter control to ensure a more optimal balance of reserved memory and communication overlap relative to compute time. With this improvement, we were able to achieve 90% scaling efficiency (a 4.5x improvement), at 256 GPUs and 80% at 512 GPUs for training of the 11B parameter model. In addition, the 3B parameter model scales extremely well with 95% efficiency even as we increase the number of GPUs to 512.
+
+This is a first in the industry to achieve such scaling efficiencies for up to 11B parameter models using Kubernetes with vanilla Ethernet and PyTorch native FSDP API’s. This improvement enables users to train huge models on a Hybrid Cloud platform in a cost efficient and sustainable manner.
+
+We plan on continuing to investigate scaling with decoder only models and increasing the size of these models to 100B+ parameters. From a system design perspective, we are exploring capabilities such as RoCE and GDR that can improve latencies of communications over Ethernet networks.
+
+Acknowledgements
+
+This blog was possible because of contributions from both PyTorch Distributed and IBM Research teams.
+
+From the PyTorch Distributed team, we would like to thank Less Wright, Hamid Shojanazeri, Geeta Chauhan, Shen Li, Rohan Varma, Yanli Zhao, Andrew Gu, Anjali Sridhar, Chien-Chin Huang, and Bernard Nguyen.
+
+From the IBM Research team, we would like to thank Linsong Chu, Sophia Wen, Lixiang (Eric) Luo, Marquita Ellis, Davis Wertheimer, Supriyo Chakraborty, Raghu Ganti, Mudhakar Srivatsa, Seetharami Seelam, Carlos Costa, Abhishek Malvankar, Diana Arroyo, Alaa Youssef, Nick Mitchell.
+
+Appendix
+
+Teraflop computation
+
+The T5-XXL (11B) architecture has two types of T5 blocks, one is an encoder and the second is a decoder. Following the approach of Megatron-LM, where each matrix multiplication requires 2m×k×n FLOPs, where the first matrix is of size m×k and the second is k×n. The encoder block consists of self-attention and feed forward layers, whereas the decoder block consists of self-attention, cross-attention, and feed forward layers.
+
+The attention (both self and cross) block consists of a QKV projection, which requires 6Bsh2 operations, an attention matrix computation requiring 2Bs2h operations, an attention over values which needs 2Bs2h computations, and the post-attention linear projection requires 2Bsh2 operations. Finally, the feed forward layer requires 15Bsh2 operations.
+
+The total for an encoder block is 23Bsh2+4Bs2h, whereas for a decoder block, it comes to 31Bsh2+8Bs2h. With a total of 24 encoder and 24 decoder blocks and 2 forward passes (as we discard the activations) and one backward pass (equivalent to two forward passes), the final FLOPs computation comes to be 96×(54Bsh2+ 12Bs2h) + 6BshV. Here, B is the batch size per GPU, s is sequence length, h is hidden state size, and V is vocabulary size. 
+We repeat a similar computation for T5-XL (3B) architecture, which is slightly different.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容是什么</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年12月15日</p>
+            <h1>
+                <a class="blog-title">在 IBM 云上扩展 PyTorch FSDP 以训练基础模型</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由朱林松、莱斯·赖特、哈米德·肖贾纳泽里、索菲亚·温、拉古·甘蒂、吉塔·乔汗合著</p>
+                    <p>随着基础模型的出现和成功，使用云原生方法进行大型模型训练越来越受到许多企业的关注。一些 AI 从业者可能认为，他们实现高 GPU 利用率进行分布式训练作业的唯一方式是在 HPC 系统上运行，例如那些通过 Infiniband 互联的系统，而可能不会考虑以太网连接的系统。我们展示了最新的分布式训练技术，PyTorch 的完全分片数据并行（FSDP），如何成功扩展到 10B+参数规模的模型，并使用 IBM Cloud 中的商品以太网网络。</p>
+
+<h2 id="pytorch-fsdp-scaling">PyTorch FSDP 扩展</h2>
+
+<p>随着模型规模的扩大，标准的数据并行训练技术只有在 GPU 能够容纳整个模型副本及其训练状态（优化器、激活等）时才能工作。然而，GPU 内存的增长并没有跟上模型规模的增长，因此出现了新的训练此类模型的技术（例如，完全分片数据并行、<a href="https://www.deepspeed.ai/">DeepSpeed</a>），这些技术允许我们在训练过程中将模型和数据高效地分布在多个 GPU 上。在这篇博客文章中，我们展示了使用 PyTorch 原生 FSDP API 实现模型训练规模达到 64 节点（512 个 GPU）的路径，同时将模型规模增加到 11B。</p>
+
+<h3 id="what-is-fully-sharded-data-parallel">什么是完全分片数据并行？</h3>
+
+<p>FSDP 通过使用包装策略将模型参数、梯度以及优化器状态分片成 K 个 FSDP 单元来扩展分布式数据并行（DDP）方法。FSDP 通过显著减少每个 GPU 的内存占用，并重叠计算和通信，实现了在资源和性能方面的模型训练高效率。</p>
+
+<p>通过所有 GPU 拥有每个 FSDP 单元的一部分，实现资源效率，降低内存占用。处理给定的 FSDP 单元时，所有 GPU 通过 all_gather 通信调用共享其本地拥有的部分。</p>
+
+<p>通过重叠即将到来的 FSDP 单元的 all_gather 通信调用与当前 FSDP 单元的计算，实现性能效率。一旦处理完当前 FSDP 单元，非本地拥有的参数将被丢弃，为即将到来的 FSDP 单元释放内存。这个过程通过计算和通信的重叠，提高了训练效率，同时减少了每个 GPU 所需的峰值内存。</p>
+
+<p>以下，我们展示了 FSDP 如何使我们能够在整个分布式训练作业中保持数百个 GPU 的高度利用，同时通过标准以太网网络运行（系统描述在博客末尾）。我们为实验选择了 T5 架构，并利用了来自 <a href="https://github.com/pytorch/workshops/tree/master/FSDP_Workshop">FSDP 研讨会</a>的代码。在我们的每个实验中，我们从一个节点实验开始，以创建基线，并报告以批大小归一化的秒/迭代指标，以及根据 <a href="https://cs.stanford.edu/~matei/papers/2021/sc_megatron_lm.pdf">Megatron-LM 论文 </a>（见附录中 T5 的 teraflop 计算细节）计算 teraflops。我们的实验旨在最大化批大小（同时避免 cudaMalloc 重试），以充分利用以下讨论中的计算和通信重叠。扩展定义为 N 个节点与单个节点按批大小归一化的秒/迭代比，表示随着节点数量的增加，我们可以多好地利用额外的 GPU。</p>
+
+<h3 id="experimental-results">实验结果</h3>
+
+<p>我们的首次实验使用 T5-3B 配置（混合精度 BF16、激活检查点和 transformer 包装策略）展示了在将 GPU 数量从 8 增加到 512（1 到 64 节点）时，达到了 95%的扩展效率。我们实现了这些结果，而没有对现有的 FSDP API 进行任何修改。我们观察到，对于这个规模，基于以太网的网络上，有足够的带宽来支持通信和计算的连续重叠。</p>
+
+<p>然而，当我们把 T5 模型的大小增加到 11B 时，缩放效率大幅下降到 20%。PyTorch 分析器显示，通信和计算的重叠非常有限。进一步调查网络带宽使用情况发现，重叠不佳是由单个数据包通信中的延迟造成的，而不是带宽需求（实际上，我们的峰值带宽利用率是可用带宽的四分之一）。这导致我们假设，如果我们通过增加批量大小来增加计算时间，我们可以更好地重叠通信和计算。然而，鉴于我们已经在最大 GPU 内存分配，我们必须识别机会来重新平衡内存分配，以便增加批量大小。我们发现模型状态分配了比所需更多的内存。这些预留的主要功能是在通信期间预先保留内存，以便积极发送/接收张量，而缓冲区太少会导致等待时间增加，而缓冲区太多会导致批量大小减小。</p>
+
+<p>为了提高效率，PyTorch 分布式团队引入了一个新的控制旋钮，即 rate_limiter，它控制为张量的发送/接收分配多少内存，减轻内存压力，为更大的批量大小提供空间。在我们的情况下，rate_limiter 可以将批量大小从 20 增加到 50，从而将计算时间提高 2.5 倍，并允许通信和计算有更大的重叠。通过这个修复，我们将扩展效率提高到 75%以上（在 32 个节点上）！</p>
+
+<p>对限制扩展效率的因素进行的持续研究揭示了速率限制器正在创建一个反复出现的 GPU 空闲时间管道气泡。这是由于速率限制器在分配和释放每套内存缓冲区时使用块和刷新方法。通过等待整个块完成后再启动新的 all_gather，GPU 在每个块的开始时处于空闲状态，等待新的 all_gather 参数到达。通过采用滑动窗口方法消除了这个气泡。在完成单个 all_gather 步骤及其计算（而不是一系列步骤）后，释放内存，并以更均匀的方式立即发出下一个 all_gather。这种改进消除了管道气泡，将扩展效率提升至 90%以上（在 32 个节点上）。</p>
+
+<p align="center">
+<img src="/assets/images/scaling-pytorch-fsdp-image1-IBM_scaling_FSDP_visual_new.png" width="100%">
+</p>
+
+<p align="center">图 1：T5-XL（3B）和 T5-XXL（11B）从 1 个节点扩展到 64 个节点的扩展情况</p>
+
+<p align="center">
+<img src="/assets/images/scaling-pytorch-fsdp-image2-tflops_per_second_new.png" width="100%">
+</p>
+
+<p align="center">图 2：随着节点数量的增加，T5-XL（3B）和 T5-XXL（11B）的 TFLOPs/秒使用情况</p>
+
+<h2 id="ibm-cloud-ai-system-and-middleware">IBM 云 AI 系统和中间件</h2>
+
+<p>该工作的 AI 基础设施是 IBM 云上的一套大规模 AI 系统，由近 200 个节点组成，每个节点配备 8 张 NVIDIA A100 80GB 显卡、96 个 vCPU 和 1.2TB CPU RAM。节点内的 GPU 卡通过 NVLink 连接，卡间带宽为 600GBps。节点之间通过基于 SRIOV 的 TCP/IP 堆栈的 2 x 100Gbps 以太网链路连接，提供 120Gbps 的可使用带宽。</p>
+
+<p>自 2022 年 5 月起，IBM 云 AI 系统已具备生产就绪性，并配置了 OpenShift 容器平台以运行 AI 工作负载。我们还构建了一个用于生产 AI 工作负载的软件堆栈，该堆栈提供端到端工具以训练工作负载。中间件利用 Ray 进行预和后处理工作负载，并使用 PyTorch 进行模型训练。我们还集成了 Kubernetes 原生调度器 MCAD，该调度器管理多个作业，具有作业排队、批量调度、优先级和配额管理功能。多 NIC CNI 发现所有可用的网络接口，并将它们作为单个 NIC 池处理，从而优化了 Kubernetes 中网络接口的使用。最后，CodeFlare CLI 支持使用桌面 CLI（例如，GPU 利用率、应用指标如损失、梯度范数）的单窗口全栈可观察性。</p>
+
+<p align="center">
+  <img src="/assets/images/scaling-pytorch-fsdp-image3-cli-and-dashboard.png" width="100%">
+</p>
+
+<p align="center">图3：基础模型中间件堆栈</p>
+
+<h3 id="conclusion-and-future-work">结论与未来工作</h3>
+
+<p>总结来说，我们展示了如何在非 InfiniBand 网络上实现 FSDP API 的显著扩展。我们确定了瓶颈，该瓶颈限制了扩展效率，使得 11B 参数模型训练的效率低于 20%。在确定问题后，我们通过新的速率限制器控制来纠正这个问题，以确保预留内存和通信重叠与计算时间之间达到更优的平衡。通过这次改进，我们实现了 90%的扩展效率（提高了 4.5 倍），在 256 个 GPU 上达到，在 512 个 GPU 上达到 80%，用于训练 11B 参数模型。此外，3B 参数模型在增加 GPU 数量到 512 个时，扩展效率仍然极高，达到 95%。</p>
+
+<p>这是行业首次使用 Kubernetes、vanilla Ethernet 和 PyTorch 原生 FSDP API 实现高达 11B 参数模型的扩展效率。这次改进使用户能够在混合云平台上以成本效益和可持续的方式训练大型模型。</p>
+
+<p>我们计划继续研究仅使用解码器模型的扩展性，并将这些模型的大小增加到 100B+参数。从系统设计角度来看，我们正在探索 RoCE 和 GDR 等能力，这些能力可以提高以太网网络通信的延迟。</p>
+
+<h2 id="acknowledgements">致谢</h2>
+
+<p>本博客得以实现，得益于 PyTorch 分布式和 IBM 研究团队的贡献。</p>
+
+<p>我们感谢来自 PyTorch 分布式团队的 Less Wright、Hamid Shojanazeri、Geeta Chauhan、Shen Li、Rohan Varma、Yanli Zhao、Andrew Gu、Anjali Sridhar、Chien-Chin Huang 和 Bernard Nguyen。</p>
+
+<p>我们感谢来自 IBM 研究团队的 Linsong Chu、Sophia Wen、Lixiang (Eric) Luo、Marquita Ellis、Davis Wertheimer、Supriyo Chakraborty、Raghu Ganti、Mudhakar Srivatsa、Seetharami Seelam、Carlos Costa、Abhishek Malvankar、Diana Arroyo、Alaa Youssef 和 Nick Mitchell。</p>
+
+<h2 id="appendix">附录</h2>
+
+<h4 id="teraflop-computation">特拉浮点计算</h4>
+
+<p>T5-XXL（11B）架构有两种类型的 T5 模块，一种是编码器，另一种是解码器。遵循 Megatron-LM 的方法，其中每个矩阵乘法需要 2m×k×n FLOPs，其中第一个矩阵大小为 m×k，第二个矩阵大小为 k×n。编码器模块由自注意力层和前馈层组成，而解码器模块由自注意力层、交叉注意力层和前馈层组成。</p>
+
+<p>注意力（包括自注意力和交叉注意力）模块由 QKV 投影组成，需要 6Bsh<sup>2</sup> 次操作，一个注意力矩阵计算需要 2Bs<sup>2</sup>h 次操作，一个对值的注意力需要 2Bs<sup>2</sup>h 次计算，而注意力后的线性投影需要 2Bsh<sup>2</sup> 次操作。最后，前馈层需要 15Bsh<sup>2</sup> 次操作。</p>
+
+<p>编码器块的总计算量为 23Bsh<sup>2</sup>+4Bs<sup>2</sup>h，而解码器块的计算量为 31Bsh<sup>2</sup>+8Bs<sup>2</sup>h。总共有 24 个编码器和 24 个解码器块，以及 2 次正向传递（因为我们丢弃了激活值）和 1 次反向传递（相当于两次正向传递），最终的 FLOPs 计算结果为 96×(54Bsh<sup>2</sup>+ 12Bs<sup>2</sup>h) + 6BshV。在这里，B 是每个 GPU 的批次大小，s 是序列长度，h 是隐藏状态大小，V 是词汇表大小。我们对 T5-XL（3B）架构进行类似的计算，略有不同。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

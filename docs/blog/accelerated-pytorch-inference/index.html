@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerated PyTorch inference with torch.compile on AWS Graviton processors | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Summary
+
+Originally PyTorch, used an eager mode where each PyTorch operation that forms the model is run independently as soon as it’s reached. PyTorch 2.0 introduced torch.compile to speed up PyTorch code over the default eager mode. In contrast to eager mode, the torch.compile pre-compiles the entire model into a single graph in a manner that’s optimal for running on a given hardware platform. AWS optimized the PyTorch torch.compile feature for AWS Graviton3 processors. This optimization results in up to 2x better performance for Hugging Face model inference (based on geomean of performance improvement for 33 models) and up to 1.35x better performance for TorchBench model inference (geomean of performance improvement for 45 models) compared to the default eager mode inference across several natural language processing (NLP), computer vision (CV), and recommendation models on AWS Graviton3-based Amazon EC2 instances. Starting with PyTorch 2.3.1, the optimizations are available in torch Python wheels and AWS Graviton PyTorch deep learning container (DLC).
+
+In this blog post, we show how we optimized torch.compile performance on AWS Graviton3-based EC2 instances, how to use the optimizations to improve inference performance, and the resulting speedups.
+
+Why torch.compile and what’s the goal?
+
+In eager mode, operators in a model are run immediately as they are encountered. It’s easier to use, more suitable for machine learning (ML) researchers, and hence is the default mode. However, eager mode incurs runtime overhead because of redundant kernel launch and memory read overhead. Whereas in torch compile mode, operators are first synthesized into a graph, wherein one operator is merged with another to reduce and localize memory reads and total kernel launch overhead.
+
+The goal for the AWS Graviton team was to optimize torch.compile backend for Graviton3 processors. PyTorch eager mode was already optimized for Graviton3 processors with Arm Compute Library (ACL) kernels using oneDNN (also known as MKLDNN). So, the question was, how to reuse those kernels in torch.compile mode to get the best of graph compilation and the optimized kernel performance together?
+
+Results
+
+The AWS Graviton team extended the torch inductor and oneDNN primitives that reused the ACL kernels and optimized compile mode performance on Graviton3 processors. Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheels and AWS Graviton DLC. Please see the Running an inference section that follows for the instructions on installation, runtime configuration, and how to run the tests.
+
+To demonstrate the performance improvements, we used NLP, CV, and recommendation models from TorchBench and the most downloaded NLP models from Hugging Face across Question Answering, Text Classification, Token Classification, Translation, Zero-Shot Classification, Translation, Summarization, Feature Extraction, Text Generation, Text2Text Generation, Fill-Mask, and Sentence Similarity tasks to cover a wide variety of customer use cases.
+
+We started with measuring TorchBench model inference latency, in milliseconds (msec), for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 45 models we benchmarked, there is a 1.35x latency improvement (geomean for the 45 models).
+
+
+
+Image 1: PyTorch model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using TorchBench framework. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Similar to the preceding TorchBench inference performance graph, we started with measuring the Hugging Face NLP model inference latency, in msec, for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 33 models we benchmarked, there is around 2x performance improvement (geomean for the 33 models).
+
+
+
+Image 2: Hugging Face NLP model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using Hugging Face example scripts. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Running an inference
+
+Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheel and in AWS Graviton PyTorch DLC. This section shows how to run inference in eager and torch.compile modes using torch Python wheels and benchmarking scripts from Hugging Face and TorchBench repos.
+
+To successfully run the scripts and reproduce the speedup numbers mentioned in this post, you need an instance from the Graviton3 family (c7g/r7g/m7g/hpc7g) of hardware. For this post, we used the c7g.4xl (16 vcpu) instance. The instance, the AMI details, and the required torch library versions are mentioned in the following snippet.
+
+Instance: c7g.4xl instance
+Region: us-west-2
+AMI: ami-05cc25bfa725a144a﻿ (Ubuntu 22.04/Jammy with 6.5.0-1017-aws kernel)
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1
+
+
+The generic runtime tunings implemented for eager mode inference are equally applicable for the torch.compile mode, so, we set the following environment variables to further improve the torch.compile performance on AWS Graviton3 processors.
+
+# Enable the fast math GEMM kernels, to accelerate fp32 inference with bfloat16 gemm
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+
+# Enable Linux Transparent Huge Page (THP) allocations,
+# to reduce the tensor memory allocation latency
+export THP_MEM_ALLOC_ENABLE=1
+
+# Set LRU Cache capacity to cache the primitives and avoid redundant
+# memory allocations
+export LRU_CACHE_CAPACITY=1024
+
+
+TORCHBENCH BENCHMARKING SCRIPTS
+
+TorchBench is a collection of open source benchmarks used to evaluate PyTorch performance. We benchmarked 45 models using the scripts from the TorchBench repo. Following code shows how to run the scripts for the eager mode and the compile mode with inductor backend.
+
+# Set OMP_NUM_THREADS to number of vcpus, 16 for c7g.4xl instance
+export OMP_NUM_THREADS=16
+
+# Install the dependencies
+sudo apt-get install -y libgl1-mesa-glx
+sudo apt-get install -y libpangocairo-1.0-0
+python3 -m pip install psutil numpy transformers pynvml numba onnx onnxruntime scikit-learn timm effdet gym doctr opencv-python h5py==3.10.0 python-doctr 
+
+# Clone pytorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+cd benchmark
+# PyTorch benchmark repo doesn't have any release tags. So,
+# listing the commit we used for collecting the performance numbers
+git checkout 9a5e4137299741e1b6fb7aa7f5a6a853e5dd2295
+
+# Setup the models
+python3 install.py 
+
+# Colect eager mode performance using the following command. The results will be
+# stored at .userbenchmark/cpu/metric-<timestamp>.json.
+python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --metrics=" latencies,cpu_peak_mem"="" #="" collect="" torch.compile="" mode="" performance="" with="" inductor="" backend="" and="" weights="" pre-packing="" enabled.="" the="" results="" will="" be="" stored="" at="" .userbenchmark="" cpu="" metric-&lt;timestamp&gt;.json="" python3="" run_benchmark.py="" --model="" bert_pytorch,hf_bert,hf_bert_large,hf_gpt2,hf_albert,hf_bart,hf_bigbird,hf_distilbert,hf_gpt2_large,dlrm,hf_t5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_reformer,pytorch_cyclegan_and_pix2pix,functorch_dp_cifar10,pytorch_unet="" --test="" eval="" --torchdynamo="" --freeze_prepack_weights="" --metrics="latencies,cpu_peak_mem" on="" successful="" completion="" of="" inference="" runs,="" script="" stores="" in="" json="" format.="" following="" is="" sample="" output:="" {="" "name":="" "cpu"="" "environ":="" "pytorch_git_version":="" "d44533f9d073df13895333e70b66f81c513c1889"="" },="" "metrics":="" "bert_pytorch-eval_latency":="" 56.3769865,="" "bert_pytorch-eval_cmem":="" 0.4169921875="" }="" hugging="" face="" benchmarking="" scripts="" google="" t5="" small="" text="" translation="" model="" one="" around="" 30="" models="" we="" benchmarked.="" we’re="" using="" it="" as="" a="" to="" demonstrate="" how="" run="" eager="" compile="" modes.="" additional="" configurations="" apis="" required="" are="" highlighted="" bold.="" save="" google_t5_small_text_translation.py.="" import="" argparse="" from="" transformers="" t5tokenizer,="" t5model="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" torch._inductor.config="" config="" config.cpp.weight_prepack="True" config.freezing="True" def="" test_inference(mode,="" num_iter):="" tokenizer="T5Tokenizer.from_pretrained(&quot;t5-small&quot;)" input_ids="tokenizer(" "studies="" have="" been="" shown="" that="" owning="" dog="" good="" for="" you",="" return_tensors="pt" ).input_ids="" batch="" size="" 1="" decoder_input_ids="tokenizer(&quot;Studies" show="" that",="" if="" (mode="=" 'compile'):="" torch.no_grad():="" _="" range(50):="" outputs="model(input_ids=input_ids," profile(activities="[ProfilerActivity.CPU])" prof:="" record_function("model_inference"):="" range(num_iter):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" main()="" -&gt;="" none:="" global="" m,="" args="" parser="argparse.ArgumentParser(__doc__)" parser.add_argument(="" "-m",="" "--mode",="" choices="[&quot;eager&quot;," "compile"],="" default="eager" ,="" help="Which test to run." )="" "-n",="" "--number",="" type="int," test_inference(args.mode,="" args.number)="" __name__="=" "__main__":="" steps:="" set="" omp_num_threads="" number="" vcpus="" 4="" because="" running="" sequence,="" they="" don't="" need="" large="" export="" install="" dependencies="" -m="" pip="" iterations="" just="" profiler="" output="" but="" benchmarking,="" used="" 1000="" iterations.="" google_t5_small_text_translation.py="" -n="" prints="" latency="" breakdown="" operators.="" profiler:="" c7g.xl="" (4vcpu)="" ------------------------="" ------------="" self="" %="" total="" time="" avg="" calls="" aten::mm="" 40.71%="" 12.502ms="" 130.229us="" 96="" model_inference="" 26.44%="" 8.118ms="" 100.00%="" 30.708ms="" aten::bmm="" 6.85%="" 2.102ms="" 9.47%="" 2.908ms="" 80.778us="" 36="" aten::matmul="" 3.73%="" 1.146ms="" 57.26%="" 17.583ms="" 133.205us="" 132="" aten::select="" 1.88%="" 576.000us="" 1.90%="" 583.000us="" 0.998us="" 584="" aten::transpose="" 1.51%="" 464.000us="" 1.83%="" 563.000us="" 3.027us="" 186="" -------------------="" total:="" same="" instance="" ---------------------------------="" mkldnn::_linear_pointwise="" 37.98%="" 5.461ms="" 45.91%="" 6.602ms="" 68.771us="" torch-compiled="" region="" 29.56%="" 4.251ms="" 98.53%="" 14.168ms="" 14.90%="" 2.143ms="" 21.73%="" 3.124ms="" 86.778us="" 4.51%="" 648.000us="" 4.62%="" 665.000us="" 1.155us="" 576="" aten::view="" 3.29%="" 473.000us="" 1.642us="" 288="" aten::empty="" 2.53%="" 364.000us="" 3.165us="" 115="" --------------------="" 14.379ms="" technical="" deep="" dive:="" what="" challenges="" optimization="" details="" underpinning="" new="" technologies="" –="" torchdynamo,="" aotdispatcher,="" torchinductor.="" torchdynamo="" captures="" pytorch="" programs="" safely="" python="" frame="" evaluation="" hooks="" aotdispatcher="" overloads="" pytorch’s="" autograd="" engine="" tracing="" autodiff="" generating="" ahead-of-time="" backward="" traces.="" torchinductor="" learning="" compiler="" generates="" fast="" code="" multiple="" accelerators="" backends.="" image="" 3:="" compilation="" process="" when="" invoked,="" dynamo="" rewrites="" bytecode="" extract="" sequences="" operations="" into="" an="" fx="" graph,="" which="" then="" compiled="" backend.="" typical="" scenario="" where="" graph="" frozen="" gradient="" calculations="" disabled,="" invokes="" platform="" specific="" optimizations="" like="" rewrite="" more="" performant="" operators,="" operator="" fusion,="" pre-packing.="" however,="" graviton3,="" wasn’t="" able="" perform="" any="" those="" there="" was="" no="" aarch64="" defined.="" fix="" this,="" extended="" inductor’s="" passes="" pick="" onednn="" operators="" linear="" layer="" graviton3="" processors="" acl="" snippet="" this="" follows:="" packed_weight_op="(" mkldnn._reorder_linear_weight="" (is_bf16_weight="" or="" mkldnn._is_mkldnn_acl_supported())="" packed_linear_inputs:="" tuple[any,="" ...]="(input," packed_weight_node)="" is_bf16_weight="" mkldnn._is_mkldnn_acl_supported():="" packed_linear_inputs="" +="(bias," "none",="" [],="" "")="" packed_linear_op="mkldnn._linear_pointwise.default" after="" done,="" pass="" compiling="" matmul="" linear_pointwise="" .="" highlights="" original="" model:="" %attention_scores="" :="" [num_users="1]" =="" call_function[target="torch.matmul](args" (%query_layer,="" %transpose),="" kwargs="{})" %attention_scores_1="" (%attention_scores,="" 8.0),="" %attention_scores_2="" (%attention_scores_1,="" %extended_attention_mask_3),="" graph:="" %_linear_pointwise_default_140="" (%add_7,="" %_frozen_param278,="" %_frozen_param16,="" none,="" ),="" %mul_5="" (%_linear_pointwise_default_140,="" 0.5),="" %mul_6="" 0.7071067811865476),="" %erf="" (%mul_6,),="" %add_8="" (%erf,="" 1),="" completes="" changes="" optimized="" aws="" processors.="" next="" comes="" actual="" dispatched="" run.="" chose="" during="" compilation,="" so,="" were="" expected,="" example,="" mkldnn._linear_pointwise.="" due="" gaps="" primitives,="" c++="" reference="" kernels="" instead="" kernels.="" hence,="" still="" significantly="" behind="" performance.="" mainly="" three="" areas="" primitives="" lack="" support="" mode.="" section="" talks="" about="" them="" detail.="" 1.="" didn’t="" blocked="" layout="" originally="" designed="" supported="" only="" standard="" channels="" last="" (nhwc)="" format,="" without="" whereas="" main="" reordered="" blocks="" runtime="" platform.="" avoids="" redundant="" on-the-fly="" reorders="" general="" matrix="" multiplication="" (gemm),="" otherwise="" would="" bottleneck="" hence="" instead.="" 2.="" mixed="" precision="" weren’t="" bfloat16="" mmla="" instructions="" can="" accelerate="" fp32="" gemm="" compute.="" supports="" kernels,="" integrated="" math="" compute="" option="" existing="" approach="" work="" optimization.="" requires="" explicit="" primitive="" implementation="" order="" use="" acceleration.="" 3.="" fused="" some="" activation="" functions="" mode,="" individually="" independently="" soon="" it’s="" reached.="" fusion="" another="" important="" efficiency.="" gaussian="" error="" unit="" (gelu)="" most="" widely="" transformers-based="" neural="" network="" architectures.="" (with="" multiplications)="" followed="" by="" gelu="" activation.="" part="" efficient="" fuses="" single="" linearpointwise+gelu="" operator.="" gelu.="" addressed="" these="" extending="" handle="" layouts="" definitions.="" sections="" talk="" 1:="" accept="" weight="" tensors="" addition="" nhwc="" const="" bool="" is_weights_md_format_ok="utils::one_of(weights_format_kind_received," format_kind::any,="" format_kind::blocked);="" memory_desc_t="" weights_md_received="weights_md_;" acl_utils::reorder_to_weight_format(aip.wei_tensor_info,="" weights_md_,="" expected_weight_format,="" inner_dim,="" o_dim,="" remaining_dims,="" {});="" acl_check_support(="" (weights_format_kind_received="=" format_kind::blocked)="" &amp;&amp;="" !(dnnl_memory_desc_equal(="" &amp;weights_md_received,="" &amp;weights_md_)),="" "specified="" format="" not="" acl,="" "="" "format_kind_t::any="" find="" "your="" platform");="" 2:="" defined="" (weights="" activations="" fp32)="" definitions="" updated="" tensors.="" *="" reorder="" pre-pack="" load="" phase="" itself="" so="" avoided.="" definition="" fastmath="" src="" bf16="" {{forward,="" f32,="" bf16,="" f32},="" cpu_instance_aarch64_acl(acl_inner_product_fwd_t)="" nullptr,="" }},="" disabled="" bypassed="" doesn’t="" contain="" temporary="" solution="" enable="" torch.compile.="" progress="" future="" releases.="" workaround,="" successfully="" dispatch="" acl.="" output,="" aten::addmm="" (one="" variants="" operator)="" aten::gelu="" (as="" 4)="" 5).="" ---------------------------="" 73.32%="" 46.543ms="" 74.49%="" 47.287ms="" 647.767us="" 73="" 9.92%="" 6.296ms="" 63.479ms="" 4.37%="" 2.776ms="" 5.46%="" 3.467ms="" 144.458us="" 24="" aten::copy_="" 1.74%="" 1.102ms="" 8.103us="" 136="" 1.50%="" 950.000us="" 79.167us="" 12="" 4:="" bert="" base="" showing="" addmm="" &nbsp;="" -----------------------------------------------------="" 53.61%="" 15.529ms="" 57.53%="" 16.665ms="" 228.288us="" 36.95%="" 10.705ms="" 99.31%="" 28.769ms="" aten::_scaled_dot_product_flash_attention_for_cpu="" 3.67%="" 1.064ms="" 4.43%="" 1.284ms="" 107.000us="" 1.97%="" 572.000us="" 2.509us="" 228="" 1.38%="" 399.000us="" 3.270us="" 122="" 5:="" lastly,="" erf="" (error="" function)="" auto="" vectorization="" snippets="" libm.so.="" 6:="" post="" grad="" function="" 0.82%="" 0.40%="" libm.so.6="" [.]="" erff32="" 0.05%="" 0.00%="" libtorch_python.so="" torch::autograd::thpvariable_erf="" libtorch_cpu.so="" at::_ops::erf::call="" 7:="" linux="" perf="" report="" libm.so="" work,="" optimize="" along="" onednn+acl="" torchbench="" enhancements="" improvements="" processors,="" framework="" add="" argument="" freeze="" disable="" test="" "—freeze_prepack_weights",="" action="store_true" args.freeze_prepack_weights:="" torch._inductor.config.freezing="True" torch._inductor.config.cpp.weight_prepack="True" 8:="" added="" freeze_prepack_weights="" upstreamed="" all="" optimizations,="" starting="" 2.3.1,="" wheels="" graviton="" dlc.="" what’s="" next,="" llama="" model,="" adding="" conclusion="" tutorial,="" covered="" graviton3-based="" ec2="" instances,="" improve="" performance,="" demonstrated="" resulting="" speedups.="" hope="" you="" give="" try!="" ml="" software="" graviton,="" please="" open="" issue="" guide="" github.="" acknowledgements="" thank="" community="" baseline="" their="" continued="" efforts="" further.="" references:="" https:="" pytorch.org="" assets="" pytorch2-2.pdf="" author="" sunita="" nadampalli="" development="" manager="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" delivering="" high-performance="" sustainable="" solutions="" socs="" based="" arm="" isa.="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerated PyTorch inference with torch.compile on AWS Graviton processors">
+<meta property="og:description" content="Summary
+
+Originally PyTorch, used an eager mode where each PyTorch operation that forms the model is run independently as soon as it’s reached. PyTorch 2.0 introduced torch.compile to speed up PyTorch code over the default eager mode. In contrast to eager mode, the torch.compile pre-compiles the entire model into a single graph in a manner that’s optimal for running on a given hardware platform. AWS optimized the PyTorch torch.compile feature for AWS Graviton3 processors. This optimization results in up to 2x better performance for Hugging Face model inference (based on geomean of performance improvement for 33 models) and up to 1.35x better performance for TorchBench model inference (geomean of performance improvement for 45 models) compared to the default eager mode inference across several natural language processing (NLP), computer vision (CV), and recommendation models on AWS Graviton3-based Amazon EC2 instances. Starting with PyTorch 2.3.1, the optimizations are available in torch Python wheels and AWS Graviton PyTorch deep learning container (DLC).
+
+In this blog post, we show how we optimized torch.compile performance on AWS Graviton3-based EC2 instances, how to use the optimizations to improve inference performance, and the resulting speedups.
+
+Why torch.compile and what’s the goal?
+
+In eager mode, operators in a model are run immediately as they are encountered. It’s easier to use, more suitable for machine learning (ML) researchers, and hence is the default mode. However, eager mode incurs runtime overhead because of redundant kernel launch and memory read overhead. Whereas in torch compile mode, operators are first synthesized into a graph, wherein one operator is merged with another to reduce and localize memory reads and total kernel launch overhead.
+
+The goal for the AWS Graviton team was to optimize torch.compile backend for Graviton3 processors. PyTorch eager mode was already optimized for Graviton3 processors with Arm Compute Library (ACL) kernels using oneDNN (also known as MKLDNN). So, the question was, how to reuse those kernels in torch.compile mode to get the best of graph compilation and the optimized kernel performance together?
+
+Results
+
+The AWS Graviton team extended the torch inductor and oneDNN primitives that reused the ACL kernels and optimized compile mode performance on Graviton3 processors. Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheels and AWS Graviton DLC. Please see the Running an inference section that follows for the instructions on installation, runtime configuration, and how to run the tests.
+
+To demonstrate the performance improvements, we used NLP, CV, and recommendation models from TorchBench and the most downloaded NLP models from Hugging Face across Question Answering, Text Classification, Token Classification, Translation, Zero-Shot Classification, Translation, Summarization, Feature Extraction, Text Generation, Text2Text Generation, Fill-Mask, and Sentence Similarity tasks to cover a wide variety of customer use cases.
+
+We started with measuring TorchBench model inference latency, in milliseconds (msec), for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 45 models we benchmarked, there is a 1.35x latency improvement (geomean for the 45 models).
+
+
+
+Image 1: PyTorch model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using TorchBench framework. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Similar to the preceding TorchBench inference performance graph, we started with measuring the Hugging Face NLP model inference latency, in msec, for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 33 models we benchmarked, there is around 2x performance improvement (geomean for the 33 models).
+
+
+
+Image 2: Hugging Face NLP model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using Hugging Face example scripts. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Running an inference
+
+Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheel and in AWS Graviton PyTorch DLC. This section shows how to run inference in eager and torch.compile modes using torch Python wheels and benchmarking scripts from Hugging Face and TorchBench repos.
+
+To successfully run the scripts and reproduce the speedup numbers mentioned in this post, you need an instance from the Graviton3 family (c7g/r7g/m7g/hpc7g) of hardware. For this post, we used the c7g.4xl (16 vcpu) instance. The instance, the AMI details, and the required torch library versions are mentioned in the following snippet.
+
+Instance: c7g.4xl instance
+Region: us-west-2
+AMI: ami-05cc25bfa725a144a﻿ (Ubuntu 22.04/Jammy with 6.5.0-1017-aws kernel)
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1
+
+
+The generic runtime tunings implemented for eager mode inference are equally applicable for the torch.compile mode, so, we set the following environment variables to further improve the torch.compile performance on AWS Graviton3 processors.
+
+# Enable the fast math GEMM kernels, to accelerate fp32 inference with bfloat16 gemm
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+
+# Enable Linux Transparent Huge Page (THP) allocations,
+# to reduce the tensor memory allocation latency
+export THP_MEM_ALLOC_ENABLE=1
+
+# Set LRU Cache capacity to cache the primitives and avoid redundant
+# memory allocations
+export LRU_CACHE_CAPACITY=1024
+
+
+TORCHBENCH BENCHMARKING SCRIPTS
+
+TorchBench is a collection of open source benchmarks used to evaluate PyTorch performance. We benchmarked 45 models using the scripts from the TorchBench repo. Following code shows how to run the scripts for the eager mode and the compile mode with inductor backend.
+
+# Set OMP_NUM_THREADS to number of vcpus, 16 for c7g.4xl instance
+export OMP_NUM_THREADS=16
+
+# Install the dependencies
+sudo apt-get install -y libgl1-mesa-glx
+sudo apt-get install -y libpangocairo-1.0-0
+python3 -m pip install psutil numpy transformers pynvml numba onnx onnxruntime scikit-learn timm effdet gym doctr opencv-python h5py==3.10.0 python-doctr 
+
+# Clone pytorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+cd benchmark
+# PyTorch benchmark repo doesn't have any release tags. So,
+# listing the commit we used for collecting the performance numbers
+git checkout 9a5e4137299741e1b6fb7aa7f5a6a853e5dd2295
+
+# Setup the models
+python3 install.py 
+
+# Colect eager mode performance using the following command. The results will be
+# stored at .userbenchmark/cpu/metric-<timestamp>.json.
+python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --metrics=" latencies,cpu_peak_mem"="" #="" collect="" torch.compile="" mode="" performance="" with="" inductor="" backend="" and="" weights="" pre-packing="" enabled.="" the="" results="" will="" be="" stored="" at="" .userbenchmark="" cpu="" metric-&lt;timestamp&gt;.json="" python3="" run_benchmark.py="" --model="" bert_pytorch,hf_bert,hf_bert_large,hf_gpt2,hf_albert,hf_bart,hf_bigbird,hf_distilbert,hf_gpt2_large,dlrm,hf_t5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_reformer,pytorch_cyclegan_and_pix2pix,functorch_dp_cifar10,pytorch_unet="" --test="" eval="" --torchdynamo="" --freeze_prepack_weights="" --metrics="latencies,cpu_peak_mem" on="" successful="" completion="" of="" inference="" runs,="" script="" stores="" in="" json="" format.="" following="" is="" sample="" output:="" {="" "name":="" "cpu"="" "environ":="" "pytorch_git_version":="" "d44533f9d073df13895333e70b66f81c513c1889"="" },="" "metrics":="" "bert_pytorch-eval_latency":="" 56.3769865,="" "bert_pytorch-eval_cmem":="" 0.4169921875="" }="" hugging="" face="" benchmarking="" scripts="" google="" t5="" small="" text="" translation="" model="" one="" around="" 30="" models="" we="" benchmarked.="" we’re="" using="" it="" as="" a="" to="" demonstrate="" how="" run="" eager="" compile="" modes.="" additional="" configurations="" apis="" required="" are="" highlighted="" bold.="" save="" google_t5_small_text_translation.py.="" import="" argparse="" from="" transformers="" t5tokenizer,="" t5model="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" torch._inductor.config="" config="" config.cpp.weight_prepack="True" config.freezing="True" def="" test_inference(mode,="" num_iter):="" tokenizer="T5Tokenizer.from_pretrained(&quot;t5-small&quot;)" input_ids="tokenizer(" "studies="" have="" been="" shown="" that="" owning="" dog="" good="" for="" you",="" return_tensors="pt" ).input_ids="" batch="" size="" 1="" decoder_input_ids="tokenizer(&quot;Studies" show="" that",="" if="" (mode="=" 'compile'):="" torch.no_grad():="" _="" range(50):="" outputs="model(input_ids=input_ids," profile(activities="[ProfilerActivity.CPU])" prof:="" record_function("model_inference"):="" range(num_iter):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" main()="" -&gt;="" none:="" global="" m,="" args="" parser="argparse.ArgumentParser(__doc__)" parser.add_argument(="" "-m",="" "--mode",="" choices="[&quot;eager&quot;," "compile"],="" default="eager" ,="" help="Which test to run." )="" "-n",="" "--number",="" type="int," test_inference(args.mode,="" args.number)="" __name__="=" "__main__":="" steps:="" set="" omp_num_threads="" number="" vcpus="" 4="" because="" running="" sequence,="" they="" don't="" need="" large="" export="" install="" dependencies="" -m="" pip="" iterations="" just="" profiler="" output="" but="" benchmarking,="" used="" 1000="" iterations.="" google_t5_small_text_translation.py="" -n="" prints="" latency="" breakdown="" operators.="" profiler:="" c7g.xl="" (4vcpu)="" ------------------------="" ------------="" name="" self="" %="" total="" time="" avg="" calls="" aten::mm="" 40.71%="" 12.502ms="" 130.229us="" 96="" model_inference="" 26.44%="" 8.118ms="" 100.00%="" 30.708ms="" aten::bmm="" 6.85%="" 2.102ms="" 9.47%="" 2.908ms="" 80.778us="" 36="" aten::matmul="" 3.73%="" 1.146ms="" 57.26%="" 17.583ms="" 133.205us="" 132="" aten::select="" 1.88%="" 576.000us="" 1.90%="" 583.000us="" 0.998us="" 584="" aten::transpose="" 1.51%="" 464.000us="" 1.83%="" 563.000us="" 3.027us="" 186="" -------------------="" total:="" same="" instance="" ---------------------------------="" mkldnn::_linear_pointwise="" 37.98%="" 5.461ms="" 45.91%="" 6.602ms="" 68.771us="" torch-compiled="" region="" 29.56%="" 4.251ms="" 98.53%="" 14.168ms="" 14.90%="" 2.143ms="" 21.73%="" 3.124ms="" 86.778us="" 4.51%="" 648.000us="" 4.62%="" 665.000us="" 1.155us="" 576="" aten::view="" 3.29%="" 473.000us="" 1.642us="" 288="" aten::empty="" 2.53%="" 364.000us="" 3.165us="" 115="" --------------------="" 14.379ms="" technical="" deep="" dive:="" what="" challenges="" optimization="" details="" underpinning="" new="" technologies="" –="" torchdynamo,="" aotdispatcher,="" torchinductor.="" torchdynamo="" captures="" pytorch="" programs="" safely="" python="" frame="" evaluation="" hooks="" aotdispatcher="" overloads="" pytorch’s="" autograd="" engine="" tracing="" autodiff="" generating="" ahead-of-time="" backward="" traces.="" torchinductor="" learning="" compiler="" generates="" fast="" code="" multiple="" accelerators="" backends.="" image="" 3:="" compilation="" process="" when="" invoked,="" dynamo="" rewrites="" bytecode="" extract="" sequences="" operations="" into="" an="" fx="" graph,="" which="" then="" compiled="" backend.="" typical="" scenario="" where="" graph="" frozen="" gradient="" calculations="" disabled,="" invokes="" platform="" specific="" optimizations="" like="" rewrite="" more="" performant="" operators,="" operator="" fusion,="" pre-packing.="" however,="" graviton3,="" wasn’t="" able="" perform="" any="" those="" there="" was="" no="" aarch64="" defined.="" fix="" this,="" extended="" inductor’s="" passes="" pick="" onednn="" operators="" linear="" layer="" graviton3="" processors="" acl="" snippet="" this="" follows:="" packed_weight_op="(" mkldnn._reorder_linear_weight="" (is_bf16_weight="" or="" mkldnn._is_mkldnn_acl_supported())="" packed_linear_inputs:="" tuple[any,="" ...]="(input," packed_weight_node)="" is_bf16_weight="" mkldnn._is_mkldnn_acl_supported():="" packed_linear_inputs="" +="(bias," "none",="" [],="" "")="" packed_linear_op="mkldnn._linear_pointwise.default" after="" done,="" pass="" compiling="" matmul="" linear_pointwise="" .="" highlights="" original="" model:="" %attention_scores="" :="" [num_users="1]" =="" call_function[target="torch.matmul](args" (%query_layer,="" %transpose),="" kwargs="{})" %attention_scores_1="" (%attention_scores,="" 8.0),="" %attention_scores_2="" (%attention_scores_1,="" %extended_attention_mask_3),="" graph:="" %_linear_pointwise_default_140="" (%add_7,="" %_frozen_param278,="" %_frozen_param16,="" none,="" ),="" %mul_5="" (%_linear_pointwise_default_140,="" 0.5),="" %mul_6="" 0.7071067811865476),="" %erf="" (%mul_6,),="" %add_8="" (%erf,="" 1),="" completes="" changes="" optimized="" aws="" processors.="" next="" comes="" actual="" dispatched="" run.="" chose="" during="" compilation,="" so,="" were="" expected,="" example,="" mkldnn._linear_pointwise.="" due="" gaps="" primitives,="" c++="" reference="" kernels="" instead="" kernels.="" hence,="" still="" significantly="" behind="" performance.="" mainly="" three="" areas="" primitives="" lack="" support="" mode.="" section="" talks="" about="" them="" detail.="" 1.="" didn’t="" blocked="" layout="" originally="" designed="" supported="" only="" standard="" channels="" last="" (nhwc)="" format,="" without="" whereas="" main="" reordered="" blocks="" runtime="" platform.="" avoids="" redundant="" on-the-fly="" reorders="" general="" matrix="" multiplication="" (gemm),="" otherwise="" would="" bottleneck="" hence="" instead.="" 2.="" mixed="" precision="" weren’t="" bfloat16="" mmla="" instructions="" can="" accelerate="" fp32="" gemm="" compute.="" supports="" kernels,="" integrated="" math="" compute="" option="" existing="" approach="" work="" optimization.="" requires="" explicit="" primitive="" implementation="" order="" use="" acceleration.="" 3.="" fused="" some="" activation="" functions="" mode,="" individually="" independently="" soon="" it’s="" reached.="" fusion="" another="" important="" efficiency.="" gaussian="" error="" unit="" (gelu)="" most="" widely="" transformers-based="" neural="" network="" architectures.="" (with="" multiplications)="" followed="" by="" gelu="" activation.="" part="" efficient="" fuses="" single="" linearpointwise+gelu="" operator.="" gelu.="" addressed="" these="" extending="" handle="" layouts="" definitions.="" sections="" talk="" 1:="" accept="" weight="" tensors="" addition="" nhwc="" const="" bool="" is_weights_md_format_ok="utils::one_of(weights_format_kind_received," format_kind::any,="" format_kind::blocked);="" memory_desc_t="" weights_md_received="weights_md_;" acl_utils::reorder_to_weight_format(aip.wei_tensor_info,="" weights_md_,="" expected_weight_format,="" inner_dim,="" o_dim,="" remaining_dims,="" {});="" acl_check_support(="" (weights_format_kind_received="=" format_kind::blocked)="" &amp;&amp;="" !(dnnl_memory_desc_equal(="" &amp;weights_md_received,="" &amp;weights_md_)),="" "specified="" format="" not="" acl,="" "="" "format_kind_t::any="" find="" "your="" platform");="" 2:="" defined="" (weights="" activations="" fp32)="" definitions="" updated="" tensors.="" *="" reorder="" pre-pack="" load="" phase="" itself="" so="" avoided.="" definition="" fastmath="" src="" bf16="" {{forward,="" f32,="" bf16,="" f32},="" cpu_instance_aarch64_acl(acl_inner_product_fwd_t)="" nullptr,="" }},="" disabled="" bypassed="" doesn’t="" contain="" temporary="" solution="" enable="" torch.compile.="" progress="" future="" releases.="" workaround,="" successfully="" dispatch="" acl.="" output,="" aten::addmm="" (one="" variants="" operator)="" aten::gelu="" (as="" 4)="" 5).="" ---------------------------="" 73.32%="" 46.543ms="" 74.49%="" 47.287ms="" 647.767us="" 73="" 9.92%="" 6.296ms="" 63.479ms="" 4.37%="" 2.776ms="" 5.46%="" 3.467ms="" 144.458us="" 24="" aten::copy_="" 1.74%="" 1.102ms="" 8.103us="" 136="" 1.50%="" 950.000us="" 79.167us="" 12="" 4:="" bert="" base="" showing="" addmm="" &nbsp;="" -----------------------------------------------------="" 53.61%="" 15.529ms="" 57.53%="" 16.665ms="" 228.288us="" 36.95%="" 10.705ms="" 99.31%="" 28.769ms="" aten::_scaled_dot_product_flash_attention_for_cpu="" 3.67%="" 1.064ms="" 4.43%="" 1.284ms="" 107.000us="" 1.97%="" 572.000us="" 2.509us="" 228="" 1.38%="" 399.000us="" 3.270us="" 122="" 5:="" lastly,="" erf="" (error="" function)="" auto="" vectorization="" snippets="" libm.so.="" 6:="" post="" grad="" function="" 0.82%="" 0.40%="" libm.so.6="" [.]="" erff32="" 0.05%="" 0.00%="" libtorch_python.so="" torch::autograd::thpvariable_erf="" libtorch_cpu.so="" at::_ops::erf::call="" 7:="" linux="" perf="" report="" libm.so="" work,="" optimize="" along="" onednn+acl="" torchbench="" enhancements="" improvements="" processors,="" framework="" add="" argument="" freeze="" disable="" test="" "—freeze_prepack_weights",="" action="store_true" args.freeze_prepack_weights:="" torch._inductor.config.freezing="True" torch._inductor.config.cpp.weight_prepack="True" 8:="" added="" freeze_prepack_weights="" upstreamed="" all="" optimizations,="" starting="" 2.3.1,="" wheels="" graviton="" dlc.="" what’s="" next,="" llama="" model,="" adding="" conclusion="" tutorial,="" covered="" graviton3-based="" ec2="" instances,="" improve="" performance,="" demonstrated="" resulting="" speedups.="" hope="" you="" give="" try!="" ml="" software="" graviton,="" please="" open="" issue="" guide="" github.="" acknowledgements="" thank="" community="" baseline="" their="" continued="" efforts="" further.="" references:="" https:="" pytorch.org="" assets="" pytorch2-2.pdf="" author="" sunita="" nadampalli="" development="" manager="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" delivering="" high-performance="" sustainable="" solutions="" socs="" based="" arm="" isa.="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerated PyTorch inference with torch.compile on AWS Graviton processors">
+<meta name="twitter:description" content="Summary
+
+Originally PyTorch, used an eager mode where each PyTorch operation that forms the model is run independently as soon as it’s reached. PyTorch 2.0 introduced torch.compile to speed up PyTorch code over the default eager mode. In contrast to eager mode, the torch.compile pre-compiles the entire model into a single graph in a manner that’s optimal for running on a given hardware platform. AWS optimized the PyTorch torch.compile feature for AWS Graviton3 processors. This optimization results in up to 2x better performance for Hugging Face model inference (based on geomean of performance improvement for 33 models) and up to 1.35x better performance for TorchBench model inference (geomean of performance improvement for 45 models) compared to the default eager mode inference across several natural language processing (NLP), computer vision (CV), and recommendation models on AWS Graviton3-based Amazon EC2 instances. Starting with PyTorch 2.3.1, the optimizations are available in torch Python wheels and AWS Graviton PyTorch deep learning container (DLC).
+
+In this blog post, we show how we optimized torch.compile performance on AWS Graviton3-based EC2 instances, how to use the optimizations to improve inference performance, and the resulting speedups.
+
+Why torch.compile and what’s the goal?
+
+In eager mode, operators in a model are run immediately as they are encountered. It’s easier to use, more suitable for machine learning (ML) researchers, and hence is the default mode. However, eager mode incurs runtime overhead because of redundant kernel launch and memory read overhead. Whereas in torch compile mode, operators are first synthesized into a graph, wherein one operator is merged with another to reduce and localize memory reads and total kernel launch overhead.
+
+The goal for the AWS Graviton team was to optimize torch.compile backend for Graviton3 processors. PyTorch eager mode was already optimized for Graviton3 processors with Arm Compute Library (ACL) kernels using oneDNN (also known as MKLDNN). So, the question was, how to reuse those kernels in torch.compile mode to get the best of graph compilation and the optimized kernel performance together?
+
+Results
+
+The AWS Graviton team extended the torch inductor and oneDNN primitives that reused the ACL kernels and optimized compile mode performance on Graviton3 processors. Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheels and AWS Graviton DLC. Please see the Running an inference section that follows for the instructions on installation, runtime configuration, and how to run the tests.
+
+To demonstrate the performance improvements, we used NLP, CV, and recommendation models from TorchBench and the most downloaded NLP models from Hugging Face across Question Answering, Text Classification, Token Classification, Translation, Zero-Shot Classification, Translation, Summarization, Feature Extraction, Text Generation, Text2Text Generation, Fill-Mask, and Sentence Similarity tasks to cover a wide variety of customer use cases.
+
+We started with measuring TorchBench model inference latency, in milliseconds (msec), for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 45 models we benchmarked, there is a 1.35x latency improvement (geomean for the 45 models).
+
+
+
+Image 1: PyTorch model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using TorchBench framework. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Similar to the preceding TorchBench inference performance graph, we started with measuring the Hugging Face NLP model inference latency, in msec, for the eager mode, which is marked 1.0 with a red dotted line in the following graph. Then we compared the improvements from torch.compile for the same model inference, the normalized results are plotted in the graph. You can see that for the 33 models we benchmarked, there is around 2x performance improvement (geomean for the 33 models).
+
+
+
+Image 2: Hugging Face NLP model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using Hugging Face example scripts. The reference eager mode performance is marked as 1.0. (higher is better)
+
+Running an inference
+
+Starting with PyTorch 2.3.1, the optimizations are available in the torch Python wheel and in AWS Graviton PyTorch DLC. This section shows how to run inference in eager and torch.compile modes using torch Python wheels and benchmarking scripts from Hugging Face and TorchBench repos.
+
+To successfully run the scripts and reproduce the speedup numbers mentioned in this post, you need an instance from the Graviton3 family (c7g/r7g/m7g/hpc7g) of hardware. For this post, we used the c7g.4xl (16 vcpu) instance. The instance, the AMI details, and the required torch library versions are mentioned in the following snippet.
+
+Instance: c7g.4xl instance
+Region: us-west-2
+AMI: ami-05cc25bfa725a144a﻿ (Ubuntu 22.04/Jammy with 6.5.0-1017-aws kernel)
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1
+
+
+The generic runtime tunings implemented for eager mode inference are equally applicable for the torch.compile mode, so, we set the following environment variables to further improve the torch.compile performance on AWS Graviton3 processors.
+
+# Enable the fast math GEMM kernels, to accelerate fp32 inference with bfloat16 gemm
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+
+# Enable Linux Transparent Huge Page (THP) allocations,
+# to reduce the tensor memory allocation latency
+export THP_MEM_ALLOC_ENABLE=1
+
+# Set LRU Cache capacity to cache the primitives and avoid redundant
+# memory allocations
+export LRU_CACHE_CAPACITY=1024
+
+
+TORCHBENCH BENCHMARKING SCRIPTS
+
+TorchBench is a collection of open source benchmarks used to evaluate PyTorch performance. We benchmarked 45 models using the scripts from the TorchBench repo. Following code shows how to run the scripts for the eager mode and the compile mode with inductor backend.
+
+# Set OMP_NUM_THREADS to number of vcpus, 16 for c7g.4xl instance
+export OMP_NUM_THREADS=16
+
+# Install the dependencies
+sudo apt-get install -y libgl1-mesa-glx
+sudo apt-get install -y libpangocairo-1.0-0
+python3 -m pip install psutil numpy transformers pynvml numba onnx onnxruntime scikit-learn timm effdet gym doctr opencv-python h5py==3.10.0 python-doctr 
+
+# Clone pytorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+cd benchmark
+# PyTorch benchmark repo doesn't have any release tags. So,
+# listing the commit we used for collecting the performance numbers
+git checkout 9a5e4137299741e1b6fb7aa7f5a6a853e5dd2295
+
+# Setup the models
+python3 install.py 
+
+# Colect eager mode performance using the following command. The results will be
+# stored at .userbenchmark/cpu/metric-<timestamp>.json.
+python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --metrics=" latencies,cpu_peak_mem"="" #="" collect="" torch.compile="" mode="" performance="" with="" inductor="" backend="" and="" weights="" pre-packing="" enabled.="" the="" results="" will="" be="" stored="" at="" .userbenchmark="" cpu="" metric-&lt;timestamp&gt;.json="" python3="" run_benchmark.py="" --model="" bert_pytorch,hf_bert,hf_bert_large,hf_gpt2,hf_albert,hf_bart,hf_bigbird,hf_distilbert,hf_gpt2_large,dlrm,hf_t5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_reformer,pytorch_cyclegan_and_pix2pix,functorch_dp_cifar10,pytorch_unet="" --test="" eval="" --torchdynamo="" --freeze_prepack_weights="" --metrics="latencies,cpu_peak_mem" on="" successful="" completion="" of="" inference="" runs,="" script="" stores="" in="" json="" format.="" following="" is="" sample="" output:="" {="" "name":="" "cpu"="" "environ":="" "pytorch_git_version":="" "d44533f9d073df13895333e70b66f81c513c1889"="" },="" "metrics":="" "bert_pytorch-eval_latency":="" 56.3769865,="" "bert_pytorch-eval_cmem":="" 0.4169921875="" }="" hugging="" face="" benchmarking="" scripts="" google="" t5="" small="" text="" translation="" model="" one="" around="" 30="" models="" we="" benchmarked.="" we’re="" using="" it="" as="" a="" to="" demonstrate="" how="" run="" eager="" compile="" modes.="" additional="" configurations="" apis="" required="" are="" highlighted="" bold.="" save="" google_t5_small_text_translation.py.="" import="" argparse="" from="" transformers="" t5tokenizer,="" t5model="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" torch._inductor.config="" config="" config.cpp.weight_prepack="True" config.freezing="True" def="" test_inference(mode,="" num_iter):="" tokenizer="T5Tokenizer.from_pretrained(&quot;t5-small&quot;)" input_ids="tokenizer(" "studies="" have="" been="" shown="" that="" owning="" dog="" good="" for="" you",="" return_tensors="pt" ).input_ids="" batch="" size="" 1="" decoder_input_ids="tokenizer(&quot;Studies" show="" that",="" if="" (mode="=" 'compile'):="" torch.no_grad():="" _="" range(50):="" outputs="model(input_ids=input_ids," profile(activities="[ProfilerActivity.CPU])" prof:="" record_function("model_inference"):="" range(num_iter):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" main()="" -&gt;="" none:="" global="" m,="" args="" parser="argparse.ArgumentParser(__doc__)" parser.add_argument(="" "-m",="" "--mode",="" choices="[&quot;eager&quot;," "compile"],="" default="eager" ,="" help="Which test to run." )="" "-n",="" "--number",="" type="int," test_inference(args.mode,="" args.number)="" __name__="=" "__main__":="" steps:="" set="" omp_num_threads="" number="" vcpus="" 4="" because="" running="" sequence,="" they="" don't="" need="" large="" export="" install="" dependencies="" -m="" pip="" iterations="" just="" profiler="" output="" but="" benchmarking,="" used="" 1000="" iterations.="" google_t5_small_text_translation.py="" -n="" prints="" latency="" breakdown="" operators.="" profiler:="" c7g.xl="" (4vcpu)="" ------------------------="" ------------="" self="" %="" total="" time="" avg="" calls="" aten::mm="" 40.71%="" 12.502ms="" 130.229us="" 96="" model_inference="" 26.44%="" 8.118ms="" 100.00%="" 30.708ms="" aten::bmm="" 6.85%="" 2.102ms="" 9.47%="" 2.908ms="" 80.778us="" 36="" aten::matmul="" 3.73%="" 1.146ms="" 57.26%="" 17.583ms="" 133.205us="" 132="" aten::select="" 1.88%="" 576.000us="" 1.90%="" 583.000us="" 0.998us="" 584="" aten::transpose="" 1.51%="" 464.000us="" 1.83%="" 563.000us="" 3.027us="" 186="" -------------------="" total:="" same="" instance="" ---------------------------------="" mkldnn::_linear_pointwise="" 37.98%="" 5.461ms="" 45.91%="" 6.602ms="" 68.771us="" torch-compiled="" region="" 29.56%="" 4.251ms="" 98.53%="" 14.168ms="" 14.90%="" 2.143ms="" 21.73%="" 3.124ms="" 86.778us="" 4.51%="" 648.000us="" 4.62%="" 665.000us="" 1.155us="" 576="" aten::view="" 3.29%="" 473.000us="" 1.642us="" 288="" aten::empty="" 2.53%="" 364.000us="" 3.165us="" 115="" --------------------="" 14.379ms="" technical="" deep="" dive:="" what="" challenges="" optimization="" details="" underpinning="" new="" technologies="" –="" torchdynamo,="" aotdispatcher,="" torchinductor.="" torchdynamo="" captures="" pytorch="" programs="" safely="" python="" frame="" evaluation="" hooks="" aotdispatcher="" overloads="" pytorch’s="" autograd="" engine="" tracing="" autodiff="" generating="" ahead-of-time="" backward="" traces.="" torchinductor="" learning="" compiler="" generates="" fast="" code="" multiple="" accelerators="" backends.="" image="" 3:="" compilation="" process="" when="" invoked,="" dynamo="" rewrites="" bytecode="" extract="" sequences="" operations="" into="" an="" fx="" graph,="" which="" then="" compiled="" backend.="" typical="" scenario="" where="" graph="" frozen="" gradient="" calculations="" disabled,="" invokes="" platform="" specific="" optimizations="" like="" rewrite="" more="" performant="" operators,="" operator="" fusion,="" pre-packing.="" however,="" graviton3,="" wasn’t="" able="" perform="" any="" those="" there="" was="" no="" aarch64="" defined.="" fix="" this,="" extended="" inductor’s="" passes="" pick="" onednn="" operators="" linear="" layer="" graviton3="" processors="" acl="" snippet="" this="" follows:="" packed_weight_op="(" mkldnn._reorder_linear_weight="" (is_bf16_weight="" or="" mkldnn._is_mkldnn_acl_supported())="" packed_linear_inputs:="" tuple[any,="" ...]="(input," packed_weight_node)="" is_bf16_weight="" mkldnn._is_mkldnn_acl_supported():="" packed_linear_inputs="" +="(bias," "none",="" [],="" "")="" packed_linear_op="mkldnn._linear_pointwise.default" after="" done,="" pass="" compiling="" matmul="" linear_pointwise="" .="" highlights="" original="" model:="" %attention_scores="" :="" [num_users="1]" =="" call_function[target="torch.matmul](args" (%query_layer,="" %transpose),="" kwargs="{})" %attention_scores_1="" (%attention_scores,="" 8.0),="" %attention_scores_2="" (%attention_scores_1,="" %extended_attention_mask_3),="" graph:="" %_linear_pointwise_default_140="" (%add_7,="" %_frozen_param278,="" %_frozen_param16,="" none,="" ),="" %mul_5="" (%_linear_pointwise_default_140,="" 0.5),="" %mul_6="" 0.7071067811865476),="" %erf="" (%mul_6,),="" %add_8="" (%erf,="" 1),="" completes="" changes="" optimized="" aws="" processors.="" next="" comes="" actual="" dispatched="" run.="" chose="" during="" compilation,="" so,="" were="" expected,="" example,="" mkldnn._linear_pointwise.="" due="" gaps="" primitives,="" c++="" reference="" kernels="" instead="" kernels.="" hence,="" still="" significantly="" behind="" performance.="" mainly="" three="" areas="" primitives="" lack="" support="" mode.="" section="" talks="" about="" them="" detail.="" 1.="" didn’t="" blocked="" layout="" originally="" designed="" supported="" only="" standard="" channels="" last="" (nhwc)="" format,="" without="" whereas="" main="" reordered="" blocks="" runtime="" platform.="" avoids="" redundant="" on-the-fly="" reorders="" general="" matrix="" multiplication="" (gemm),="" otherwise="" would="" bottleneck="" hence="" instead.="" 2.="" mixed="" precision="" weren’t="" bfloat16="" mmla="" instructions="" can="" accelerate="" fp32="" gemm="" compute.="" supports="" kernels,="" integrated="" math="" compute="" option="" existing="" approach="" work="" optimization.="" requires="" explicit="" primitive="" implementation="" order="" use="" acceleration.="" 3.="" fused="" some="" activation="" functions="" mode,="" individually="" independently="" soon="" it’s="" reached.="" fusion="" another="" important="" efficiency.="" gaussian="" error="" unit="" (gelu)="" most="" widely="" transformers-based="" neural="" network="" architectures.="" (with="" multiplications)="" followed="" by="" gelu="" activation.="" part="" efficient="" fuses="" single="" linearpointwise+gelu="" operator.="" gelu.="" addressed="" these="" extending="" handle="" layouts="" definitions.="" sections="" talk="" 1:="" accept="" weight="" tensors="" addition="" nhwc="" const="" bool="" is_weights_md_format_ok="utils::one_of(weights_format_kind_received," format_kind::any,="" format_kind::blocked);="" memory_desc_t="" weights_md_received="weights_md_;" acl_utils::reorder_to_weight_format(aip.wei_tensor_info,="" weights_md_,="" expected_weight_format,="" inner_dim,="" o_dim,="" remaining_dims,="" {});="" acl_check_support(="" (weights_format_kind_received="=" format_kind::blocked)="" &amp;&amp;="" !(dnnl_memory_desc_equal(="" &amp;weights_md_received,="" &amp;weights_md_)),="" "specified="" format="" not="" acl,="" "="" "format_kind_t::any="" find="" "your="" platform");="" 2:="" defined="" (weights="" activations="" fp32)="" definitions="" updated="" tensors.="" *="" reorder="" pre-pack="" load="" phase="" itself="" so="" avoided.="" definition="" fastmath="" src="" bf16="" {{forward,="" f32,="" bf16,="" f32},="" cpu_instance_aarch64_acl(acl_inner_product_fwd_t)="" nullptr,="" }},="" disabled="" bypassed="" doesn’t="" contain="" temporary="" solution="" enable="" torch.compile.="" progress="" future="" releases.="" workaround,="" successfully="" dispatch="" acl.="" output,="" aten::addmm="" (one="" variants="" operator)="" aten::gelu="" (as="" 4)="" 5).="" ---------------------------="" 73.32%="" 46.543ms="" 74.49%="" 47.287ms="" 647.767us="" 73="" 9.92%="" 6.296ms="" 63.479ms="" 4.37%="" 2.776ms="" 5.46%="" 3.467ms="" 144.458us="" 24="" aten::copy_="" 1.74%="" 1.102ms="" 8.103us="" 136="" 1.50%="" 950.000us="" 79.167us="" 12="" 4:="" bert="" base="" showing="" addmm="" &nbsp;="" -----------------------------------------------------="" 53.61%="" 15.529ms="" 57.53%="" 16.665ms="" 228.288us="" 36.95%="" 10.705ms="" 99.31%="" 28.769ms="" aten::_scaled_dot_product_flash_attention_for_cpu="" 3.67%="" 1.064ms="" 4.43%="" 1.284ms="" 107.000us="" 1.97%="" 572.000us="" 2.509us="" 228="" 1.38%="" 399.000us="" 3.270us="" 122="" 5:="" lastly,="" erf="" (error="" function)="" auto="" vectorization="" snippets="" libm.so.="" 6:="" post="" grad="" function="" 0.82%="" 0.40%="" libm.so.6="" [.]="" erff32="" 0.05%="" 0.00%="" libtorch_python.so="" torch::autograd::thpvariable_erf="" libtorch_cpu.so="" at::_ops::erf::call="" 7:="" linux="" perf="" report="" libm.so="" work,="" optimize="" along="" onednn+acl="" torchbench="" enhancements="" improvements="" processors,="" framework="" add="" argument="" freeze="" disable="" test="" "—freeze_prepack_weights",="" action="store_true" args.freeze_prepack_weights:="" torch._inductor.config.freezing="True" torch._inductor.config.cpp.weight_prepack="True" 8:="" added="" freeze_prepack_weights="" upstreamed="" all="" optimizations,="" starting="" 2.3.1,="" wheels="" graviton="" dlc.="" what’s="" next,="" llama="" model,="" adding="" conclusion="" tutorial,="" covered="" graviton3-based="" ec2="" instances,="" improve="" performance,="" demonstrated="" resulting="" speedups.="" hope="" you="" give="" try!="" ml="" software="" graviton,="" please="" open="" issue="" guide="" github.="" acknowledgements="" thank="" community="" baseline="" their="" continued="" efforts="" further.="" references:="" https:="" pytorch.org="" assets="" pytorch2-2.pdf="" author="" sunita="" nadampalli="" development="" manager="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" delivering="" high-performance="" sustainable="" solutions="" socs="" based="" arm="" isa.="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年7月9日</p>
+            <h1>
+                <a class="blog-title">在 AWS Graviton 处理器上使用 torch.compile 加速 PyTorch 推理</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Sunita Nadampalli 撰写</p>
+                    <h2 id="summary">摘要</h2>
+
+<p>原本是 PyTorch，使用了一种急切模式，其中构成模型的每个 PyTorch 操作都在达到时独立运行。PyTorch 2.0 引入了 <a href="https://maskerprc.github.io/tutorials/intermediate/torch_compile_tutorial.html">torch.compile</a> 来加速 PyTorch 代码，相对于默认的急切模式。与急切模式相比，torch.compile 将整个模型预编译成一个针对特定硬件平台运行最优的单个图。AWS 针对 <a href="https://aws.amazon.com/about-aws/whats-new/2022/05/amazon-ec2-c7g-instances-powered-aws-graviton3-processors/">AWS Graviton3 处理器</a>优化了 PyTorch 的 torch.compile 功能。这种优化使得 <a href="https://huggingface.co/models">Hugging Face</a> 模型推理（基于 33 个模型的性能改进几何平均值）的性能提高最多 2 倍，对于 <a href="https://github.com/pytorch/benchmark">TorchBench</a> 模型推理（基于 45 个模型的性能改进几何平均值）的性能提高最多 1.35 倍，与默认急切模式推理相比，在 AWS Graviton3 基于的 Amazon EC2 实例上运行了多个自然语言处理（NLP）、计算机视觉（CV）和推荐模型。从 PyTorch 2.3.1 版本开始，这些优化可在 torch Python <a href="https://pypi.org/project/torch/2.3.1/"> 轮子</a>和 AWS Graviton PyTorch <a href="https://github.com/aws/deep-learning-containers/blob/master/available_images.md#ec2-framework-graviton-containers-ec2-ecs-and-eks-support-only"> 深度学习容器（DLC）</a> 中使用。</p>
+
+<p>在这篇博客文章中，我们展示了如何在 AWS Graviton3 基于的 EC2 实例上优化 torch.compile 性能，如何使用这些优化来提高推理性能，以及带来的速度提升。</p>
+
+<h2 id="why-torchcompile-and-whats-the-goal">为什么使用 torch.compile？目标是什么？</h2>
+
+<p>在即时模式（eager mode）下，模型中的操作器在遇到时立即执行。这种模式使用起来更简单，更适合机器学习（ML）研究人员，因此是默认模式。然而，即时模式由于冗余内核启动和内存读取开销，会带来运行时开销。而在 torch compile 模式下，操作器首先被合成成一个图，其中一个操作器与另一个操作器合并，以减少和定位内存读取以及总的内核启动开销。</p>
+
+<p>AWS Graviton 团队的目标是优化 torch.compile 后端以适应 Graviton3 处理器。PyTorch 的即时模式已经通过 Arm Compute Library (ACL)内核使用 oneDNN（也称为 MKLDNN）对 Graviton3 处理器进行了优化。因此，问题是，如何在 torch.compile 模式下重用这些内核，以实现图编译和优化内核性能的最佳结合？</p>
+
+<h2 id="results">结果</h2>
+
+<p>AWS Graviton 团队扩展了火炬电感器和 oneDNN 原语，这些原语重用了 ACL 内核并优化了 Graviton3 处理器的编译模式性能。从 PyTorch 2.3.1 版本开始，这些优化已包含在 torch Python 轮子中，并可在 AWS Graviton DLC 中使用。请参阅以下 <strong> 运行推理 </strong> 部分，了解安装、运行时配置以及如何运行测试的说明。</p>
+
+<p>为了展示性能提升，我们使用了来自 <a href="https://github.com/pytorch/benchmark">TorchBench</a> 的 NLP、CV 和推荐模型，以及来自 <a href="https://huggingface.co/models">Hugging Face</a> 的最受欢迎的 NLP 模型，涵盖了问答、文本分类、标记分类、翻译、零样本分类、翻译、摘要、特征提取、文本生成、文本到文本生成、填空和句子相似性等任务，以覆盖广泛的客户用例。</p>
+
+<p>我们首先测量了 TorchBench 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。您可以看到，在 45 个基准测试的模型中，延迟提高了 1.35 倍（45 个模型的几何平均值）。</p>
+
+<p><img src="/assets/images/accelerated-pytorch-inference/fg1.png" alt="PyTorch model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using TorchBench framework" style="width:100%"></p>
+
+<p><em><strong>图 1</strong>：使用 TorchBench 框架在 AWS Graviton3-based c7g 实例上，torch.compile 对 PyTorch 模型推理性能的改进。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
+
+<p>与前面的 TorchBench 推理性能图类似，我们首先测量了 Hugging Face NLP 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。您可以看到，在 33 个基准测试的模型中，性能提高了约 2 倍（33 个模型的几何平均值）。</p>
+
+<p><img src="/assets/images/accelerated-pytorch-inference/fg2.png" alt="Hugging Face NLP model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using Hugging Face example scripts" style="width:100%"></p>
+
+<p><em><strong>图像 2</strong>：使用 Hugging Face 示例脚本在 AWS Graviton3-based c7g 实例上通过 torch.compile 提升 Hugging Face NLP 模型推理性能。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
+
+<h2 id="running-an-inference">运行推理</h2>
+
+<p>从 PyTorch 2.3.1 版本开始，优化功能包含在 torch Python 轮和 AWS Graviton PyTorch DLC 中。本节展示了如何使用 torch Python 轮和来自 Hugging Face 及 TorchBench 仓库的基准测试脚本在急切模式和 torch.compile 模式下运行推理。</p>
+
+<p>要成功运行脚本并重现本帖中提到的加速数值，您需要一个来自 Graviton3 系列的硬件实例（<code class="language-plaintext highlighter-rouge">c7g/r7g/m7g/hpc7g</code>）。对于本帖，我们使用了 <a href="https://aws.amazon.com/ec2/instance-types/c7g/">c7g.4xl（16 vcpu）实例 </a>。实例、AMI 详细信息和所需的 torch 库版本将在以下片段中说明。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Instance: c7g.4xl instance
+Region: us-west-2
+AMI: ami-05cc25bfa725a144a﻿ (Ubuntu 22.04/Jammy with 6.5.0-1017-aws kernel)
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1
+</code></pre></div></div>
+
+<p>为急切模式推理实现的通用运行时调整同样适用于 torch.compile 模式，因此，我们设置了以下环境变量以进一步改善 AWS Graviton3 处理器上的 torch.compile 性能。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Enable the fast math GEMM kernels, to accelerate fp32 inference with bfloat16 gemm
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+
+# Enable Linux Transparent Huge Page (THP) allocations,
+# to reduce the tensor memory allocation latency
+export THP_MEM_ALLOC_ENABLE=1
+
+# Set LRU Cache capacity to cache the primitives and avoid redundant
+# memory allocations
+export LRU_CACHE_CAPACITY=1024
+</code></pre></div></div>
+
+<h4 id="torchbench-benchmarking-scripts">TORCHBENCH 基准测试脚本</h4>
+
+<p>TorchBench 是一个开源基准测试集合，用于评估 PyTorch 的性能。我们使用 TorchBench 仓库中的脚本对 45 个模型进行了基准测试。以下代码展示了如何使用脚本运行急切模式和编译模式下的 inductor 后端。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Set OMP_NUM_THREADS to number of vcpus, 16 for c7g.4xl instance
+export OMP_NUM_THREADS=16
+
+# Install the dependencies
+sudo apt-get install -y libgl1-mesa-glx
+sudo apt-get install -y libpangocairo-1.0-0
+python3 -m pip install psutil numpy transformers pynvml numba onnx onnxruntime scikit-learn timm effdet gym doctr opencv-python h5py==3.10.0 python-doctr 
+
+# Clone pytorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+cd benchmark
+# PyTorch benchmark repo doesn't have any release tags. So,
+# listing the commit we used for collecting the performance numbers
+git checkout 9a5e4137299741e1b6fb7aa7f5a6a853e5dd2295
+
+# Setup the models
+python3 install.py 
+
+# Colect eager mode performance using the following command. The results will be
+# stored at .userbenchmark/cpu/metric-&lt;timestamp&gt;.json.
+python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --metrics="latencies,cpu_peak_mem"
+
+# Collect torch.compile mode performance with inductor backend
+# and weights pre-packing enabled. The results will be stored at
+# .userbenchmark/cpu/metric-&lt;timestamp&gt;.json
+python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --torchdynamo inductor --freeze_prepack_weights --metrics="latencies,cpu_peak_mem"
+</code></pre></div></div>
+
+<p>推理运行成功完成后，脚本将结果存储为 JSON 格式。以下是一个示例输出：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{
+ "name": "cpu"
+ "environ": {
+     "pytorch_git_version": "d44533f9d073df13895333e70b66f81c513c1889"
+  },
+  
+  "metrics": {
+       "BERT_pytorch-eval_latency": 56.3769865,
+       "BERT_pytorch-eval_cmem": 0.4169921875
+  }
+}
+</code></pre></div></div>
+
+<h4 id="hugging-face-benchmarking-scripts">Hugging Face 基准测试脚本</h4>
+
+<p>Google T5 小型文本翻译模型是我们测试的约 30 个 Hugging Face 模型之一。我们将其作为示例模型来演示如何在急切模式和编译模式下运行推理。在编译模式下运行所需的附加配置和 API 以粗体形式突出显示 。 将以下脚本保存为 <code class="language-plaintext highlighter-rouge">google_t5_small_text_translation.py</code> 。</p>
+
+<pre><code>import argparse
+from transformers import T5Tokenizer, T5Model
+import torch
+from torch.profiler import profile, record_function, ProfilerActivity
+<b>import torch._inductor.config as config
+config.cpp.weight_prepack=True
+config.freezing=True</b>
+
+def test_inference(mode, num_iter):
+    tokenizer = T5Tokenizer.from_pretrained("t5-small")
+    model = T5Model.from_pretrained("t5-small")
+
+    input_ids = tokenizer(
+        "Studies have been shown that owning a dog is good for you", return_tensors="pt"
+    ).input_ids  # Batch size 1
+    decoder_input_ids = tokenizer("Studies show that", return_tensors="pt").input_ids  # Batch size 1
+
+    <b>if (mode == 'compile'):
+        model = torch.compile(model)</b>
+
+    with torch.no_grad():
+        for _ in range(50):
+            outputs = model(input_ids=input_ids, decoder_input_ids=decoder_input_ids)
+
+        with profile(activities=[ProfilerActivity.CPU]) as prof:
+            with record_function("model_inference"):
+                for _ in range(num_iter):
+                    outputs = model(input_ids=input_ids, decoder_input_ids=decoder_input_ids)
+
+    print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+
+def main() -&gt; None:
+    global m, args
+    parser = argparse.ArgumentParser(__doc__)
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["eager", "compile"],
+        default="eager",
+        help="Which test to run.",
+    )
+    parser.add_argument(
+        "-n",
+        "--number",
+        type=int,
+        default=100,
+        help="how many iterations to run.",
+    )
+    args = parser.parse_args()
+    test_inference(args.mode, args.number)
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+<p>按以下步骤运行脚本：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Set OMP_NUM_THREADS to number of vcpus to 4 because
+# the scripts are running inference in sequence, and
+# they don't need large number of vcpus
+export OMP_NUM_THREADS=4
+
+# Install the dependencies
+python3 -m pip install transformers
+
+# Run the inference script in Eager mode
+# using number of iterations as 1 just to show the torch profiler output
+# but for the benchmarking, we used 1000 iterations.
+python3 google_t5_small_text_translation.py -n 1 -m eager
+
+# Run the inference script in torch compile mode
+python3 google_t5_small_text_translation.py -n 1 -m compile
+</code></pre></div></div>
+
+<p>推理运行成功完成后，脚本将打印 torch 分析器输出，包括 torch 操作符的延迟分解。以下是从 torch 分析器获得的示例输出：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Torch profiler output for the eager mode run on c7g.xl (4vcpu)
+------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                    Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                aten::mm        40.71%      12.502ms        40.71%      12.502ms     130.229us            96  
+         model_inference        26.44%       8.118ms       100.00%      30.708ms      30.708ms             1  
+               aten::bmm         6.85%       2.102ms         9.47%       2.908ms      80.778us            36  
+            aten::matmul         3.73%       1.146ms        57.26%      17.583ms     133.205us           132  
+            aten::select         1.88%     576.000us         1.90%     583.000us       0.998us           584  
+         aten::transpose         1.51%     464.000us         1.83%     563.000us       3.027us           186  
+------------------------ ------------ ------------ ------------ ------------ ------------ -------------------
+Self CPU time total: 30.708ms
+
+# Torch profiler output for the compile mode run for the same model on the same instance
+---------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                             Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+---------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+        mkldnn::_linear_pointwise        37.98%       5.461ms        45.91%       6.602ms      68.771us            96  
+            Torch-Compiled Region        29.56%       4.251ms        98.53%      14.168ms      14.168ms             1  
+                        aten::bmm        14.90%       2.143ms        21.73%       3.124ms      86.778us            36  
+                     aten::select         4.51%     648.000us         4.62%     665.000us       1.155us           576  
+                       aten::view         3.29%     473.000us         3.29%     473.000us       1.642us           288  
+                      aten::empty         2.53%     364.000us         2.53%     364.000us       3.165us           115  
+--------------------------------- ------------ ------------ ------------ ------------ ------------ --------------------
+Self CPU time total: 14.379ms
+</code></pre></div></div>
+
+<h2 id="technical-deep-dive-what-are-the-challenges-and-optimization-details">技术深度解析：挑战与优化细节</h2>
+
+<p>torch.compile 的基础是新技术——TorchDynamo、AOTDispatcher 和 TorchInductor。</p>
+
+<p><strong>TorchDynamo</strong> 通过使用 Python 框架评估钩子安全地捕获 PyTorch 程序<br>
+<strong>AOTDispatcher</strong> 覆盖 PyTorch 的 autograd 引擎，作为生成即时反向跟踪的跟踪自动微分<br>
+<strong>torchInductor</strong> 是一个深度学习编译器，可以为多个加速器和后端生成快速代码。</p>
+
+<p><img src="/assets/images/accelerated-pytorch-inference/fg3.png" alt="The PyTorch compilation process source" style="width:100%"></p>
+
+<p><em><strong>图像 3</strong>：PyTorch 编译过程</em></p>
+
+<p>当调用 torch.compile 时，torch dynamo 会重写 Python 字节码，将 PyTorch 操作序列提取到 <a href="https://pytorch.org/docs/stable/fx.html">FX</a><a href="https://pytorch.org/docs/stable/fx.html"> 图 </a> 中，然后使用 inductor 后端进行编译。对于典型的推理场景，其中图已冻结且梯度计算被禁用，inductor 会调用平台特定的优化，如将图重写为更高效的运算符、运算符融合和权重预打包。</p>
+
+<p>然而，在 Graviton3 上，inductor 无法执行这些优化，因为没有定义 aarch64 后端。为了解决这个问题，我们扩展了 inductor 的 FX 遍历，以便在 Graviton3 处理器上使用 ACL 后端为线性层编译选择 oneDNN 运算符。下面的代码片段展示了这一过程：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>packed_weight_op = (
+    mkldnn._reorder_linear_weight
+    if (is_bf16_weight or mkldnn._is_mkldnn_acl_supported())
+                    
+packed_linear_inputs: Tuple[Any, ...] = (input, packed_weight_node)
+if is_bf16_weight or mkldnn._is_mkldnn_acl_supported():
+    packed_linear_inputs += (bias, "none", [], "")
+    packed_linear_op = mkldnn._linear_pointwise.default
+</code></pre></div></div>
+
+<p>在完成这些操作后，FX 渲染流程成功将 <code class="language-plaintext highlighter-rouge">matmul</code> 操作符编译为 <code class="language-plaintext highlighter-rouge">linear_pointwise</code> 操作符。以下代码片段突出了原始模型中的 matmul 操作符：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> %attention_scores   : [num_users=1] = call_function[target=torch.matmul](args = (%query_layer, %transpose), kwargs = {})
+ %attention_scores_1 : [num_users=1] = call_function[target=operator.truediv](args = (%attention_scores, 8.0), kwargs = {})
+ %attention_scores_2 : [num_users=1] = call_function[target=operator.add](args = (%attention_scores_1, %extended_attention_mask_3), kwargs = {})
+</code></pre></div></div>
+
+<p>以下代码片段突出了编译图中 linear_pointwise 操作符：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>%_linear_pointwise_default_140 : [num_users=2] = call_function[target=torch.ops.mkldnn._linear_pointwise.default](args = (%add_7, %_frozen_param278, %_frozen_param16, none, [], ), kwargs = {})
+%mul_5 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.5), kwargs = {})
+%mul_6 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.7071067811865476), kwargs = {})
+%erf   : [num_users=1] = call_function[target=torch.ops.aten.erf.default](args = (%mul_6,), kwargs = {})
+%add_8 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%erf, 1), kwargs = {})
+</code></pre></div></div>
+
+<p>这完成了在 AWS Graviton3 处理器上编译图到优化操作符所需的 torch inductor 变更。接下来是实际的推理阶段，编译好的图被调度以运行。在 inductor 编译过程中，我们选择了 OneDNN with ACL 作为后端，因此，新的操作符被调度到 oneDNN，例如，<code class="language-plaintext highlighter-rouge">mkldnn._linear_pointwise</code>。然而，由于 oneDNN ACL 原语存在缺陷，操作符使用了 C++ 引用内核而不是优化的 ACL 内核。因此，编译性能仍然显著低于 eager 模式性能。</p>
+
+<p>主要有三个领域 oneDNN ACL 原语不支持 torch.compile 模式。以下章节将详细讨论这些问题。</p>
+
+<p><strong>1. ACL 基本操作原语在阻塞布局中不支持权重</strong></p>
+
+<p>ACL 基本操作原语最初是为急切模式设计的，仅支持在标准通道最后（<a href="https://oneapi-src.github.io/oneDNN/dev_guide_understanding_memory_formats.html#nhwc">NHWC</a>）格式中的权重，而不进行任何预打包。而权重预打包到阻塞布局是感应器编译过程中权重重排序到特定于运行时平台块的主要优化之一。这避免了在运行通用矩阵乘法（GEMM）时的冗余和即时重排序，否则这将是推理性能的瓶颈。但 ACL 基本操作原语不支持阻塞布局，因此运算符使用 oneDNN C++ 参考内核运行。</p>
+
+<p><strong>2. oneDNN 中不支持混合精度基本操作原语</strong></p>
+
+<p>AWS Graviton3 处理器支持 <a href="https://developer.arm.com/documentation/ddi0596/2020-12/SVE-Instructions/BFMMLA--BFloat16-floating-point-matrix-multiply-accumulate-">bfloat16 MMLA 指令 </a>，可用于加速使用 bfloat16 GEMM 作为混合精度计算的 fp32 推理。ACL 支持混合精度 GEMM 内核，并将其集成到 oneDNN 中，作为现有 fp32 操作的快速数学计算选项。然而，由于权重预打包优化，快速数学方法在编译模式下不起作用。编译模式需要在 oneDNN 中显式实现混合精度原语，才能使用 bfloat16 加速。</p>
+
+<p><strong>3. ACL 原语不支持某些激活函数的融合内核</strong></p>
+
+<p>在急切模式下，操作符是单独分发的，因为模型一旦到达就会独立运行。而相比之下，在编译模式下，操作符融合是另一种重要的优化，它将操作符融合以提高运行时效率。例如，高斯误差线性单元（<a href="https://arxiv.org/pdf/1606.08415.pdf#%3A~%3Atext%3DWe%20propose%20the%20Gaussian%20Error%2Cstandard%20Gaussian%20cumulative%20distribution%20function">GELU</a>）是基于变换器神经网络的架构中最广泛使用的激活函数之一。因此，通常会有一个线性层（包含矩阵乘法）后跟 GELU 激活。作为将模型编译成高效操作符的一部分，torch inductor 将 matmul 和 GELU 融合成一个单一的 linearpointwise+gelu 操作符。然而，oneDNN ACL 原语没有对融合内核与 GELU 的支持。</p>
+
+<p>我们通过扩展 oneDNN 原语以处理额外的布局和新原语定义来填补这些差距。以下章节将详细介绍这些优化。</p>
+
+<h3 id="optimization-1-extended-acl-primitives-to-accept-weight-tensors-in-blocked-layout">优化 1：扩展 ACL 原语以接受分块布局的权重张量</h3>
+
+<p>我们扩展了 ACL 原语，使其除了标准 NHWC 格式外，还可以接受分块布局。相应的代码片段如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>const bool is_weights_md_format_ok
+                    = utils::one_of(weights_format_kind_received,
+                      format_kind::any, format_kind::blocked);
+
+
+const memory_desc_t weights_md_received = weights_md_;
+acl_utils::reorder_to_weight_format(aip.wei_tensor_info,
+             weights_md_, expected_weight_format, inner_dim, o_dim,
+             remaining_dims, {});
+
+ACL_CHECK_SUPPORT(
+     (weights_format_kind_received == format_kind::blocked)
+      &amp;&amp; !(dnnl_memory_desc_equal(
+      &amp;weights_md_received, &amp;weights_md_)),
+      "specified blocked format not supported by ACL, use "
+      "format_kind_t::any to find a supported blocked format for "
+      "your platform");
+</code></pre></div></div>
+
+<h3 id="optimization-2-defined-new-acl-primitives-to-handle-mixed-precision-operators-weights-in-bfloat16-and-activations-in-fp32">优化 2：定义了新的 ACL 原语来处理混合精度算子（权重为 bfloat16，激活为 fp32）</h3>
+
+<p>我们定义了混合精度原语定义，并更新了现有的 oneDNN ACL fp32 原语以处理 bfloat16 张量。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> /* With graph compilation, we are able to reorder and pre-pack the weights during the model load
+  * and compilation phase itself so that redundant and on-the-fly reorders can be avoided.
+  * This primitive definition is to support gemm fastmath mode for the compile scenario where src is
+  * in fp32 and weights are in bf16
+  */
+ {{forward, f32, bf16, f32}, {
+    CPU_INSTANCE_AARCH64_ACL(acl_inner_product_fwd_t)
+    nullptr,
+ }},
+</code></pre></div></div>
+
+<h3 id="optimization-3-disabled-operator-fusion-pass-in-torch-inductor">优化 3：禁用了 torch inductor 中的算子融合 pass</h3>
+
+<p>我们绕过了 torch inductor 中的算子融合 pass，这样编译后的图不包含 GELU 融合算子。这是一个临时解决方案，以启用 ACL 内核在 torch.compile 中。目前有一个正在进行的工作，旨在为未来的 PyTorch 版本启用算子融合 pass。通过这个解决方案，我们成功地将线性层调度到 ACL。如下面的 torch.profiler 输出所示，原始模型中的 <code class="language-plaintext highlighter-rouge">aten::addmm</code>（矩阵乘法算子的一个变体）和 <code class="language-plaintext highlighter-rouge">aten::gelu</code>（如<em>图 4</em> 中突出显示）被编译为 <code class="language-plaintext highlighter-rouge">mkldnn::_linear_pointwise</code>，没有融合 <code class="language-plaintext highlighter-rouge">gelu</code> 算子（如<em>图 5</em> 中突出显示）。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                       Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                aten::addmm        73.32%      46.543ms        74.49%      47.287ms     647.767us            73  
+            model_inference         9.92%       6.296ms       100.00%      63.479ms      63.479ms             1  
+                  aten::bmm         4.37%       2.776ms         5.46%       3.467ms     144.458us            24  
+                aten::copy_         1.74%       1.102ms         1.74%       1.102ms       8.103us           136  
+                 aten::gelu         1.50%     950.000us         1.50%     950.000us      79.167us            12  
+</code></pre></div></div>
+
+<p><em><strong>图像 4</strong>：torch.profiler 输出，显示 Hugging Face bert 基础模型在 Eager 模式下的推理，包括 addmm 和 gelu 运算符</em></p>
+<div class="mt-3 mb-3">&nbsp;</div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                 Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                            mkldnn::_linear_pointwise        53.61%      15.529ms        57.53%      16.665ms     228.288us            73  
+                                Torch-Compiled Region        36.95%      10.705ms        99.31%      28.769ms      28.769ms             1  
+    aten::_scaled_dot_product_flash_attention_for_cpu         3.67%       1.064ms         4.43%       1.284ms     107.000us            12  
+                                           aten::view         1.97%     572.000us         1.97%     572.000us       2.509us           228  
+                                          aten::empty         1.38%     399.000us         1.38%     399.000us       3.270us           122 
+</code></pre></div></div>
+
+<p><em><strong>图像 5</strong>：torch.profiler 输出，显示 Hugging Face Bert 基础模型在 torch.compile 模式下的推理，包括没有 gelu 融合的 linear_pointwise 运算符</em></p>
+
+<p>最后，<code class="language-plaintext highlighter-rouge">gelu</code> 运算符被编译成 <code class="language-plaintext highlighter-rouge">erf</code>（误差函数），并调度到 inductor 自动向量化后端。以下代码片段显示了编译图中的 <code class="language-plaintext highlighter-rouge">erf</code> 运算符以及使用 <code class="language-plaintext highlighter-rouge">libm.so</code> 运行它。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>%_linear_pointwise_default_140 : [num_users=2] = call_function[target=torch.ops.mkldnn._linear_pointwise.default](args = (%add_7, %_frozen_param278, %_frozen_param16, none, [], ), kwargs = {})
+%mul_5 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.5), kwargs = {})
+%mul_6 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.7071067811865476), kwargs = {})
+%erf   : [num_users=1] = call_function[target=torch.ops.aten.erf.default](args = (%mul_6,), kwargs = {})
+%add_8 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%erf, 1), kwargs = {})
+</code></pre></div></div>
+
+<p><em><strong>图像 6</strong>：后梯度传递后的代码片段，显示编译图中的 erf 函数</em></p>
+<div class="mt-3 mb-3">&nbsp;</div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     0.82%     0.40%  python3  libm.so.6            [.] erff32
+     0.05%     0.00%  python3  libtorch_python.so   [.] torch::autograd::THPVariable_erf
+     0.05%     0.00%  python3  libtorch_cpu.so      [.] at::_ops::erf::call
+</code></pre></div></div>
+
+<p><em><strong>图像 7</strong>：Linux perf 报告显示 erf 分派到 libm.so</em></p>
+
+<p>通过这项工作，我们能够通过使用电感图编译以及 oneDNN+ACL 后端优化了 Graviton3 处理器上的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 性能。</p>
+
+<h3 id="torchbench-enhancements">TorchBench 优化</h3>
+
+<p>为了展示 torch.compile 在 AWS Graviton3 处理器上的性能提升，我们扩展了 TorchBench 框架，添加了一个新参数以启用图冻结和权重预打包，并禁用 torch auto grad 用于评估测试模式。相应的代码片段如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>parser.add_argument(
+ "—freeze_prepack_weights",
+ action='store_true',
+ help="set to freeze the graph and prepack weights",
+ )
+
+if args.freeze_prepack_weights:
+ torch._inductor.config.freezing=True
+ torch._inductor.config.cpp.weight_prepack=True
+</code></pre></div></div>
+
+<p><em><strong>图像 8</strong>：在 TorchBench 中为 torchdynamo 后端添加了 freeze_prepack_weights 选项，以展示 torch.compile 在 AWS Graviton3 处理器上的性能改进</em></p>
+
+<p>我们已将所有优化提交到上游，从 PyTorch 2.3.1 版本开始，这些优化支持在 torch Python wheels 和 AWS Graviton PyTorch DLC 中</p>
+
+<h2 id="whats-next">接下来是什么</h2>
+
+<p>接下来，我们将扩展 torch inductor CPU 后端支持以编译 Llama 模型，并添加对融合 GEMM 内核的支持，以在 AWS Graviton3 处理器上启用 torch inductor 操作融合优化</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>在本教程中，我们介绍了如何在 AWS Graviton3 基于的 EC2 实例上优化 torch.compile 性能，如何使用这些优化来提高 PyTorch 模型推理性能，并展示了带来的速度提升。希望您能尝试一下！如果您在 Graviton 上需要任何关于 ML 软件的支持，请打开 AWS Graviton 技术指南 <a href="https://github.com/aws/aws-graviton-getting-started">GitHub</a> 上的问题。</p>
+
+<h2 id="acknowledgements">致谢</h2>
+
+<p>我们感谢 PyTorch 社区对 torch.compile 基准框架的贡献以及他们持续的努力来进一步优化它。</p>
+
+<p>参考资料：<a href="https://pytorch.org/assets/pytorch2-2.pdf">https://pytorch.org/assets/pytorch2-2.pdf</a></p>
+
+<h2 id="author">作者</h2>
+
+<p>Sunita Nadampalli 是 AWS 的软件开发经理和 AI/ML 专家。她负责 AWS Graviton 软件性能优化，以支持 AI/ML 和 HPC 工作负载。她对开源软件开发以及为基于 Arm ISA 的 SoC 提供高性能和可持续的软件解决方案充满热情。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

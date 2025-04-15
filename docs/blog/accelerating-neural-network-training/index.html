@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerating Neural Network Training with Semi-Structured (2:4) Sparsity | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Over the past year, we’ve added support for semi-structured (2:4) sparsity into PyTorch. With just a few lines of code, we were able to show a 10% end-to-end inference speedup on segment-anything by replacing dense matrix multiplications with sparse matrix multiplications.
+
+However, matrix multiplications are not unique to neural network inference - they happen during training as well. By expanding on the core primitives we used earlier to accelerate inference, we were also able to accelerate model training. We wrote a replacement nn.Linear layer, SemiSparseLinear, that is able to achieve a 1.3x speedup across the forwards + backwards pass of the linear layers in the MLP block of ViT-L on a NVIDIA A100.
+
+End-to-end, we see a wall time reduction of 6% for a DINOv2 ViT-L training, with virtually no accuracy degradation out of the box (82.8 vs 82.7 on ImageNet top-1 accuracy).
+
+
+
+We compare 2 strategies for training a ViT model for 125k iterations on 4x NVIDIA A100s: either fully dense (blue), or sparse for 70% of the training, then dense (orange). Both achieve similar results on the benchmarks, but the sparse variant trains 6% faster. For both experiments, we evaluate the intermediate checkpoints with and without sparsity.
+
+As far as we are aware, this is the first OSS implementation of accelerated sparse training and we’re excited to provide a user API in torchao. You can try accelerating your own training runs with just a few lines of code:
+
+# Requires torchao and pytorch nightlies and CUDA compute capability 8.0+
+import torch
+from torchao.sparsity.training import (
+    SemiSparseLinear,
+    swap_linear_with_semi_sparse_linear,
+)
+
+model = torch.nn.Sequential(torch.nn.Linear(1024, 4096)).cuda().half()
+
+# Specify the fully-qualified-name of the nn.Linear modules you want to swap
+sparse_config = {
+    " seq.0":="" semisparselinear="" }="" #="" swap="" nn.linear="" with="" semisparselinear,="" you="" can="" run="" your="" normal="" training="" loop="" after="" this="" step="" swap_linear_with_semi_sparse_linear(model,="" sparse_config)="" how="" does="" work?="" the="" general="" idea="" behind="" sparsity="" is="" simple:="" skip="" calculations="" involving="" zero-valued="" tensor="" elements="" to="" speed="" up="" matrix="" multiplication.="" however,="" simply="" setting="" weights="" zero="" isn’t="" enough,="" as="" dense="" still="" contains="" these="" pruned="" and="" multiplication="" kernels="" will="" continue="" process="" them,="" incurring="" same="" latency="" memory="" overhead.="" achieve="" actual="" performance="" gains,="" we="" need="" replace="" sparse="" that="" intelligently="" bypass="" elements.="" work="" on="" matrices,="" which="" remove="" store="" specified="" in="" a="" compressed="" format.="" there="" are="" many="" different="" formats,="" but="" we’re="" particularly="" interested="" semi-structured="" sparsity,="" also="" known="" 2:4="" structured="" or="" fine-grained="" more="" generally="" n:m="" sparsity.="" representation.="" original="" source="" 2:4-sparse="" where="" at="" most="" 2="" non-zero="" for="" every="" 4="" elements,="" illustrated="" image="" above.="" attractive="" because="" it="" exists="" goldilocks="" spot="" of="" accuracy:="" nvidia="" gpus="" since="" ampere="" offer="" hardware="" acceleration="" library="" support="" (cusparselt)="" format,="" being="" 1.6x="" faster="" pruning="" models="" fit="" pattern="" not="" degrade="" accuracy="" much="" other="" patterns.="" nvidia’s="" whitepaper="" shows="" then="" retraining="" able="" recover="" vision="" models.="" illustration="" (sparse)="" gpus.="" accelerating="" inference="" straightforward.="" our="" fixed="" during="" inference,="" prune="" compress="" weight="" ahead="" time="" (offline)="" representation="" instead="" tensor.="" then,="" dispatching="" dispatch="" multiplication,="" passing="" one.="" information="" about="" using="" please="" refer="" tutorial.="" extending="" order="" use="" reduce="" models,="" consider="" when="" mask="" calculated,="" once="" fixed.="" applied="" an="" existing="" trained="" model="" (also="" pruning)="" accuracy,="" requires="" two="" runs="" -="" one="" obtain="" another="" make="" sparse,="" offering="" no="" speedups.="" we’d="" like="" train="" from="" scratch="" (dynamic="" training),="" lead="" significant="" drop="" evaluations,="" would="" be="" selected="" initialization,="" essentially="" random.="" maintain="" scratch,="" runtime,="" so="" calculate="" optimal="" each="" process.="" conceptually="" think="" approach="" approximate="" technique,="" `prune_and_compress`="" `sparse_gemm`="" less="" than="" `dense_gemm`="" call="" take.="" difficult="" native="" compression="" functions="" too="" slow="" show="" given="" shapes="" vit-l="" multiplications="" (13008x4096x1024),="" measured="" runtime="" gemm="" respectively="" 538us="" 387us.="" words,="" must="" 538-387="151us" have="" any="" efficiency="" gain.="" unfortunately,="" kernel="" provided="" cusparselt="" already="" takes="" 380us="" (without="" even="" considering="" step!).="" max="" a100="" io="" (2tb="" s),="" bound,="" could="" theoretically="" (4096x1024x2="" bytes="8MB)" 4us="" (8mb="" 2tb="" s)!="" fact,="" were="" write="" prunes="" compresses="" into="" 36="" us="" (10x="" cusparselt),="" making="" entire="" (including="" sparsification)="" faster.="" available="" pytorch.="" custom="" sparsification="" kernel,="" includes="" +="" compression,="" ~30%="" across="" linear="" layer="" forward+backward.="" benchmarks="" a100-80gb="" gpu.="" writing="" performant="" multiple="" challenges="" faced="" implement="" explore="" below.="" 1)="" handling="" backwards="" pass="" pass,="" dl="" dx="" dw="" gradient="" update="" subsequent="" layer,="" means="" xwt="" xtw="" respectively.="" overview="" (fw="" bw="" pass)="" however="" problematic,="" cannot="" transposed,="" there’s="" guarantee="" both="" directions.="" matrices="" valid="" matrices.="" right="" longer="" transposed="" column="" therefore,="" 4x4="" tile,="" 1x4="" strip.="" greedily="" preserve="" largest="" values,="" ensuring="" take="" values="" row="" column.="" while="" guaranteed="" optimal,="" sometimes="" only="" 7="" 8,="" efficiently="" calculates="" row-wise="" column-wise.="" packed="" transpose="" tensor,="" storing="" pass.="" by="" calculating="" time,="" avoid="" secondary="" registers,="" writes="" global="" memory.="" w.t,="" needed="" backward="" minimizing="" some="" additional="" trickery="" handle="" underlying="" supports="" operations="" first="" sparse.="" rely="" properties="" operands.="" torch.compile="" fuse="" outer="" pointwise="" ops="" paying="" penalty.="" case="" training,="" op="" with.="" instead,="" transposition="" taking="" advantage="" cusparselt’s="" ability="" specify="" layout="" result="" matrix.="" 2)="" tiling="" efficient="" memory-io="" possible,="" want="" coalesce="" reads="" writes,="" found="" main="" bottleneck.="" within="" cuda="" thread,="" read="" chunks="" 128="" parallel="" coalesced="" single="" request="" gpu="" controller.="" thread="" 4x4x2="32" bytes,="" decided="" tiles="" (aka="" 8x8="" tile),="" allows="" operate="" 8x8x2="128" byte="" chunks.="" 3)="" sorting="" tile="" without="" warp-divergence="" individual="" bitmask="" specifies="" keep.="" do="" sort="" all="" 16="" long="" they="" break="" col="" constraint.="" preserves="" values.="" crucially="" observe="" ever="" number="" branchless="" network,="" warp="" divergence.="" clarity,="" metadata="" omitted.="" network="" diagram="" taken="" wikipedia.="" divergence="" occurs="" conditional="" execution="" inside="" block.="" cuda,="" items="" group="" (thread="" block)="" dispatched="" level="" batches="" (warps).="" if="" execution,="" such="" work-items="" batch="" instructions,="" masked="" dispatched,="" sequentially.="" example,="" code="" (condition)="" do(a)="" else="" do(b),="" condition="" satisfied="" odd-numbered="" items,="" total="" statement="" work-items,="" masking="" out="" even-numbered="" do(b)="" numbered="" work-items.="" answer="" provides="" 4)="" has="" been="" computed,="" data="" written="" back="" format="" trivial,="" needs="" stay="" it’s="" possible="" index="" registers="" (eg="" c[i++]="a" prevents="" c="" registers).="" furthermore,="" nvcc="" was="" expected,="" caused="" register="" spilling="" impacted="" performance.="" column-major="" efficient.="" well.="" quite="" similar="" open-source="" cutlass="" optimized="" loaded="" through="" shared-memory="" ptx="" ldmatrix="" instruction.="" efficiently:="" bits="" 32="" columns="" rows="" 0,="" 24.="" recall="" handles="" scattered="" threads.="" series="" warp-shuffle="" operations,="" metadata.="" fortunately,="" represents="" 10%="" io,="" afford="" fully="" writes.="" dinov2="" training:="" experimental="" setup="" results="" experiments,="" imagenet="" 125k="" steps="" method.="" experiments="" 4x="" amd="" epyc="" 7742="" 64-core="" cpus="" enabled="" part="" half="" enabled.="" dynamically="" recomputed="" step,="" continuously="" updated="" optimization.="" remaining="" steps,="" densely,="" producing="" final="" (except="" 100%="" setup),="" evaluated.="" 1k="" log-regression="" 0%="" (125k="" baseline)="" 82.8="" 40%="" (50k="" -&gt;="" 75k="" steps)="" 82.9="" 60%="" (75k="" 50k="" 70%="" (87.5k="" 37.5k="" 82.7="" 80%="" (100k="" 25k="" 90%="" (112.5k="" 12.5k="" 82.0="" 82.3="" (2:4-sparse="" model)="" weights.="" descent="" sound,="" should="" sparsify="" before="" optimizer="" doing="" that,="" full="" better="" practice:="" ste="" (straight="" estimator)="" strategy.="" parameters="" ones="" don’t="" use.="" conclusion="" future="" blog="" post,="" we’ve="" shown="" accelerate="" neural="" explained="" faced.="" 6%="" end="" speedup="" small="" 0.1="" pp="" drop.="" several="" areas="" expansion="" work:="" new="" patterns:="" researchers="" created="" patterns="" v:n:m="" allow="" flexibility.="" especially="" interesting="" applying="" llms,="" degrades="" much,="" seen="" positive="" pattern.="" optimizations="" fine-tuning:="" post="" covers="" oftentimes="" fine-tune="" foundational="" model.="" case,="" static="" may="" sufficient="" enable="" optimizations.="" strategy:="" n="" yield="" accuracy.="" overall,="" figuring="" best="" strategy="" open="" area="" research.="" compatibility="" fp8:="" fp8="" similarly="" principle.="" practice,="" kernels,="" possibly="" them="" scaling="" tensors.="" activation="" sparsity:="" activations="" training.="" overhead="" grows="" linearly="" sparsified="" size,="" setups="" large="" tensors="" compared="" benefit="" naturally="" usage="" relu="" gelu="" functions,="" reducing="" degradation.="" problems,="" feel="" free="" issue="" pr="" torchao,="" community="" building="" architecture="" optimization="" techniques="" quantization="" additionally,="" interest="" reach="" cuda-mode="" (#sparsity)="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerating Neural Network Training with Semi-Structured (2:4) Sparsity">
+<meta property="og:description" content="Over the past year, we’ve added support for semi-structured (2:4) sparsity into PyTorch. With just a few lines of code, we were able to show a 10% end-to-end inference speedup on segment-anything by replacing dense matrix multiplications with sparse matrix multiplications.
+
+However, matrix multiplications are not unique to neural network inference - they happen during training as well. By expanding on the core primitives we used earlier to accelerate inference, we were also able to accelerate model training. We wrote a replacement nn.Linear layer, SemiSparseLinear, that is able to achieve a 1.3x speedup across the forwards + backwards pass of the linear layers in the MLP block of ViT-L on a NVIDIA A100.
+
+End-to-end, we see a wall time reduction of 6% for a DINOv2 ViT-L training, with virtually no accuracy degradation out of the box (82.8 vs 82.7 on ImageNet top-1 accuracy).
+
+
+
+We compare 2 strategies for training a ViT model for 125k iterations on 4x NVIDIA A100s: either fully dense (blue), or sparse for 70% of the training, then dense (orange). Both achieve similar results on the benchmarks, but the sparse variant trains 6% faster. For both experiments, we evaluate the intermediate checkpoints with and without sparsity.
+
+As far as we are aware, this is the first OSS implementation of accelerated sparse training and we’re excited to provide a user API in torchao. You can try accelerating your own training runs with just a few lines of code:
+
+# Requires torchao and pytorch nightlies and CUDA compute capability 8.0+
+import torch
+from torchao.sparsity.training import (
+    SemiSparseLinear,
+    swap_linear_with_semi_sparse_linear,
+)
+
+model = torch.nn.Sequential(torch.nn.Linear(1024, 4096)).cuda().half()
+
+# Specify the fully-qualified-name of the nn.Linear modules you want to swap
+sparse_config = {
+    " seq.0":="" semisparselinear="" }="" #="" swap="" nn.linear="" with="" semisparselinear,="" you="" can="" run="" your="" normal="" training="" loop="" after="" this="" step="" swap_linear_with_semi_sparse_linear(model,="" sparse_config)="" how="" does="" work?="" the="" general="" idea="" behind="" sparsity="" is="" simple:="" skip="" calculations="" involving="" zero-valued="" tensor="" elements="" to="" speed="" up="" matrix="" multiplication.="" however,="" simply="" setting="" weights="" zero="" isn’t="" enough,="" as="" dense="" still="" contains="" these="" pruned="" and="" multiplication="" kernels="" will="" continue="" process="" them,="" incurring="" same="" latency="" memory="" overhead.="" achieve="" actual="" performance="" gains,="" we="" need="" replace="" sparse="" that="" intelligently="" bypass="" elements.="" work="" on="" matrices,="" which="" remove="" store="" specified="" in="" a="" compressed="" format.="" there="" are="" many="" different="" formats,="" but="" we’re="" particularly="" interested="" semi-structured="" sparsity,="" also="" known="" 2:4="" structured="" or="" fine-grained="" more="" generally="" n:m="" sparsity.="" representation.="" original="" source="" 2:4-sparse="" where="" at="" most="" 2="" non-zero="" for="" every="" 4="" elements,="" illustrated="" image="" above.="" attractive="" because="" it="" exists="" goldilocks="" spot="" of="" accuracy:="" nvidia="" gpus="" since="" ampere="" offer="" hardware="" acceleration="" library="" support="" (cusparselt)="" format,="" being="" 1.6x="" faster="" pruning="" models="" fit="" pattern="" not="" degrade="" accuracy="" much="" other="" patterns.="" nvidia’s="" whitepaper="" shows="" then="" retraining="" able="" recover="" vision="" models.="" illustration="" (sparse)="" gpus.="" accelerating="" inference="" straightforward.="" our="" fixed="" during="" inference,="" prune="" compress="" weight="" ahead="" time="" (offline)="" representation="" instead="" tensor.="" then,="" dispatching="" dispatch="" multiplication,="" passing="" one.="" information="" about="" using="" please="" refer="" tutorial.="" extending="" order="" use="" reduce="" models,="" consider="" when="" mask="" calculated,="" once="" fixed.="" applied="" an="" existing="" trained="" model="" (also="" pruning)="" accuracy,="" requires="" two="" runs="" -="" one="" obtain="" another="" make="" sparse,="" offering="" no="" speedups.="" we’d="" like="" train="" from="" scratch="" (dynamic="" training),="" lead="" significant="" drop="" evaluations,="" would="" be="" selected="" initialization,="" essentially="" random.="" maintain="" scratch,="" runtime,="" so="" calculate="" optimal="" each="" process.="" conceptually="" think="" approach="" approximate="" technique,="" `prune_and_compress`="" `sparse_gemm`="" less="" than="" `dense_gemm`="" call="" take.="" difficult="" native="" compression="" functions="" too="" slow="" show="" given="" shapes="" vit-l="" multiplications="" (13008x4096x1024),="" measured="" runtime="" gemm="" respectively="" 538us="" 387us.="" words,="" must="" 538-387="151us" have="" any="" efficiency="" gain.="" unfortunately,="" kernel="" provided="" cusparselt="" already="" takes="" 380us="" (without="" even="" considering="" step!).="" max="" a100="" io="" (2tb="" s),="" bound,="" could="" theoretically="" (4096x1024x2="" bytes="8MB)" 4us="" (8mb="" 2tb="" s)!="" fact,="" were="" write="" prunes="" compresses="" into="" 36="" us="" (10x="" cusparselt),="" making="" entire="" (including="" sparsification)="" faster.="" available="" pytorch.="" custom="" sparsification="" kernel,="" includes="" +="" compression,="" ~30%="" across="" linear="" layer="" forward+backward.="" benchmarks="" a100-80gb="" gpu.="" writing="" performant="" multiple="" challenges="" faced="" implement="" explore="" below.="" 1)="" handling="" backwards="" pass="" pass,="" dl="" dx="" dw="" gradient="" update="" subsequent="" layer,="" means="" xwt="" xtw="" respectively.="" overview="" (fw="" bw="" pass)="" however="" problematic,="" cannot="" transposed,="" there’s="" guarantee="" both="" directions.="" matrices="" valid="" matrices.="" right="" longer="" transposed="" column="" therefore,="" 4x4="" tile,="" 1x4="" strip.="" greedily="" preserve="" largest="" values,="" ensuring="" take="" values="" row="" column.="" while="" guaranteed="" optimal,="" sometimes="" only="" 7="" 8,="" efficiently="" calculates="" row-wise="" column-wise.="" packed="" transpose="" tensor,="" storing="" pass.="" by="" calculating="" time,="" avoid="" secondary="" registers,="" writes="" global="" memory.="" w.t,="" needed="" backward="" minimizing="" some="" additional="" trickery="" handle="" underlying="" supports="" operations="" first="" sparse.="" rely="" properties="" operands.="" torch.compile="" fuse="" outer="" pointwise="" ops="" paying="" penalty.="" case="" training,="" op="" with.="" instead,="" transposition="" taking="" advantage="" cusparselt’s="" ability="" specify="" layout="" result="" matrix.="" 2)="" tiling="" efficient="" memory-io="" possible,="" want="" coalesce="" reads="" writes,="" found="" main="" bottleneck.="" within="" cuda="" thread,="" read="" chunks="" 128="" parallel="" coalesced="" single="" request="" gpu="" controller.="" thread="" 4x4x2="32" bytes,="" decided="" tiles="" (aka="" 8x8="" tile),="" allows="" operate="" 8x8x2="128" byte="" chunks.="" 3)="" sorting="" tile="" without="" warp-divergence="" individual="" bitmask="" specifies="" keep.="" do="" sort="" all="" 16="" long="" they="" break="" col="" constraint.="" preserves="" values.="" crucially="" observe="" ever="" number="" branchless="" network,="" warp="" divergence.="" clarity,="" metadata="" omitted.="" network="" diagram="" taken="" wikipedia.="" divergence="" occurs="" conditional="" execution="" inside="" block.="" cuda,="" items="" group="" (thread="" block)="" dispatched="" level="" batches="" (warps).="" if="" execution,="" such="" work-items="" batch="" instructions,="" masked="" dispatched,="" sequentially.="" example,="" code="" (condition)="" do(a)="" else="" do(b),="" condition="" satisfied="" odd-numbered="" items,="" total="" statement="" work-items,="" masking="" out="" even-numbered="" do(b)="" numbered="" work-items.="" answer="" provides="" 4)="" has="" been="" computed,="" data="" written="" back="" format="" trivial,="" needs="" stay="" it’s="" possible="" index="" registers="" (eg="" c[i++]="a" prevents="" c="" registers).="" furthermore,="" nvcc="" was="" expected,="" caused="" register="" spilling="" impacted="" performance.="" column-major="" efficient.="" well.="" quite="" similar="" open-source="" cutlass="" optimized="" loaded="" through="" shared-memory="" ptx="" ldmatrix="" instruction.="" efficiently:="" bits="" 32="" columns="" rows="" 0,="" 24.="" recall="" handles="" scattered="" threads.="" series="" warp-shuffle="" operations,="" metadata.="" fortunately,="" represents="" 10%="" io,="" afford="" fully="" writes.="" dinov2="" training:="" experimental="" setup="" results="" experiments,="" imagenet="" 125k="" steps="" method.="" experiments="" 4x="" amd="" epyc="" 7742="" 64-core="" cpus="" enabled="" part="" half="" enabled.="" dynamically="" recomputed="" step,="" continuously="" updated="" optimization.="" remaining="" steps,="" densely,="" producing="" final="" (except="" 100%="" setup),="" evaluated.="" 1k="" log-regression="" 0%="" (125k="" baseline)="" 82.8="" 40%="" (50k="" -&gt;="" 75k="" steps)="" 82.9="" 60%="" (75k="" 50k="" 70%="" (87.5k="" 37.5k="" 82.7="" 80%="" (100k="" 25k="" 90%="" (112.5k="" 12.5k="" 82.0="" 82.3="" (2:4-sparse="" model)="" weights.="" descent="" sound,="" should="" sparsify="" before="" optimizer="" doing="" that,="" full="" better="" practice:="" ste="" (straight="" estimator)="" strategy.="" parameters="" ones="" don’t="" use.="" conclusion="" future="" blog="" post,="" we’ve="" shown="" accelerate="" neural="" explained="" faced.="" 6%="" end="" speedup="" small="" 0.1="" pp="" drop.="" several="" areas="" expansion="" work:="" new="" patterns:="" researchers="" created="" patterns="" v:n:m="" allow="" flexibility.="" especially="" interesting="" applying="" llms,="" degrades="" much,="" seen="" positive="" pattern.="" optimizations="" fine-tuning:="" post="" covers="" oftentimes="" fine-tune="" foundational="" model.="" case,="" static="" may="" sufficient="" enable="" optimizations.="" strategy:="" n="" yield="" accuracy.="" overall,="" figuring="" best="" strategy="" open="" area="" research.="" compatibility="" fp8:="" fp8="" similarly="" principle.="" practice,="" kernels,="" possibly="" them="" scaling="" tensors.="" activation="" sparsity:="" activations="" training.="" overhead="" grows="" linearly="" sparsified="" size,="" setups="" large="" tensors="" compared="" benefit="" naturally="" usage="" relu="" gelu="" functions,="" reducing="" degradation.="" problems,="" feel="" free="" issue="" pr="" torchao,="" community="" building="" architecture="" optimization="" techniques="" quantization="" additionally,="" interest="" reach="" cuda-mode="" (#sparsity)="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerating Neural Network Training with Semi-Structured (2:4) Sparsity">
+<meta name="twitter:description" content="Over the past year, we’ve added support for semi-structured (2:4) sparsity into PyTorch. With just a few lines of code, we were able to show a 10% end-to-end inference speedup on segment-anything by replacing dense matrix multiplications with sparse matrix multiplications.
+
+However, matrix multiplications are not unique to neural network inference - they happen during training as well. By expanding on the core primitives we used earlier to accelerate inference, we were also able to accelerate model training. We wrote a replacement nn.Linear layer, SemiSparseLinear, that is able to achieve a 1.3x speedup across the forwards + backwards pass of the linear layers in the MLP block of ViT-L on a NVIDIA A100.
+
+End-to-end, we see a wall time reduction of 6% for a DINOv2 ViT-L training, with virtually no accuracy degradation out of the box (82.8 vs 82.7 on ImageNet top-1 accuracy).
+
+
+
+We compare 2 strategies for training a ViT model for 125k iterations on 4x NVIDIA A100s: either fully dense (blue), or sparse for 70% of the training, then dense (orange). Both achieve similar results on the benchmarks, but the sparse variant trains 6% faster. For both experiments, we evaluate the intermediate checkpoints with and without sparsity.
+
+As far as we are aware, this is the first OSS implementation of accelerated sparse training and we’re excited to provide a user API in torchao. You can try accelerating your own training runs with just a few lines of code:
+
+# Requires torchao and pytorch nightlies and CUDA compute capability 8.0+
+import torch
+from torchao.sparsity.training import (
+    SemiSparseLinear,
+    swap_linear_with_semi_sparse_linear,
+)
+
+model = torch.nn.Sequential(torch.nn.Linear(1024, 4096)).cuda().half()
+
+# Specify the fully-qualified-name of the nn.Linear modules you want to swap
+sparse_config = {
+    " seq.0":="" semisparselinear="" }="" #="" swap="" nn.linear="" with="" semisparselinear,="" you="" can="" run="" your="" normal="" training="" loop="" after="" this="" step="" swap_linear_with_semi_sparse_linear(model,="" sparse_config)="" how="" does="" work?="" the="" general="" idea="" behind="" sparsity="" is="" simple:="" skip="" calculations="" involving="" zero-valued="" tensor="" elements="" to="" speed="" up="" matrix="" multiplication.="" however,="" simply="" setting="" weights="" zero="" isn’t="" enough,="" as="" dense="" still="" contains="" these="" pruned="" and="" multiplication="" kernels="" will="" continue="" process="" them,="" incurring="" same="" latency="" memory="" overhead.="" achieve="" actual="" performance="" gains,="" we="" need="" replace="" sparse="" that="" intelligently="" bypass="" elements.="" work="" on="" matrices,="" which="" remove="" store="" specified="" in="" a="" compressed="" format.="" there="" are="" many="" different="" formats,="" but="" we’re="" particularly="" interested="" semi-structured="" sparsity,="" also="" known="" 2:4="" structured="" or="" fine-grained="" more="" generally="" n:m="" sparsity.="" representation.="" original="" source="" 2:4-sparse="" where="" at="" most="" 2="" non-zero="" for="" every="" 4="" elements,="" illustrated="" image="" above.="" attractive="" because="" it="" exists="" goldilocks="" spot="" of="" accuracy:="" nvidia="" gpus="" since="" ampere="" offer="" hardware="" acceleration="" library="" support="" (cusparselt)="" format,="" being="" 1.6x="" faster="" pruning="" models="" fit="" pattern="" not="" degrade="" accuracy="" much="" other="" patterns.="" nvidia’s="" whitepaper="" shows="" then="" retraining="" able="" recover="" vision="" models.="" illustration="" (sparse)="" gpus.="" accelerating="" inference="" straightforward.="" our="" fixed="" during="" inference,="" prune="" compress="" weight="" ahead="" time="" (offline)="" representation="" instead="" tensor.="" then,="" dispatching="" dispatch="" multiplication,="" passing="" one.="" information="" about="" using="" please="" refer="" tutorial.="" extending="" order="" use="" reduce="" models,="" consider="" when="" mask="" calculated,="" once="" fixed.="" applied="" an="" existing="" trained="" model="" (also="" pruning)="" accuracy,="" requires="" two="" runs="" -="" one="" obtain="" another="" make="" sparse,="" offering="" no="" speedups.="" we’d="" like="" train="" from="" scratch="" (dynamic="" training),="" lead="" significant="" drop="" evaluations,="" would="" be="" selected="" initialization,="" essentially="" random.="" maintain="" scratch,="" runtime,="" so="" calculate="" optimal="" each="" process.="" conceptually="" think="" approach="" approximate="" technique,="" `prune_and_compress`="" `sparse_gemm`="" less="" than="" `dense_gemm`="" call="" take.="" difficult="" native="" compression="" functions="" too="" slow="" show="" given="" shapes="" vit-l="" multiplications="" (13008x4096x1024),="" measured="" runtime="" gemm="" respectively="" 538us="" 387us.="" words,="" must="" 538-387="151us" have="" any="" efficiency="" gain.="" unfortunately,="" kernel="" provided="" cusparselt="" already="" takes="" 380us="" (without="" even="" considering="" step!).="" max="" a100="" io="" (2tb="" s),="" bound,="" could="" theoretically="" (4096x1024x2="" bytes="8MB)" 4us="" (8mb="" 2tb="" s)!="" fact,="" were="" write="" prunes="" compresses="" into="" 36="" us="" (10x="" cusparselt),="" making="" entire="" (including="" sparsification)="" faster.="" available="" pytorch.="" custom="" sparsification="" kernel,="" includes="" +="" compression,="" ~30%="" across="" linear="" layer="" forward+backward.="" benchmarks="" a100-80gb="" gpu.="" writing="" performant="" multiple="" challenges="" faced="" implement="" explore="" below.="" 1)="" handling="" backwards="" pass="" pass,="" dl="" dx="" dw="" gradient="" update="" subsequent="" layer,="" means="" xwt="" xtw="" respectively.="" overview="" (fw="" bw="" pass)="" however="" problematic,="" cannot="" transposed,="" there’s="" guarantee="" both="" directions.="" matrices="" valid="" matrices.="" right="" longer="" transposed="" column="" therefore,="" 4x4="" tile,="" 1x4="" strip.="" greedily="" preserve="" largest="" values,="" ensuring="" take="" values="" row="" column.="" while="" guaranteed="" optimal,="" sometimes="" only="" 7="" 8,="" efficiently="" calculates="" row-wise="" column-wise.="" packed="" transpose="" tensor,="" storing="" pass.="" by="" calculating="" time,="" avoid="" secondary="" registers,="" writes="" global="" memory.="" w.t,="" needed="" backward="" minimizing="" some="" additional="" trickery="" handle="" underlying="" supports="" operations="" first="" sparse.="" rely="" properties="" operands.="" torch.compile="" fuse="" outer="" pointwise="" ops="" paying="" penalty.="" case="" training,="" op="" with.="" instead,="" transposition="" taking="" advantage="" cusparselt’s="" ability="" specify="" layout="" result="" matrix.="" 2)="" tiling="" efficient="" memory-io="" possible,="" want="" coalesce="" reads="" writes,="" found="" main="" bottleneck.="" within="" cuda="" thread,="" read="" chunks="" 128="" parallel="" coalesced="" single="" request="" gpu="" controller.="" thread="" 4x4x2="32" bytes,="" decided="" tiles="" (aka="" 8x8="" tile),="" allows="" operate="" 8x8x2="128" byte="" chunks.="" 3)="" sorting="" tile="" without="" warp-divergence="" individual="" bitmask="" specifies="" keep.="" do="" sort="" all="" 16="" long="" they="" break="" col="" constraint.="" preserves="" values.="" crucially="" observe="" ever="" number="" branchless="" network,="" warp="" divergence.="" clarity,="" metadata="" omitted.="" network="" diagram="" taken="" wikipedia.="" divergence="" occurs="" conditional="" execution="" inside="" block.="" cuda,="" items="" group="" (thread="" block)="" dispatched="" level="" batches="" (warps).="" if="" execution,="" such="" work-items="" batch="" instructions,="" masked="" dispatched,="" sequentially.="" example,="" code="" (condition)="" do(a)="" else="" do(b),="" condition="" satisfied="" odd-numbered="" items,="" total="" statement="" work-items,="" masking="" out="" even-numbered="" do(b)="" numbered="" work-items.="" answer="" provides="" 4)="" has="" been="" computed,="" data="" written="" back="" format="" trivial,="" needs="" stay="" it’s="" possible="" index="" registers="" (eg="" c[i++]="a" prevents="" c="" registers).="" furthermore,="" nvcc="" was="" expected,="" caused="" register="" spilling="" impacted="" performance.="" column-major="" efficient.="" well.="" quite="" similar="" open-source="" cutlass="" optimized="" loaded="" through="" shared-memory="" ptx="" ldmatrix="" instruction.="" efficiently:="" bits="" 32="" columns="" rows="" 0,="" 24.="" recall="" handles="" scattered="" threads.="" series="" warp-shuffle="" operations,="" metadata.="" fortunately,="" represents="" 10%="" io,="" afford="" fully="" writes.="" dinov2="" training:="" experimental="" setup="" results="" experiments,="" imagenet="" 125k="" steps="" method.="" experiments="" 4x="" amd="" epyc="" 7742="" 64-core="" cpus="" enabled="" part="" half="" enabled.="" dynamically="" recomputed="" step,="" continuously="" updated="" optimization.="" remaining="" steps,="" densely,="" producing="" final="" (except="" 100%="" setup),="" evaluated.="" 1k="" log-regression="" 0%="" (125k="" baseline)="" 82.8="" 40%="" (50k="" -&gt;="" 75k="" steps)="" 82.9="" 60%="" (75k="" 50k="" 70%="" (87.5k="" 37.5k="" 82.7="" 80%="" (100k="" 25k="" 90%="" (112.5k="" 12.5k="" 82.0="" 82.3="" (2:4-sparse="" model)="" weights.="" descent="" sound,="" should="" sparsify="" before="" optimizer="" doing="" that,="" full="" better="" practice:="" ste="" (straight="" estimator)="" strategy.="" parameters="" ones="" don’t="" use.="" conclusion="" future="" blog="" post,="" we’ve="" shown="" accelerate="" neural="" explained="" faced.="" 6%="" end="" speedup="" small="" 0.1="" pp="" drop.="" several="" areas="" expansion="" work:="" new="" patterns:="" researchers="" created="" patterns="" v:n:m="" allow="" flexibility.="" especially="" interesting="" applying="" llms,="" degrades="" much,="" seen="" positive="" pattern.="" optimizations="" fine-tuning:="" post="" covers="" oftentimes="" fine-tune="" foundational="" model.="" case,="" static="" may="" sufficient="" enable="" optimizations.="" strategy:="" n="" yield="" accuracy.="" overall,="" figuring="" best="" strategy="" open="" area="" research.="" compatibility="" fp8:="" fp8="" similarly="" principle.="" practice,="" kernels,="" possibly="" them="" scaling="" tensors.="" activation="" sparsity:="" activations="" training.="" overhead="" grows="" linearly="" sparsified="" size,="" setups="" large="" tensors="" compared="" benefit="" naturally="" usage="" relu="" gelu="" functions,="" reducing="" degradation.="" problems,="" feel="" free="" issue="" pr="" torchao,="" community="" building="" architecture="" optimization="" techniques="" quantization="" additionally,="" interest="" reach="" cuda-mode="" (#sparsity)="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年6月20日</p>
+            <h1>
+                <a class="blog-title">利用半结构化（2:4）稀疏性加速神经网络训练</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由蔡杰，丹尼尔·哈齐扎，拉奥·苏普里亚亚著</p>
+                    <p>过去一年中，我们已将半结构化（2:4）稀疏性支持添加到 PyTorch 中。仅用几行代码，我们就能够通过用稀疏矩阵乘法替换密集矩阵乘法，在 <a href="https://github.com/pytorch/ao/tree/main/torchao/sparsity#segment-anything">segment-anything</a> 上实现 10%的端到端推理速度提升。</p>
+
+<p>然而，矩阵乘法并不仅限于神经网络推理，它们在训练过程中也会发生。通过扩展我们之前用于加速推理的核心原语，我们还能够加速模型训练。我们编写了一个替换 nn.Linear 层的实现，<code class="language-plaintext highlighter-rouge">SemiSparseLinear</code>，它能够在 ViT-L 的 MLP 块中实现线性层的正向和反向传播的 1.3 倍<a href="https://github.com/pytorch/ao/tree/main/torchao/sparsity/training#benchmarking">加速 </a>，在 NVIDIA A100 上测试。</p>
+
+<p><strong>在端到端的情况下，我们观察到 <a href="https://github.com/facebookresearch/dinov2">DINOv2 ViT-L</a> 训练的墙时减少了 6%，并且几乎没有准确性下降（ImageNet top-1 准确率从 82.8 下降到 82.7）。</strong></p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg1.png" alt="2 strategies for training a ViT model" style="width:100%"></p>
+
+<p><em>我们比较了两种在 4x NVIDIA A100s 上训练 ViT 模型 125k 次迭代的策略：一种是全连接（蓝色），另一种是 70%的训练时间使用稀疏，然后转为全连接（橙色）。两种方法在基准测试中取得了相似的结果，但稀疏版本的训练速度提高了 6%。对于这两个实验，我们评估了带稀疏和不带稀疏的中间检查点。</em></p>
+
+<p>据我们所知，<strong> 这是第一个加速稀疏训练的开源软件实现 </strong>，我们很高兴在 <a href="https://github.com/pytorch/ao/tree/main/torchao/sparsity/training#benchmarking">torchao</a> 中提供用户 API。您只需几行代码就可以尝试加速自己的训练运行：</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Requires torchao and pytorch nightlies and CUDA compute capability 8.0+
+</span><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torchao.sparsity.training</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">SemiSparseLinear</span><span class="p">,</span>
+    <span class="n">swap_linear_with_semi_sparse_linear</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">4096</span><span class="p">)).</span><span class="n">cuda</span><span class="p">().</span><span class="n">half</span><span class="p">()</span>
+
+<span class="c1"># Specify the fully-qualified-name of the nn.Linear modules you want to swap
+</span><span class="n">sparse_config</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s">"seq.0"</span><span class="p">:</span> <span class="n">SemiSparseLinear</span>
+<span class="p">}</span>
+
+<span class="c1"># Swap nn.Linear with SemiSparseLinear, you can run your normal training loop after this step
+</span><span class="n">swap_linear_with_semi_sparse_linear</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">sparse_config</span><span class="p">)</span>
+</code></pre></div></div>
+
+<h2 id="how-does-this-work">这是如何工作的？</h2>
+
+<p>稀疏性的基本思想很简单：跳过涉及零值张量元素的运算以加快矩阵乘法。然而，仅仅将权重设置为零是不够的，因为密集张量仍然包含这些剪枝元素，密集矩阵乘法内核将继续处理它们，产生相同的延迟和内存开销。为了实现真正的性能提升，我们需要用智能跳过剪枝元素的稀疏内核来替换密集内核。</p>
+
+<p>这些核适用于稀疏矩阵，它移除了剪枝元素，并以压缩格式存储指定的元素。稀疏格式有很多种，但我们特别关注 <strong> 半结构化稀疏性 </strong>，也称为 <strong>2:4 结构化稀疏性 </strong> 或 <strong> 细粒度结构化稀疏性 </strong>，或者更一般地 <strong>N:M 结构化稀疏性 </strong>。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg2.png" alt="2:4 sparse compressed representation" style="width:100%;display:block;max-width:600px;margin-left:auto;margin-right:auto;"></p>
+
+<p><em>2:4 稀疏压缩表示。原始 <a href="https://developer.nvidia.com/blog/structured-sparsity-in-the-nvidia-ampere-architecture-and-applications-in-search-engines/"> 来源</a></em></p>
+
+<p>2:4 稀疏矩阵是一种矩阵，其中每4个元素中最多只有2个非零元素，如上图所示。半结构化稀疏性吸引人之处在于它存在于性能和准确性的黄金分割点上：</p>
+
+<ol>
+  <li>自 Ampere 以来，NVIDIA GPU 提供硬件加速和库支持（<a href="https://docs.nvidia.com/cuda/cusparselt/index.html">cuSPARSELt</a>）来支持此格式，矩阵乘法速度可提高高达 1.6 倍</li>
+  <li>对模型进行剪枝以适应这种稀疏模式并不会像其他模式那样降低精度。NVIDIA 的<a href="https://arxiv.org/pdf/2104.08378">白皮书</a>显示，剪枝后重新训练能够恢复大多数视觉模型的精度。</li>
+</ol>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg3.png" alt="Illustration of 2:4 (sparse) matrix multiplication on NVIDIA GPUs" style="width:100%"></p>
+
+<p><em>2:4（稀疏）矩阵乘法在 NVIDIA GPU 上的示意图。原始<a href="https://arxiv.org/pdf/2104.08378">来源</a></em></p>
+
+<p>使用半结构化稀疏性加速推理非常简单。由于我们的权重在推理过程中是固定的，我们可以在推理之前（离线）剪枝和压缩权重，并存储压缩后的稀疏表示，而不是我们的密集张量。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg4.png" alt="flow chart" style="width:100%"></p>
+
+<p>然后，我们不是调度到密集矩阵乘法，而是调度到稀疏矩阵乘法，传递压缩后的稀疏权重而不是正常的密集权重。有关使用 2:4 稀疏性加速模型推理的更多信息，请参阅我们的<a href="https://maskerprc.github.io/tutorials/advanced/semi_structured_sparse.html?highlight=beta">教程 </a>。</p>
+
+<h2 id="extending-sparse-inference-acceleration-to-training">将稀疏推理加速扩展到训练</h2>
+
+<p>为了利用稀疏性来减少我们模型的训练时间，我们需要考虑何时计算掩码，因为一旦我们存储了压缩表示，掩码就固定了。</p>
+
+<p>将固定掩码应用于现有已训练的密集模型（也称为 <strong> 剪枝 </strong>）不会降低精度，但这需要两次训练运行——一次获得密集模型，另一次将其转换为稀疏，无法提供加速。</p>
+
+<p>相反，我们希望从头开始训练一个稀疏模型（<strong> 动态稀疏训练 </strong>），但使用固定掩码从头开始训练会导致评估分数显著下降，因为稀疏掩码将在初始化时被选择，此时模型权重基本上是随机的。</p>
+
+<p>为了在从头开始训练时保持模型的准确性，我们在运行时剪枝和压缩权重，以便在每个训练步骤中计算最佳掩码。</p>
+
+<p>从概念上讲，可以将我们的方法视为一种近似矩阵乘法技术，其中我们<code>剪枝和压缩</code>并调度到<code>稀疏 GEMM</code>，所需时间比<code>密集 GEMM</code> 调用要少。这很困难，因为本地的剪枝和压缩函数太慢，无法显示出速度提升。</p>
+
+<p>给定我们的 ViT-L 训练矩阵乘法的形状（13008x4096x1024），我们分别测量了密集和稀疏 GEMM 的运行时间为 538us 和 387us。换句话说，权重矩阵的剪枝和压缩步骤必须在 538-387=151us 内运行，才能有任何效率提升。不幸的是，cuSPARSELt 中提供的压缩内核已经花费了 380us（甚至没有考虑剪枝步骤！）。</p>
+
+<p>在最大 NVIDIA A100 内存 IO（2TB/s）的情况下，考虑到剪枝和压缩内核可能会受到内存限制，我们理论上可以在 4 微秒内（8MB / 2TB/s）剪枝和压缩我们的权重（4096x1024x2 字节=8MB）！实际上，我们能够编写一个剪枝和压缩矩阵到 2:4 稀疏格式的内核，并且它在 36 微秒内运行（比 cuSPARSELt 中的压缩内核快 10 倍），使整个 GEMM（包括稀疏化）更快。我们的内核<a href="https://github.com/pytorch/pytorch/pull/122350">可供使用在 PyTorch 中 </a>。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg5.png" alt="Our custom sparsification kernel" style="width:100%"></p>
+
+<p><em>我们定制的剪枝+压缩稀疏化内核，在线性层前向+反向中大约快 30%。在 NVIDIA A100-80GB GPU 上运行的基准测试。</em></p>
+
+<h3 id="writing-a-performant-runtime-sparsification-kernel">编写高性能的运行时稀疏化内核</h3>
+
+<p>为了实现高性能的运行时稀疏化内核，我们面临了多个挑战，以下将进行探讨。</p>
+
+<h4 id="1-handling-the-backwards-pass">1) 处理反向传播</h4>
+
+<p>对于反向传播，我们需要计算 dL/dX 和 dL/dW 以进行梯度更新和后续层的计算，这意味着我们需要分别计算 xW<sup>T</sup> 和 x<sup>T</sup>W。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg6.png" alt="Overview of runtime sparsification for training acceleration (FW + BW pass)" style="width:100%"></p>
+
+<p><em>运行时稀疏化概述以加速训练（前向和反向传播）</em></p>
+
+<p>然而，这存在问题，因为压缩表示不能转置，因为没有保证张量在两个方向上都是 2:4 稀疏的。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg7.png" alt="Both matrices are valid 2:4 matrices. However, the right one is no longer a valid 2:4 matrix once transposed because one column contains more than 2 elements" style="width:100%;display:block;max-width:500px;margin-left:auto;margin-right:auto;"></p>
+
+<p><em>两个矩阵都是有效的2:4矩阵。然而，右边的矩阵一旦转置就不再是有效的2:4矩阵，因为其中一列包含超过2个元素</em></p>
+
+<p>因此，我们剪枝一个 4x4 的瓦片，而不是 1x4 的条带。我们贪婪地保留最大的值，确保每行/每列最多只取 2 个值。虽然这种方法并不保证最优，因为我们有时只保留 7 个值而不是 8 个，但它可以有效地计算出一个行和列都是 2:4 稀疏的张量。</p>
+
+<p>然后，我们同时压缩打包的张量和打包转置的张量，存储转置张量以供反向传播。通过同时计算打包和打包转置的张量，我们避免了反向传播中的第二次内核调用。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg8.png" alt="Our kernel prunes the weight matrix in registers" style="width:100%"></p>
+
+<p><em>我们的内核在寄存器中剪枝权重矩阵，并将压缩后的值写入全局内存。它还同时剪枝 W.t，这是反向传播所需的，以最小化内存 I/O。</em></p>
+
+<p>处理反向传播时需要一些额外的转置技巧——底层硬件只支持第一个矩阵为稀疏的操作。在推理过程中进行权重稀疏化时，当我们需要计算 xW<sup>T</sup> 时，我们依靠转置属性来交换操作数的顺序。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg1.jpg" alt="Math formula" style="width:100%;display:block;max-width:300px;margin-left:auto;margin-right:auto;"></p>
+
+<p>在推理过程中，我们使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 将外转置融合到后续的逐点操作中，以避免支付性能惩罚。</p>
+
+<p>然而，在训练的反向传播过程中，我们没有后续的逐点操作可以融合。相反，我们利用 cuSPARSELt 能够指定结果矩阵的行/列布局的能力，将转置融合到矩阵乘法中。</p>
+
+<h4 id="2-kernel-tiling-for-efficient-memory-io">2) 核心分块以提高内存-IO 效率</h4>
+
+<p>为了使我们的内核尽可能高效，我们希望合并我们的读写操作，因为我们发现内存 I/O 是主要的瓶颈。这意味着在 CUDA 线程中，我们希望每次读取/写入 128 字节的块，以便多个并行读取/写入可以由 GPU 内存控制器合并成一个请求。</p>
+
+<p>因此，我们决定每个线程处理 4 个 4x4 的瓦片（即一个 8x8 的瓦片），而不是一个单独的 4x4 瓦片，因为 4x4x2=32 字节，这样我们就可以操作 8x8x2=128 字节的块。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg9.png" alt="Kernel tiling for efficient memory-IO" style="width:100%"></p>
+
+<h4 id="3-sorting-elements-in-a-4x4-tile-without-warp-divergence">3) 在 4x4 瓦片内无 warp 发散地排序元素</h4>
+
+<p>对于线程内的每个单独的 4x4 瓦片，我们计算一个掩码，指定要剪枝的元素和要保留的元素。为此，我们排序所有 16 个元素，并贪婪地保留元素，只要它们不破坏我们的 2:4 行/列约束。这仅保留了具有最大值的权重。</p>
+
+<p>关键地，我们观察到我们始终只对固定数量的元素进行排序，因此通过使用无分支的<a href="https://en.wikipedia.org/wiki/Sorting_network">排序网络 </a>，我们可以避免 warp 漏洞。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg10.png" alt="Sorting network diagram" style="width:100%"></p>
+
+<p><em>为了清晰起见，省略了转置打包张量和元数据。排序网络图来自<a href="https://en.wikipedia.org/wiki/Sorting_network">维基百科 </a>。</em></p>
+
+<p>当我们在线程块内部进行条件执行时，会发生 warp 漏洞。在 CUDA 中，同一工作组（线程块）中的工作项在硬件级别以批量的形式（warp）调度。如果我们有条件执行，使得同一批中的某些工作项运行不同的指令，那么当 warp 调度时，它们会被屏蔽，或者顺序调度。</p>
+
+<p>例如，如果我们有一些代码如 <code class="language-plaintext highlighter-rouge">if (condition) do(A) else do(B)</code> ，其中条件由所有奇数编号的工作项满足，那么这个条件语句的总运行时间是 <code class="language-plaintext highlighter-rouge">do(A) + do(B)</code>，因为我们将为所有奇数编号的工作项调度 <code class="language-plaintext highlighter-rouge">do(A)</code>，屏蔽掉偶数编号的工作项，并为所有偶数编号的工作项调度 <code class="language-plaintext highlighter-rouge">do(B)</code>，屏蔽掉奇数编号的工作项。此<a href="https://www.reddit.com/r/CUDA/comments/gkpjxe/what_is_warp_divergence/#:~:text=Warp%20divergence%20is%20a%20%22Compute,later%20processed%20using%20different%20instructions.">答案</a>提供了更多关于 warp 漏洞的信息。</p>
+
+<h4 id="4-writing-the-compressed-matrices-and-metadata">4) 编写压缩矩阵和元数据</h4>
+
+<p>一旦计算完成掩码，就必须将权重数据以压缩格式写回全局内存。这并不简单，因为数据需要保留在寄存器中，而且无法对寄存器进行索引（例如 <code class="language-plaintext highlighter-rouge">C[i++] = a</code> 阻止我们将 <code class="language-plaintext highlighter-rouge">C</code> 存储在寄存器中）。此外，我们发现 <code class="language-plaintext highlighter-rouge">nvcc</code> 使用的寄存器比我们预期的要多得多，这导致了寄存器溢出并影响了全局性能。我们将这个压缩矩阵以列主序格式写入全局内存，以提高写入效率。</p>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg11.png" alt="compressed matrix to global memory in Column-Major format" style="width:100%"></p>
+
+<p>我们还需要编写 cuSPARSELt 元数据。这种元数据布局与开源 CUTLASS 库中的布局非常相似，并且针对通过 GEMM 内核的 PTX <code class="language-plaintext highlighter-rouge">ldmatrix</code> 指令高效加载到共享内存进行了优化。</p>
+
+<p>然而，此布局并未针对高效编写进行优化：元数据张量的前 128 位包含关于行 0、8、16 和 24 的前 32 列的元数据。回想一下，每个线程处理一个 8x8 的瓦片，这意味着这些信息分布在 16 个线程上。</p>
+
+<p>我们依赖于一系列的 warp-shuffle 操作，分别用于原始和转置表示来写入元数据。幸运的是，这些数据仅占总 I/O 的不到 10%，因此我们可以承担不完全合并写入。</p>
+
+<h2 id="dinov2-sparse-training-experimental-setup-and-results">DINOv2 稀疏训练：实验设置与结果</h2>
+
+<p>在我们的实验中，ViT-L 模型使用 DINOv2 方法在 ImageNet 上训练了 125k 步。所有实验均在 4x AMD EPYC 7742 64 核 CPU 和 4x NVIDIA A100-80GB GPU 上运行。在稀疏训练期间，模型在训练的前半部分启用 2:4 稀疏性，此时只有一半的权重被启用。这个权重稀疏掩码在每一步都会动态重新计算，因为权重在优化过程中会持续更新。在剩余的步骤中，模型进行密集训练，最终产生一个没有 2:4 稀疏性的最终模型（除了 100%稀疏训练设置），然后对其进行评估。</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td>训练设置</td>
+   <td>ImageNet 1k 对数回归</td>
+  </tr>
+  <tr>
+   <td>0%稀疏（125k 密集步骤，基线）</td>
+   <td>82.8
+   </td>
+  </tr>
+  <tr>
+   <td>40% 稀疏（50k 稀疏 -&gt; 75k 稠密步数）</td>
+   <td><strong>82.9</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>60% 稀疏（75k 稀疏 -&gt; 50k 稠密步数）</td>
+   <td>82.8
+   </td>
+  </tr>
+  <tr>
+   <td>70% 稀疏（87.5k 稀疏 -&gt; 37.5k 稠密步数）</td>
+   <td>82.7
+   </td>
+  </tr>
+  <tr>
+   <td>80% 稀疏（100k 稀疏 -&gt; 25k 稠密步数）</td>
+   <td>82.7
+   </td>
+  </tr>
+  <tr>
+   <td>90% 稀疏（112.5k 稀疏 -&gt; 12.5k 密集步骤）</td>
+   <td>82.0
+   </td>
+  </tr>
+  <tr>
+   <td>100% 稀疏（125k 稀疏步骤）</td>
+   <td>82.3（2:4-稀疏模型）</td>
+  </tr>
+</tbody></table>
+
+<p><img src="/assets/images/accelerating-neural-network-training/fg12.png" alt="sparsity training diagrams" style="width:100%"></p>
+
+<p>在稀疏训练步骤中，在反向传播过程中，我们为稀疏权重获得一个密集梯度。为了梯度下降是合理的，我们应在将其用于优化器更新权重之前将这个梯度稀疏化。然而，我们没有这样做，而是使用完整的密集梯度来更新权重——我们发现这在实践中效果更好：这就是 STE（<a href="https://arxiv.org/pdf/1903.05662"> 直接估计器 </a>）策略。换句话说，我们在每一步都更新所有参数，即使是我们不使用的参数。</p>
+
+<h2 id="conclusion-and-future-work">结论与未来工作</h2>
+
+<p>在这篇博客文章中，我们展示了如何使用半结构化稀疏性来加速神经网络训练，并解释了我们面临的一些挑战。我们能够在 DINOv2 训练中实现 6%的端到端速度提升，同时精度只下降了 0.1 pp。</p>
+
+<p>该工作的扩展领域有几个：</p>
+
+<ul>
+  <li><strong>扩展到新的稀疏模式：</strong> 研究人员创建了新的稀疏模式，如 <a href="https://arxiv.org/pdf/2310.02065">V:N:M</a> 稀疏模式，它使用底层的半结构化稀疏核以提供更大的灵活性。这对于将稀疏性应用于LLMs特别有趣，因为 2:4 稀疏性会降低精度太多，但我们已经看到了更通用的 N:M 模式的<a href="https://arxiv.org/pdf/2310.06927">一些积极结果 </a>。</li>
+  <li><strong>稀疏微调的性能优化：</strong> 本文涵盖了从头开始的稀疏训练，但很多时候我们想要微调一个基础模型。在这种情况下，一个静态掩码可能足以保持精度，这将使我们能够进行额外的性能优化。</li>
+  <li><strong>更多关于剪枝策略的实验：</strong> 我们在网络的每个步骤都计算掩码，但每 n 步计算一次掩码可能会得到更好的训练精度。总的来说，确定在训练过程中使用半结构化稀疏性的最佳策略是一个开放的研究领域。</li>
+  <li><strong>与 fp8 的兼容性：</strong> 硬件也支持 fp8 半结构化稀疏性，原则上这种方法应该与 fp8 类似。在实践中，我们需要编写类似的稀疏化内核，并且可能可以将它们与张量的缩放融合。</li>
+  <li><strong>激活稀疏性：</strong> 高效的稀疏化内核还可以在训练过程中对激活进行稀疏化。由于稀疏化开销与稀疏化矩阵大小成线性增长，与权重张量相比，具有较大激活张量的设置可能比权重稀疏性更能从激活稀疏性中受益。此外，由于使用了 ReLU 或 GELU 激活函数，激活本身是稀疏的，这减少了精度下降。</li>
+</ul>
+
+<p>如果您对这些问题感兴趣，请随时在 <a href="https://github.com/pytorch/ao">torchao</a>（我们正在构建的一个用于架构优化技术如量化与稀疏性的社区）中打开问题/PR。另外，如果您对稀疏性有一般兴趣，请在 <a href="discord.gg/cudamode">CUDA-MODE</a> (#sparsity)中联系。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Scaling Recommendation Systems Training to Thousands of GPUs with 2D Sparse Parallelism | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="At Meta, recommendation systems are the cornerstone of delivering relevant and personalized ads to billions of users globally. Through technologies like PyTorch’s TorchRec, we’ve successfully developed solutions that enable model training across hundreds of GPUs. While these systems have served us well, recent research on scaling laws has revealed a compelling opportunity: we can achieve significantly better model performance by training dramatically larger neural networks.
+
+However, this insight presents us with a new challenge. Our current training infrastructure, though highly optimized for hundreds of GPUs, cannot efficiently scale to the thousands of GPUs needed to train these larger models. The leap from hundreds to thousands of GPUs introduces complex technical challenges, particularly around handling sparse operations in recommendation models. These challenges require fundamentally new approaches to distributed training, which we address with a novel parallelization strategy.
+
+To address these issues, we introduced 2D embedding parallel, a novel parallelism strategy that overcomes the sparse scaling challenges inherent in training large recommendation models across thousands of GPUs. This is available today in TorchRec through the DMPCollection API. This approach combines two complementary parallelization techniques: data parallelism for the sparse components of the model, and model parallelism for the embedding tables, leveraging TorchRec’s robust sharding capabilities. By strategically integrating these techniques, we’ve created a solution that scales to thousands of GPUs and now powers Meta’s largest recommendation model training runs.
+
+What are the sparse scaling challenges?
+
+We identified three key challenges that prevented us from naively scaling our model to thousands of GPUs:
+
+
+  Imbalancing and straggler issue: with more GPUs it’s harder to achieve balanced sharding, some ranks can have much heavier workload for embedding computations, which can slow down the entire training.
+  Communication across nodes: As training jobs utilize an increased number of GPUs, the all-to-all communication bandwidth can drop under certain network topologies which can increase communication latency significantly.
+  Memory overhead: The memory used by input features is often negligible, however, as we use thousands of GPUs, we can introduce larger input features and the memory requirements can become significant.
+
+
+With 2D embedding parallel, we can describe our new parallelism scheme like this, in this example we have 2 model replicas (Replica 1: GPU1/GPU3, Replica 2: GPU2/GPU4)
+
+
+
+Figure 1: Layout illustration of 2D Sparse Parallelism
+
+With 2D sparse parallelism we address these challenges, instead of sharding tables across all ranks, we first evenly divide all ranks into several parallel groups:
+
+
+  Within each group, we use model parallel for the embedding tables, such as column-wise/row-wise sharding. At scale, for our largest tables, we have also developed a grid sharding, which shards embedding tables on the row and column dimension.
+  Across groups, we do data parallel, such that each rank in a group has its corresponding replica rank in the other groups (replica rank means storing the same embedding table shards).
+    
+      After each group has completed its own backward pass, we all reduce the embedding table weights across the replicas to keep them synchronized.
+    
+  
+
+
+Our production solution
+
+TorchRec is our library to build the sparse part of the recommendation models in native PyTorch. With the traditional API being DistributedModelParallel which applies model parallel to the embedding tables. We introduce a new API alongside it, known as DMPCollection, which serves as the main entry point for enabling 2D parallel on TorchRec models. We designed it to be as easy of a change as applying FSDP/DDP is.
+
+To understand what DMPCollection does, we have to understand what DistributedModelParallel (DMP) does first:
+
+
+  Create embedding tables, known as EmbeddingBagCollection and EmbeddingCollections.
+  Generate a sharding plan with respect to GPU topology, embedding tables, memory available, input data, and more.
+  Wrap model with DMP and the associated sharding plan passed in.
+  DMP initializes and shards the embedding tables in accordance with the sharding plan.
+  On a train step, DMP takes an input batch, communicates it to the appropriate GPUs containing the embedding table shard of interest, looks up the value, and returns it back to the GPU that requested it. This is all done on the global process group, with some exceptions for special sharding (such as table row wise sharding)
+
+
+DistributedModelParallel was built for model parallel with many parts working under the assumption of sharding and working around the global world size. We need to change these parts in a way where we can introduce additional dimensions of parallelism without losing the optimizations and feature set of TorchRec.
+
+DMPCollection changes a few key parts to enable 2D parallel in an extensible way,
+
+
+  Generate sharding plans for the smaller sharding group once, once passed in we communicate to the appropriate ranks across the global group and remap the ranks to fit the new sharding group ranks.
+  Create two new NCCL process groups, known as sharding and replica process groups. The sharding process group is passed into sharding and train step components of TorchRec. The replica process group is used for the weight and optimizer state synchronization, the all reduce call happens over this process group.
+    
+      The sub NCCL process groups allow us to efficiently communicate only between the ranks that are relevant for a particular comm. Each rank will have two associated process groups.
+    
+  
+
+
+To the user, the change is very simple, while taking away all the complexity around applying the parallelism strategies to the model.
+
+How do we create these sharding and replication groups?
+
+These process groups are one of the keys to DMPCollection’s performant implementation. From our earlier diagram, we showed a simple 2x2 GPU setup, however, at scale, how do we assign which ranks are part of a given sharding group and what are their replica ranks across the sharding groups?
+
+Consider the following setup with 2 nodes, each with 4 GPUs. The sharding and replication groups under 2D parallel will be,
+
+
+  
+   
+
+
+  
+   Sharding Group
+   
+   Sharding Ranks
+   
+  
+  
+   0
+   
+   0, 2, 4, 6
+   
+  
+  
+   1
+   
+   1, 3, 5, 7
+   
+  
+
+
+
+   
+   
+
+
+  
+   Replication Group
+   
+   Replication Ranks
+   
+  
+  
+   0
+   
+   0, 1
+   
+  
+  
+   1
+   
+   2, 3
+   
+  
+  
+   2
+   
+   4, 5
+   
+  
+  
+   3
+   
+   6, 7
+   
+  
+
+
+
+   
+  
+
+
+We use the following formulation,
+
+
+  Divide all trainers into G sharding groups, each with L trainers
+    
+      Groups, G, is determined by G = T / L, where T is total number of trainers
+    
+  
+  For each group, G, we assigned non-contiguous trainer ranks based on the group it’s in, following,
+    
+      [i, G+i, 2G+i, …, (L - 1) G+i], where* i = 0 to G-1*
+    
+  
+  From the groups, G, we can create the replication group, which is every G continuous ranks
+    
+      (0 to G-1, G to 2* G - 1) each continuous set stores the duplicate embedding table shards.
+    
+  
+
+
+This means our sharding groups, G, are of size L, which can be known as the number of ranks to apply model parallel across. This, in turn, gives us replica groups, each of size G, which are the ranks we data parallel across.
+
+In DMPCollection, we’re able to create these process groups efficiently with the use of DeviceMesh, we create the entire GPU topology in a 2x2 matrix, with each row representing the group of sharding ranks and each column representing the corresponding replica ranks,
+
+create peer matrix
+num_groups = global_world_size // sharding_group_size
+for each group_rank in num_groups:
+	peers = [num_groups * rank + group_rank for rank in range(sharding_group_size)]
+	add peer to peer matrix
+
+initalize DeviceMesh with two dimensions (shard, replicate)
+slice DeviceMesh on shard for sharding process group
+slide DeviceMesh on replicate for replica process group
+
+
+With our DeviceMesh approach, should we want to change the topology or provide further flexibility in the future, we can easily extend our creation logic to any form of topologies and even extend for further dimensions of parallelism if needed.
+
+Performance of 2D parallel
+
+Our rank partitioning strategy optimizes communication patterns by strategically placing model replica ranks for each shard within the same compute node. This architecture provides significant performance benefits for the weight synchronization operation. After the backward pass, we perform all-reduce operations to synchronize model weights—which is an expensive process given the large parameter counts we have to communicate and sync—with our setup of placing replicas on the same node we leverage intra node’s high-bandwidth over-relying on slower inter-node bandwidth.
+
+The effect of this design choice on the other communication collectives generally improves the latencies. The improvement stems from two factors.
+
+
+  By sharding the embedding tables over a reduced number of ranks and conducting communications for the model within the smaller group, we achieve a lower all-to-all latency.
+  With the replication in 2D parallel, our embedding lookup latency on a rank reduces, we can reduce the local batch size to 1/Nth of the equivalent global batch size, where N is the number of model replicas.
+
+
+A production model trace exemplifies these two factors, here we run the 2D parallel job on 1024 GPUs, with a sharding group size of 256 GPUs.
+
+
+
+Figure 2: Comparing latencies between non 2D parallel and 2D parallel workloads
+
+There are two key levers users have to tune to maximize performance for their workloads:
+
+
+  The size of the model sharding group relative to the global world size. The global world size divided by the sharding group size represents the number of model replicas we will have.
+    
+      To maximize performance, users can look to scale up their model up to 8x, this scaling factor maintains the intra-host all reduce.
+        
+          For further scaling, the all reduce would have to happen over inter host. From our experiments, we did not see an obvious performance regression and in fact note advantages of an inter host all reduce. We can change our sharding and replica topology to inter host all reduce, which can help us introduce fault tolerance strategies should a particular host go down.
+        
+      
+    
+  
+  Frequency of all reduce synchronization, DMPCollection comes with a sync() call, which can be tuned to be called every N training steps, performing a sort of local SGD training. With scale, reducing the frequency of synchronization can bring significant gains to performance.
+
+
+Future Work
+
+Readers should note that 2D sparse parallel training differs from non-parallelized training because we synchronize the embedding table weights rather than the gradients. This approach is made possible by TorchRec’s use of FBGEMM, which provides optimized kernels under the hood. One of FBGEMM’s key optimizations is the fusion of the optimizer in the backward pass. Instead of fully materializing the embedding table gradients—which would consume significant memory—they are passed directly to the optimizer update. Attempting to materialize and synchronize these gradients would create substantial overhead, making that approach impractical.
+
+Our exploration revealed that to achieve training results comparable to the baseline, we synchronize optimizer states on a delayed schedule, with the timing dependent on the number of sharding/replica groups (ie: for Adagrad we update the momentum behind by one sync step). This approach also enables users to implement local SGD or semi-synchronized training strategies, which can achieve convergence and potentially produce better loss curves than the baseline.
+
+We thank you for reading our post! This is an exciting direction we have come across that we hope to develop further to maximize performance of recommendation systems and push the state of the art.
+
+
+
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Scaling Recommendation Systems Training to Thousands of GPUs with 2D Sparse Parallelism">
+<meta property="og:description" content="At Meta, recommendation systems are the cornerstone of delivering relevant and personalized ads to billions of users globally. Through technologies like PyTorch’s TorchRec, we’ve successfully developed solutions that enable model training across hundreds of GPUs. While these systems have served us well, recent research on scaling laws has revealed a compelling opportunity: we can achieve significantly better model performance by training dramatically larger neural networks.
+
+However, this insight presents us with a new challenge. Our current training infrastructure, though highly optimized for hundreds of GPUs, cannot efficiently scale to the thousands of GPUs needed to train these larger models. The leap from hundreds to thousands of GPUs introduces complex technical challenges, particularly around handling sparse operations in recommendation models. These challenges require fundamentally new approaches to distributed training, which we address with a novel parallelization strategy.
+
+To address these issues, we introduced 2D embedding parallel, a novel parallelism strategy that overcomes the sparse scaling challenges inherent in training large recommendation models across thousands of GPUs. This is available today in TorchRec through the DMPCollection API. This approach combines two complementary parallelization techniques: data parallelism for the sparse components of the model, and model parallelism for the embedding tables, leveraging TorchRec’s robust sharding capabilities. By strategically integrating these techniques, we’ve created a solution that scales to thousands of GPUs and now powers Meta’s largest recommendation model training runs.
+
+What are the sparse scaling challenges?
+
+We identified three key challenges that prevented us from naively scaling our model to thousands of GPUs:
+
+
+  Imbalancing and straggler issue: with more GPUs it’s harder to achieve balanced sharding, some ranks can have much heavier workload for embedding computations, which can slow down the entire training.
+  Communication across nodes: As training jobs utilize an increased number of GPUs, the all-to-all communication bandwidth can drop under certain network topologies which can increase communication latency significantly.
+  Memory overhead: The memory used by input features is often negligible, however, as we use thousands of GPUs, we can introduce larger input features and the memory requirements can become significant.
+
+
+With 2D embedding parallel, we can describe our new parallelism scheme like this, in this example we have 2 model replicas (Replica 1: GPU1/GPU3, Replica 2: GPU2/GPU4)
+
+
+
+Figure 1: Layout illustration of 2D Sparse Parallelism
+
+With 2D sparse parallelism we address these challenges, instead of sharding tables across all ranks, we first evenly divide all ranks into several parallel groups:
+
+
+  Within each group, we use model parallel for the embedding tables, such as column-wise/row-wise sharding. At scale, for our largest tables, we have also developed a grid sharding, which shards embedding tables on the row and column dimension.
+  Across groups, we do data parallel, such that each rank in a group has its corresponding replica rank in the other groups (replica rank means storing the same embedding table shards).
+    
+      After each group has completed its own backward pass, we all reduce the embedding table weights across the replicas to keep them synchronized.
+    
+  
+
+
+Our production solution
+
+TorchRec is our library to build the sparse part of the recommendation models in native PyTorch. With the traditional API being DistributedModelParallel which applies model parallel to the embedding tables. We introduce a new API alongside it, known as DMPCollection, which serves as the main entry point for enabling 2D parallel on TorchRec models. We designed it to be as easy of a change as applying FSDP/DDP is.
+
+To understand what DMPCollection does, we have to understand what DistributedModelParallel (DMP) does first:
+
+
+  Create embedding tables, known as EmbeddingBagCollection and EmbeddingCollections.
+  Generate a sharding plan with respect to GPU topology, embedding tables, memory available, input data, and more.
+  Wrap model with DMP and the associated sharding plan passed in.
+  DMP initializes and shards the embedding tables in accordance with the sharding plan.
+  On a train step, DMP takes an input batch, communicates it to the appropriate GPUs containing the embedding table shard of interest, looks up the value, and returns it back to the GPU that requested it. This is all done on the global process group, with some exceptions for special sharding (such as table row wise sharding)
+
+
+DistributedModelParallel was built for model parallel with many parts working under the assumption of sharding and working around the global world size. We need to change these parts in a way where we can introduce additional dimensions of parallelism without losing the optimizations and feature set of TorchRec.
+
+DMPCollection changes a few key parts to enable 2D parallel in an extensible way,
+
+
+  Generate sharding plans for the smaller sharding group once, once passed in we communicate to the appropriate ranks across the global group and remap the ranks to fit the new sharding group ranks.
+  Create two new NCCL process groups, known as sharding and replica process groups. The sharding process group is passed into sharding and train step components of TorchRec. The replica process group is used for the weight and optimizer state synchronization, the all reduce call happens over this process group.
+    
+      The sub NCCL process groups allow us to efficiently communicate only between the ranks that are relevant for a particular comm. Each rank will have two associated process groups.
+    
+  
+
+
+To the user, the change is very simple, while taking away all the complexity around applying the parallelism strategies to the model.
+
+How do we create these sharding and replication groups?
+
+These process groups are one of the keys to DMPCollection’s performant implementation. From our earlier diagram, we showed a simple 2x2 GPU setup, however, at scale, how do we assign which ranks are part of a given sharding group and what are their replica ranks across the sharding groups?
+
+Consider the following setup with 2 nodes, each with 4 GPUs. The sharding and replication groups under 2D parallel will be,
+
+
+  
+   
+
+
+  
+   Sharding Group
+   
+   Sharding Ranks
+   
+  
+  
+   0
+   
+   0, 2, 4, 6
+   
+  
+  
+   1
+   
+   1, 3, 5, 7
+   
+  
+
+
+
+   
+   
+
+
+  
+   Replication Group
+   
+   Replication Ranks
+   
+  
+  
+   0
+   
+   0, 1
+   
+  
+  
+   1
+   
+   2, 3
+   
+  
+  
+   2
+   
+   4, 5
+   
+  
+  
+   3
+   
+   6, 7
+   
+  
+
+
+
+   
+  
+
+
+We use the following formulation,
+
+
+  Divide all trainers into G sharding groups, each with L trainers
+    
+      Groups, G, is determined by G = T / L, where T is total number of trainers
+    
+  
+  For each group, G, we assigned non-contiguous trainer ranks based on the group it’s in, following,
+    
+      [i, G+i, 2G+i, …, (L - 1) G+i], where* i = 0 to G-1*
+    
+  
+  From the groups, G, we can create the replication group, which is every G continuous ranks
+    
+      (0 to G-1, G to 2* G - 1) each continuous set stores the duplicate embedding table shards.
+    
+  
+
+
+This means our sharding groups, G, are of size L, which can be known as the number of ranks to apply model parallel across. This, in turn, gives us replica groups, each of size G, which are the ranks we data parallel across.
+
+In DMPCollection, we’re able to create these process groups efficiently with the use of DeviceMesh, we create the entire GPU topology in a 2x2 matrix, with each row representing the group of sharding ranks and each column representing the corresponding replica ranks,
+
+create peer matrix
+num_groups = global_world_size // sharding_group_size
+for each group_rank in num_groups:
+	peers = [num_groups * rank + group_rank for rank in range(sharding_group_size)]
+	add peer to peer matrix
+
+initalize DeviceMesh with two dimensions (shard, replicate)
+slice DeviceMesh on shard for sharding process group
+slide DeviceMesh on replicate for replica process group
+
+
+With our DeviceMesh approach, should we want to change the topology or provide further flexibility in the future, we can easily extend our creation logic to any form of topologies and even extend for further dimensions of parallelism if needed.
+
+Performance of 2D parallel
+
+Our rank partitioning strategy optimizes communication patterns by strategically placing model replica ranks for each shard within the same compute node. This architecture provides significant performance benefits for the weight synchronization operation. After the backward pass, we perform all-reduce operations to synchronize model weights—which is an expensive process given the large parameter counts we have to communicate and sync—with our setup of placing replicas on the same node we leverage intra node’s high-bandwidth over-relying on slower inter-node bandwidth.
+
+The effect of this design choice on the other communication collectives generally improves the latencies. The improvement stems from two factors.
+
+
+  By sharding the embedding tables over a reduced number of ranks and conducting communications for the model within the smaller group, we achieve a lower all-to-all latency.
+  With the replication in 2D parallel, our embedding lookup latency on a rank reduces, we can reduce the local batch size to 1/Nth of the equivalent global batch size, where N is the number of model replicas.
+
+
+A production model trace exemplifies these two factors, here we run the 2D parallel job on 1024 GPUs, with a sharding group size of 256 GPUs.
+
+
+
+Figure 2: Comparing latencies between non 2D parallel and 2D parallel workloads
+
+There are two key levers users have to tune to maximize performance for their workloads:
+
+
+  The size of the model sharding group relative to the global world size. The global world size divided by the sharding group size represents the number of model replicas we will have.
+    
+      To maximize performance, users can look to scale up their model up to 8x, this scaling factor maintains the intra-host all reduce.
+        
+          For further scaling, the all reduce would have to happen over inter host. From our experiments, we did not see an obvious performance regression and in fact note advantages of an inter host all reduce. We can change our sharding and replica topology to inter host all reduce, which can help us introduce fault tolerance strategies should a particular host go down.
+        
+      
+    
+  
+  Frequency of all reduce synchronization, DMPCollection comes with a sync() call, which can be tuned to be called every N training steps, performing a sort of local SGD training. With scale, reducing the frequency of synchronization can bring significant gains to performance.
+
+
+Future Work
+
+Readers should note that 2D sparse parallel training differs from non-parallelized training because we synchronize the embedding table weights rather than the gradients. This approach is made possible by TorchRec’s use of FBGEMM, which provides optimized kernels under the hood. One of FBGEMM’s key optimizations is the fusion of the optimizer in the backward pass. Instead of fully materializing the embedding table gradients—which would consume significant memory—they are passed directly to the optimizer update. Attempting to materialize and synchronize these gradients would create substantial overhead, making that approach impractical.
+
+Our exploration revealed that to achieve training results comparable to the baseline, we synchronize optimizer states on a delayed schedule, with the timing dependent on the number of sharding/replica groups (ie: for Adagrad we update the momentum behind by one sync step). This approach also enables users to implement local SGD or semi-synchronized training strategies, which can achieve convergence and potentially produce better loss curves than the baseline.
+
+We thank you for reading our post! This is an exciting direction we have come across that we hope to develop further to maximize performance of recommendation systems and push the state of the art.
+
+
+
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Scaling Recommendation Systems Training to Thousands of GPUs with 2D Sparse Parallelism">
+<meta name="twitter:description" content="At Meta, recommendation systems are the cornerstone of delivering relevant and personalized ads to billions of users globally. Through technologies like PyTorch’s TorchRec, we’ve successfully developed solutions that enable model training across hundreds of GPUs. While these systems have served us well, recent research on scaling laws has revealed a compelling opportunity: we can achieve significantly better model performance by training dramatically larger neural networks.
+
+However, this insight presents us with a new challenge. Our current training infrastructure, though highly optimized for hundreds of GPUs, cannot efficiently scale to the thousands of GPUs needed to train these larger models. The leap from hundreds to thousands of GPUs introduces complex technical challenges, particularly around handling sparse operations in recommendation models. These challenges require fundamentally new approaches to distributed training, which we address with a novel parallelization strategy.
+
+To address these issues, we introduced 2D embedding parallel, a novel parallelism strategy that overcomes the sparse scaling challenges inherent in training large recommendation models across thousands of GPUs. This is available today in TorchRec through the DMPCollection API. This approach combines two complementary parallelization techniques: data parallelism for the sparse components of the model, and model parallelism for the embedding tables, leveraging TorchRec’s robust sharding capabilities. By strategically integrating these techniques, we’ve created a solution that scales to thousands of GPUs and now powers Meta’s largest recommendation model training runs.
+
+What are the sparse scaling challenges?
+
+We identified three key challenges that prevented us from naively scaling our model to thousands of GPUs:
+
+
+  Imbalancing and straggler issue: with more GPUs it’s harder to achieve balanced sharding, some ranks can have much heavier workload for embedding computations, which can slow down the entire training.
+  Communication across nodes: As training jobs utilize an increased number of GPUs, the all-to-all communication bandwidth can drop under certain network topologies which can increase communication latency significantly.
+  Memory overhead: The memory used by input features is often negligible, however, as we use thousands of GPUs, we can introduce larger input features and the memory requirements can become significant.
+
+
+With 2D embedding parallel, we can describe our new parallelism scheme like this, in this example we have 2 model replicas (Replica 1: GPU1/GPU3, Replica 2: GPU2/GPU4)
+
+
+
+Figure 1: Layout illustration of 2D Sparse Parallelism
+
+With 2D sparse parallelism we address these challenges, instead of sharding tables across all ranks, we first evenly divide all ranks into several parallel groups:
+
+
+  Within each group, we use model parallel for the embedding tables, such as column-wise/row-wise sharding. At scale, for our largest tables, we have also developed a grid sharding, which shards embedding tables on the row and column dimension.
+  Across groups, we do data parallel, such that each rank in a group has its corresponding replica rank in the other groups (replica rank means storing the same embedding table shards).
+    
+      After each group has completed its own backward pass, we all reduce the embedding table weights across the replicas to keep them synchronized.
+    
+  
+
+
+Our production solution
+
+TorchRec is our library to build the sparse part of the recommendation models in native PyTorch. With the traditional API being DistributedModelParallel which applies model parallel to the embedding tables. We introduce a new API alongside it, known as DMPCollection, which serves as the main entry point for enabling 2D parallel on TorchRec models. We designed it to be as easy of a change as applying FSDP/DDP is.
+
+To understand what DMPCollection does, we have to understand what DistributedModelParallel (DMP) does first:
+
+
+  Create embedding tables, known as EmbeddingBagCollection and EmbeddingCollections.
+  Generate a sharding plan with respect to GPU topology, embedding tables, memory available, input data, and more.
+  Wrap model with DMP and the associated sharding plan passed in.
+  DMP initializes and shards the embedding tables in accordance with the sharding plan.
+  On a train step, DMP takes an input batch, communicates it to the appropriate GPUs containing the embedding table shard of interest, looks up the value, and returns it back to the GPU that requested it. This is all done on the global process group, with some exceptions for special sharding (such as table row wise sharding)
+
+
+DistributedModelParallel was built for model parallel with many parts working under the assumption of sharding and working around the global world size. We need to change these parts in a way where we can introduce additional dimensions of parallelism without losing the optimizations and feature set of TorchRec.
+
+DMPCollection changes a few key parts to enable 2D parallel in an extensible way,
+
+
+  Generate sharding plans for the smaller sharding group once, once passed in we communicate to the appropriate ranks across the global group and remap the ranks to fit the new sharding group ranks.
+  Create two new NCCL process groups, known as sharding and replica process groups. The sharding process group is passed into sharding and train step components of TorchRec. The replica process group is used for the weight and optimizer state synchronization, the all reduce call happens over this process group.
+    
+      The sub NCCL process groups allow us to efficiently communicate only between the ranks that are relevant for a particular comm. Each rank will have two associated process groups.
+    
+  
+
+
+To the user, the change is very simple, while taking away all the complexity around applying the parallelism strategies to the model.
+
+How do we create these sharding and replication groups?
+
+These process groups are one of the keys to DMPCollection’s performant implementation. From our earlier diagram, we showed a simple 2x2 GPU setup, however, at scale, how do we assign which ranks are part of a given sharding group and what are their replica ranks across the sharding groups?
+
+Consider the following setup with 2 nodes, each with 4 GPUs. The sharding and replication groups under 2D parallel will be,
+
+
+  
+   
+
+
+  
+   Sharding Group
+   
+   Sharding Ranks
+   
+  
+  
+   0
+   
+   0, 2, 4, 6
+   
+  
+  
+   1
+   
+   1, 3, 5, 7
+   
+  
+
+
+
+   
+   
+
+
+  
+   Replication Group
+   
+   Replication Ranks
+   
+  
+  
+   0
+   
+   0, 1
+   
+  
+  
+   1
+   
+   2, 3
+   
+  
+  
+   2
+   
+   4, 5
+   
+  
+  
+   3
+   
+   6, 7
+   
+  
+
+
+
+   
+  
+
+
+We use the following formulation,
+
+
+  Divide all trainers into G sharding groups, each with L trainers
+    
+      Groups, G, is determined by G = T / L, where T is total number of trainers
+    
+  
+  For each group, G, we assigned non-contiguous trainer ranks based on the group it’s in, following,
+    
+      [i, G+i, 2G+i, …, (L - 1) G+i], where* i = 0 to G-1*
+    
+  
+  From the groups, G, we can create the replication group, which is every G continuous ranks
+    
+      (0 to G-1, G to 2* G - 1) each continuous set stores the duplicate embedding table shards.
+    
+  
+
+
+This means our sharding groups, G, are of size L, which can be known as the number of ranks to apply model parallel across. This, in turn, gives us replica groups, each of size G, which are the ranks we data parallel across.
+
+In DMPCollection, we’re able to create these process groups efficiently with the use of DeviceMesh, we create the entire GPU topology in a 2x2 matrix, with each row representing the group of sharding ranks and each column representing the corresponding replica ranks,
+
+create peer matrix
+num_groups = global_world_size // sharding_group_size
+for each group_rank in num_groups:
+	peers = [num_groups * rank + group_rank for rank in range(sharding_group_size)]
+	add peer to peer matrix
+
+initalize DeviceMesh with two dimensions (shard, replicate)
+slice DeviceMesh on shard for sharding process group
+slide DeviceMesh on replicate for replica process group
+
+
+With our DeviceMesh approach, should we want to change the topology or provide further flexibility in the future, we can easily extend our creation logic to any form of topologies and even extend for further dimensions of parallelism if needed.
+
+Performance of 2D parallel
+
+Our rank partitioning strategy optimizes communication patterns by strategically placing model replica ranks for each shard within the same compute node. This architecture provides significant performance benefits for the weight synchronization operation. After the backward pass, we perform all-reduce operations to synchronize model weights—which is an expensive process given the large parameter counts we have to communicate and sync—with our setup of placing replicas on the same node we leverage intra node’s high-bandwidth over-relying on slower inter-node bandwidth.
+
+The effect of this design choice on the other communication collectives generally improves the latencies. The improvement stems from two factors.
+
+
+  By sharding the embedding tables over a reduced number of ranks and conducting communications for the model within the smaller group, we achieve a lower all-to-all latency.
+  With the replication in 2D parallel, our embedding lookup latency on a rank reduces, we can reduce the local batch size to 1/Nth of the equivalent global batch size, where N is the number of model replicas.
+
+
+A production model trace exemplifies these two factors, here we run the 2D parallel job on 1024 GPUs, with a sharding group size of 256 GPUs.
+
+
+
+Figure 2: Comparing latencies between non 2D parallel and 2D parallel workloads
+
+There are two key levers users have to tune to maximize performance for their workloads:
+
+
+  The size of the model sharding group relative to the global world size. The global world size divided by the sharding group size represents the number of model replicas we will have.
+    
+      To maximize performance, users can look to scale up their model up to 8x, this scaling factor maintains the intra-host all reduce.
+        
+          For further scaling, the all reduce would have to happen over inter host. From our experiments, we did not see an obvious performance regression and in fact note advantages of an inter host all reduce. We can change our sharding and replica topology to inter host all reduce, which can help us introduce fault tolerance strategies should a particular host go down.
+        
+      
+    
+  
+  Frequency of all reduce synchronization, DMPCollection comes with a sync() call, which can be tuned to be called every N training steps, performing a sort of local SGD training. With scale, reducing the frequency of synchronization can bring significant gains to performance.
+
+
+Future Work
+
+Readers should note that 2D sparse parallel training differs from non-parallelized training because we synchronize the embedding table weights rather than the gradients. This approach is made possible by TorchRec’s use of FBGEMM, which provides optimized kernels under the hood. One of FBGEMM’s key optimizations is the fusion of the optimizer in the backward pass. Instead of fully materializing the embedding table gradients—which would consume significant memory—they are passed directly to the optimizer update. Attempting to materialize and synchronize these gradients would create substantial overhead, making that approach impractical.
+
+Our exploration revealed that to achieve training results comparable to the baseline, we synchronize optimizer states on a delayed schedule, with the timing dependent on the number of sharding/replica groups (ie: for Adagrad we update the momentum behind by one sync step). This approach also enables users to implement local SGD or semi-synchronized training strategies, which can achieve convergence and potentially produce better loss curves than the baseline.
+
+We thank you for reading our post! This is an exciting direction we have come across that we hope to develop further to maximize performance of recommendation systems and push the state of the art.
+
+
+
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容是什么</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2025年3月11日</p>
+            <h1>
+                <a class="blog-title">利用 2D 稀疏并行性将推荐系统训练扩展到数千个 GPU</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Meta 的 PyTorch 团队：杨春志、朱富、胡赞、徐亮贝、张欣、杨继岩、范德·斯泰伊·丹尼斯、周王、方金、聂佳、胡宇熙</p>
+                    <p>在 Meta，推荐系统是全球向数十亿用户提供相关和个性化广告的基石。通过像 PyTorch 的 TorchRec 这样的技术，我们已经成功开发了能够跨数百个 GPU 进行模型训练的解决方案。虽然这些系统为我们提供了良好的服务，但最近关于扩展定律的研究揭示了一个令人信服的机会：通过训练大大更大的神经网络，我们可以实现显著更好的模型性能。</p>
+
+<p>然而，这一洞察给我们带来了新的挑战。我们当前的训练基础设施，虽然针对数百个 GPU 进行了高度优化，但无法有效地扩展到训练这些更大模型所需的数千个 GPU。从数百个 GPU 到数千个 GPU 的飞跃引入了复杂的技术挑战，特别是在处理推荐模型中的稀疏操作方面。这些挑战需要全新的分布式训练方法，我们通过一种新颖的并行化策略来应对这些挑战。</p>
+
+<p>为了解决这些问题，我们引入了 2D 嵌入并行，这是一种新颖的并行策略，可以克服在数千个 GPU 上训练大型推荐模型时固有的稀疏扩展挑战。今天，您可以通过 TorchRec 的 DMPCollection API 使用这一功能。这种方法结合了两种互补的并行化技术：数据并行用于模型的稀疏组件，模型并行用于嵌入表，利用 TorchRec 强大的分片能力。通过战略性地整合这些技术，我们创建了一个可以扩展到数千个 GPU 的解决方案，现在它为 Meta 最大的推荐模型训练运行提供动力。</p>
+
+<p><strong>什么是稀疏扩展挑战？</strong></p>
+
+<p>我们确定了三个关键挑战，阻止我们将模型天真地扩展到数千个 GPU：</p>
+
+<ul>
+  <li><strong>不平衡和落后者问题：</strong> 随着 GPU 数量的增加，实现平衡分片变得更加困难，一些排名可能需要承担更重的嵌入计算工作负载，这可能会减慢整个训练过程。</li>
+  <li><strong>节点间通信：</strong> 随着训练作业使用越来越多的 GPU，在特定的网络拓扑下，全互连通信带宽可能会下降，这会显著增加通信延迟。</li>
+  <li><strong>内存开销：</strong> 输入特征使用的内存通常可以忽略不计，然而，当我们使用数千个 GPU 时，我们可以引入更大的输入特征，内存需求可能会变得显著。</li>
+</ul>
+
+<p>在 2D 嵌入并行的情况下，我们可以这样描述我们的新并行方案，在这个例子中，我们有 2 个模型副本（副本 1：GPU1/GPU3，副本 2：GPU2/GPU4）</p>
+
+<p><img src="/assets/images/scaling-recommendation-2d-sparse-parallelism/fg1.png" alt="Flow diagram" style="width:100%"></p>
+
+<p><strong><em>图 1：2D 稀疏并行布局示意图</em></strong></p>
+
+<p>通过 2D 稀疏并行处理，我们应对这些挑战，而不是将表分片到所有等级，我们首先将所有等级均匀地划分为几个并行组：</p>
+
+<ol>
+  <li>在每个组内，我们使用模型并行处理嵌入表，例如列/行分片。在规模较大的情况下，对于我们最大的表，我们还开发了网格分片，将嵌入表分片在行和列维度。</li>
+  <li>在组之间，我们进行数据并行，使得每个组中的每个等级都有其在其他组中的对应副本等级（副本等级意味着存储相同的嵌入表分片）。<ol>
+      <li>在每个组完成自己的反向传播后，我们将所有副本的嵌入表权重进行汇总，以保持它们同步。</li>
+    </ol>
+  </li>
+</ol>
+
+<h2 id="our-production-solution">我们的生产解决方案</h2>
+
+<p>TorchRec 是我们用于在原生 PyTorch 中构建推荐模型稀疏部分的库。传统的 API 是 DistributedModelParallel，它将模型并行应用于嵌入表。我们在此之外引入了一个新的 API，称为 DMPCollection，它是启用 TorchRec 模型 2D 并行的主要入口点。我们设计它，使其更改尽可能简单，就像应用 FSDP/DDP 一样。</p>
+
+<p>要理解 DMPCollection 做什么，我们首先需要了解 DistributedModelParallel (DMP) 做什么：</p>
+
+<ol>
+  <li>创建嵌入表，称为 EmbeddingBagCollection 和 EmbeddingCollections。</li>
+  <li>根据 GPU 拓扑、嵌入表、可用内存、输入数据等因素生成分片计划。</li>
+  <li>将模型包装在 DMP 中，并传递相关的分片计划。</li>
+  <li>DMP 根据分片计划初始化并分片嵌入表。</li>
+  <li>在训练步骤中，DMP 接收一个输入批次，将其传递给包含所需嵌入表分片的相关 GPU，查找值，并将其返回给请求 GPU。这都是在全局进程组中完成的，对于特殊分片（如表行分片）有一些例外。</li>
+</ol>
+
+<p>分布式模型并行是为模型并行设计的，许多部分都是在假设分片和绕过全局世界大小的情况下工作的。我们需要对这些部分进行修改，以便在不丢失 TorchRec 的优化和功能集的情况下引入额外的并行维度。</p>
+
+<p>DMPCollection 通过改变几个关键部分，以可扩展的方式实现了 2D 并行。</p>
+
+<ul>
+  <li>一次性生成较小分片组的分片计划，一旦传入，我们就向全局组中的适当排名进行通信，并将排名重新映射以适应新的分片组排名。</li>
+  <li>创建两个新的 NCCL 进程组，称为分片和副本进程组。分片进程组被传递到 TorchRec 的分片和训练步骤组件中。副本进程组用于权重和优化器状态的同步，所有 reduce 调用都通过此进程组进行。<ul>
+      <li>子 NCCL 进程组允许我们高效地仅在与特定通信相关的 rank 之间进行通信。每个 rank 将有两个相关的进程组。</li>
+    </ul>
+  </li>
+</ul>
+
+<p>对于用户来说，这种变化非常简单，同时去除了将并行策略应用于模型的所有复杂性。</p>
+
+<h2 id="how-do-we-create-these-sharding-and-replication-groups">我们如何创建这些分片和复制组？</h2>
+
+<p>这些进程组是 DMPCollection 高性能实现的关键之一。从我们之前的图中，我们展示了简单的 2x2 GPU 配置，然而，在规模上，我们如何分配哪些 rank 属于给定的分片组以及它们在分片组中的副本 rank？</p>
+
+<p>考虑以下配置，有 2 个节点，每个节点有 4 个 GPU。在 2D 并行下的分片和复制组将分别是，</p>
+
+<table>
+  <tbody><tr>
+   <td>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td>分片组</td>
+   <td>分片秩</td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0, 2, 4, 6
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>1, 3, 5, 7
+   </td>
+  </tr>
+</tbody></table>
+
+
+   </td>
+   <td>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td>复制组</td>
+   <td>复制等级</td>
+  </tr>
+  <tr>
+   <td>0
+   </td>
+   <td>0, 1
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>2, 3
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>4, 5
+   </td>
+  </tr>
+  <tr>
+   <td>3
+   </td>
+   <td>6, 7
+   </td>
+  </tr>
+</tbody></table>
+
+
+   </td>
+  </tr>
+</tbody></table>
+
+<p>我们使用以下公式，</p>
+
+<ol>
+  <li>将所有训练师分为 G 个分片组，每个组有 L 个训练师<ol>
+      <li>组数 G 由 G = T / L 确定，其中 T 是训练师总数</li>
+    </ol>
+  </li>
+  <li>对于每个组 G，我们根据其所属的组分配了非连续的训练器排名，遵循以下规则，<ol>
+      <li>[i, G+i, 2G+i, …, (L - 1) G+i]，其中* i = 0 到 G-1*</li>
+    </ol>
+  </li>
+  <li>从组 G 中，我们可以创建复制组，即每个 G 个连续的排名<ol>
+      <li>（0 到 G-1，G 到 2* G - 1）每个连续集合存储副本嵌入表碎片。</li>
+    </ol>
+  </li>
+</ol>
+
+<p>这意味着我们的分片组 G 的大小为 L，这可以称为应用模型并行时的排名数量。这反过来又给我们提供了副本组，每个大小为 G，这是我们数据并行的排名。</p>
+
+<p>在 DMPCollection 中，我们可以通过使用 DeviceMesh 高效地创建这些进程组，我们创建整个 GPU 拓扑为一个 2x2 矩阵，其中每一行代表分片排名的组，每一列代表相应的副本排名。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>create peer matrix
+num_groups = global_world_size // sharding_group_size
+for each group_rank in num_groups:
+	peers = [num_groups * rank + group_rank for rank in range(sharding_group_size)]
+	add peer to peer matrix
+
+initalize DeviceMesh with two dimensions (shard, replicate)
+slice DeviceMesh on shard for sharding process group
+slide DeviceMesh on replicate for replica process group
+</code></pre></div></div>
+
+<p>使用我们的 DeviceMesh 方法，如果我们想要在未来更改拓扑或提供更多的灵活性，我们可以轻松地将我们的创建逻辑扩展到任何形式的拓扑，甚至可以根据需要扩展到更多并行维度的进一步扩展。</p>
+
+<h2 id="performance-of-2d-parallel">2D 并行的性能</h2>
+
+<p>我们的排名分区策略通过在同一个计算节点内战略性地放置每个分片的数据副本，优化了通信模式。这种架构为权重同步操作提供了显著的性能优势。在反向传播之后，我们执行全局归约操作以同步模型权重——考虑到我们必须通信和同步的大量参数数量，这是一个昂贵的流程——而我们的设置是将副本放置在同一节点上，我们利用了节点内的高带宽，而不是依赖于较慢的节点间带宽。</p>
+
+<p>这种设计选择对其他通信集体的影响通常可以降低延迟。这种改进源于两个因素。</p>
+
+<ol>
+  <li>通过将嵌入表分片到较少的排名上，并在较小的组内进行模型通信，我们实现了更低的点到点延迟。</li>
+  <li>在 2D 并行复制中，我们的嵌入查找延迟在排名上减少，我们可以将本地批次大小减少到等效全局批次大小的 1/N，其中 N 是模型副本的数量。</li>
+</ol>
+
+<p>生产模型追踪示例说明了这两个因素，在这里我们在 1024 个 GPU 上运行 2D 并行作业，分片组大小为 256 个 GPU。</p>
+
+<p><img src="/assets/images/scaling-recommendation-2d-sparse-parallelism/fg2.png" alt="State diagram" style="width:100%"></p>
+
+<p><strong><em>图 2：比较非 2D 并行和 2D 并行工作负载的延迟</em></strong></p>
+
+<p>用户要调整的两个关键杠杆以最大化其工作负载的性能：</p>
+
+<ol>
+  <li>模型分片组的大小相对于全局世界大小。全局世界大小除以分片组大小表示我们将拥有的模型副本数量。<ol>
+      <li>为了最大化性能，用户可以将模型扩展至 8 倍，这个扩展因子可以保持主机内所有 reduce 操作。<ol>
+          <li>对于进一步的扩展，所有 reduce 操作需要在主机间进行。根据我们的实验，我们没有看到明显的性能下降，实际上还看到了主机间 all reduce 的优势。我们可以更改我们的分片和副本拓扑结构以实现主机间 all reduce，这有助于我们在特定主机出现故障时引入容错策略。</li>
+        </ol>
+      </li>
+    </ol>
+  </li>
+  <li>all reduce 同步的频率，DMPCollection 提供了 sync()调用，可以调整为其每 N 个训练步骤调用一次，执行一种局部 SGD 训练。随着规模的增加，减少同步频率可以带来显著的性能提升。</li>
+</ol>
+
+<h2 id="future-work">未来工作</h2>
+
+<p>读者请注意，2D 稀疏并行训练与非并行训练不同，因为我们同步的是嵌入表权重而不是梯度。这种做法得益于 TorchRec 对 FBGEMM 的使用，它底层提供了优化的内核。FBGEMM 的关键优化之一是在反向传播中融合优化器。我们不是完全实现嵌入表梯度——这会消耗大量内存——而是直接将它们传递给优化器更新。尝试实现和同步这些梯度将产生大量开销，使得这种方法不切实际。</p>
+
+<p>我们的探索发现，为了达到与基线相当的训练结果，我们按延迟计划同步优化器状态，时间取决于分片/副本组的数量（例如：对于 Adagrad，我们通过一个同步步骤更新其动量）。这种方法还允许用户实现本地 SGD 或半同步训练策略，这些策略可以实现收敛，并可能产生比基线更好的损失曲线。</p>
+
+<p>感谢您阅读我们的帖子！这是我们遇到的一个令人兴奋的方向，我们希望进一步发展以最大化推荐系统的性能并推动技术前沿。</p>
+
+<style>
+@media screen and (min-width: 768px) {
+    article.pytorch-article ul, article.pytorch-article ol {
+        padding-left: 3.5rem;
+    }
+}
+ol {
+  list-style-type: decimal; /* 1, 2, 3 */
+}
+
+ol ol {
+  list-style-type: lower-alpha; /* a, b, c */
+}
+
+ol ol ol {
+  list-style-type: lower-roman; /* i, ii, iii */
+}
+
+
+</style>
+
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

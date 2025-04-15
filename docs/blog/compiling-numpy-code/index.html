@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Compiling NumPy code into C++ or CUDA via torch.compile | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Quansight engineers have implemented support for tracing through NumPy code via 
+torch.compile in PyTorch 2.1. This feature leverages PyTorch’s compiler to 
+generate efficient fused vectorized code without having to modify your original 
+NumPy code. Even more, it also allows for executing NumPy code on CUDA 
+just by running it through torch.compile under torch.device(" cuda")!="" in="" this="" post,="" we="" go="" over="" how="" to="" use="" feature="" and="" give="" a="" few="" tips="" tricks="" make="" the="" most="" out="" of="" it.="" compiling="" numpy="" code="" into="" parallel="" c++="" take="" as="" our="" running="" example="" one="" step="" k-means="" algorithm.="" piece="" is="" borrowed="" from="" book="" import="" np="" def="" kmeans(x,="" means):="" return="" np.argmin(np.linalg.norm(x="" -="" means[:,="" none],="" axis="2)," create="" synthetic="" dataset="" with="" 20m="" random="" 2-d="" points.="" can="" see="" that,="" given="" that="" means="" are="" chosen="" appropriately,="" function="" returns="" correct="" cluster="" for="" all="" them="" npts="10_000_000" x="np.repeat([[5," 5],="" [10,="" 10]],="" [npts,="" npts],="" +="" np.random.randn(*x.shape)="" #="" 2="" distinct="" "blobs"="" 10]])="" np_pred="kmeans(X," means)="" benchmarking="" gives="" us="" baseline="" 1.26s="" on="" an="" amd="" 3970x="" cpu.="" now="" easy="" wrapping="" it="" torch.compile="" executing="" inputs="" torch="" compiled_fn="torch.compile(kmeans)" compiled_pred="compiled_fn(X," assert="" np.allclose(np_pred,="" compiled_pred)="" compiled="" yields="" 9x="" speed-up="" when="" 1="" core.="" even="" better,="" opposed="" numpy,="" generated="" does="" advantage="" cores="" processor.="" such,="" run="" 32="" cores,="" get="" 57x="" speed-up.="" note="" pytorch="" always="" uses="" available="" unless="" explicitly="" restricted,="" so="" default="" behavior="" you="" using="" torch.compile.="" may="" inspect="" by="" script="" environment="" variable="" torch_logs="output_code." doing="" so,="" was="" able="" compile="" broadcasting="" two="" reductions="" just="" for-loop,="" parallelize="" openmp="" extern="" "c"="" void="" kernel(const="" double*="" in_ptr0,="" const="" long*="" in_ptr1,="" out_ptr0)="" {="" #pragma="" omp="" num_threads(32)="" for(long="" i0="0L;" i0&lt;20000000l;="" i0+="1L)" auto="" tmp0="in_ptr0[2L*i0];" tmp1="in_ptr1[0L];" tmp5="in_ptr0[1L" (2l*i0)];="" tmp6="in_ptr1[1L];" rest="" kernel="" omitted="" brevity="" cuda="" runs="" simple="" setting="" device="" be="" torch.device("cuda"):="" cuda_pred="compiled_fn(X," cuda_pred)="" inspecting="" via="" rather="" than="" generating="" directly,="" generates="" readable="" triton="" triton_(in_ptr0,="" out_ptr0,="" xblock="" :="" tl.constexpr):="" xnumel="20000000" xoffset="tl.program_id(0)" *="" xindex="xoffset" tl.arange(0,="" xblock)[:]="" xmask="xindex" &lt;="" x0="xindex" (2*x0),="" xmask)="" (0))="" small="" snippet="" rtx="" 2060="" 8x="" original="" code.="" something,="" but="" not="" particularly="" impressive,="" speed-ups="" have="" seen="" let’s="" look="" squeeze="" gpu="" couple="" minor="" changes.="" float64="" vs="" float32.="" many="" gpus,="" particular="" consumer-grade="" ones,="" sluggish="" operations="" float64.="" reason,="" changing="" data="" generation="" float32,="" gets="" bit="" faster,="" about="" 9%,="" 40%="" yielding="" 11x="" plain="" torch.compile,="" default,="" respects="" semantics,="" np.float64="" its="" dtype="" creation="" ops.="" discussed,="" hinder="" performance,="" possible="" change="" torch._dynamo="" config="" config.numpy_default_float="float32" cpu="" &lt;&gt;="" copies.="" good,="" close="" numbers.="" caused="" transformation="" behind="" scenes.="" above="" takes="" arrays="" arrays.="" these="" cpu,="" computations="" performed="" gpu.="" every="" time="" called,="" has="" copy="" gpu,="" then="" result="" back="" preserve="" semantics.="" there="" no="" native="" solution="" issue="" notion="" device.="" being="" said,="" work="" around="" creating="" wrapper="" accepts="" tensors="" tensors.="" @torch.compile="" tensor_fn(x,="" x,="" means.numpy()="" ret="kmeans(X," torch.from_numpy(ret)="" cuda_fn(x,="" memory="" memory,="" itself="" written="" numpy!="" numpy()="" from_numpy()="" calls="" hints,="" optimizes="" away,="" internally="" simply="" works="" without="" moving="" at="" all.="" keep="" perform="" 200x="" initial="" implementation="" float32="" mixing="" pytorch.="" example,="" had="" write="" adaptor="" convert="" ndarrays="" programs="" mix="" converting="" tensor="" ndarray="" often="" implemented="" x.detach().cpu().numpy(),="" or="" x.numpy(force="True)." since="" under="" cuda,="" implement="" conversion="" pattern="" call="" x.numpy(),="" did="" above.="" resulting="" device("cuda")="" will="" generate="" efficient="" copying="" eager="" mode="" would="" need="" rollback="" further="" general="" advice.="" shown="" already="" quite="" efficient,="" true="" short.="" dealing="" larger="" programs,="" tweak="" parts="" more="" efficient.="" good="" place="" start="" multiple="" tutorials="" faqs="" showcases="" number="" ways="" tracing="" process,="" identify="" problematic="" cause="" slowdowns.="" advice="" if="" similar="" pytorch,="" used="" very="" differently.="" common="" do="" else="" depending="" values="" within="" array,="" in-place,="" perhaps="" boolean="" masks.="" constructions,="" while="" supported="" hamper="" performance.="" changes="" like="" writing="" branchless="" way="" avoid="" graph="" breaks,="" avoiding="" in-place="" ops="" long="" way.="" fast="" code,="" best="" loops,="" sometimes="" they="" unavoidable.="" through="" loop,="" try="" fully="" unroll="" desirable,="" possible,="" dynamic="" stopping="" condition,="" loop.="" cases,="" body="" iterations="" (loop="" unrolling).="" debugging="" tricky="" compiler="" involved.="" figure="" whether="" error="" hitting="" error,="" program,="" execute="" your="" program="" replacing="" torch._numpy="" np.="" should="" purposes="" replacement="" api,="" much="" slower="" and,="" private="" notice.="" also="" faq="" other="" tricks.="" differences="" between="" scalars.="" scalars="" almost="" any="" case="" where="" 0-d="" (e.g.="" np.sum).="" treated="" fine="" cases.="" only="" their="" diverges="" implicitly="" python="" &gt;&gt;&gt;="" np.asarray(2)="" [1,="" 2,="" 3]="" array="" array-like="" array([2,="" 4,="" 6])="" u="np.int32(2)" scalar="" decays="" int="" 3,="" 1,="" torch.compile(lambda:="" 3])()="" acts="" ?!?!="" first="" lines,="" treats="" array.="" recover="" casting="" explicit="" int(u)="" type="" promotion="" versioning.="" numpy’s="" rules="" be,="" times,="" surprising="" np.zeros(1,="" 127="" array([127],="" 128="" array([128],="" 2.0="" follow="" others="" closer="" those="" relevant="" technical="" document="" nep="" 50.="" went="" ahead="" 50="" about-to-be-deprecated="" rules.="" general,="" follows="" pre-release.="" beyond="" numpy:="" scipy="" scikit-learn="" effort="" making="" understand="" quansight="" engineers="" designed="" proposed="" support="" scipy.="" received="" enthusiastically="" maintainers="" libraries,="" backend="" yield="" considerable="" speed-ups.="" both="" projects="" merged="" across="" apis="" submodules.="" sets="" stepping="" stone="" move="" towards="" future="" libraries="" ecosystem.="" more,="" enable="" gpus="" what="" been="" discussed="" post.="" want="" learn="" effort,="" it,="" help="" forward,="" blogpost.="" conclusion="" committed="" inception="" framework="" compatible="" enabling="" establishing="" tools="" necessary="" same="" prominent="" steps="" direction.="" meta="" continue="" working="" hand="" hand,="" improving="" compatibility="" quansight,="" thank="" mengwei,="" voz,="" ed="" invaluable="" integrating="" funding="" project="" well="" previous="" led="" supporting="" giant="" leaps="" consolidating="" choice="" open="" source="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Compiling NumPy code into C++ or CUDA via torch.compile">
+<meta property="og:description" content="Quansight engineers have implemented support for tracing through NumPy code via 
+torch.compile in PyTorch 2.1. This feature leverages PyTorch’s compiler to 
+generate efficient fused vectorized code without having to modify your original 
+NumPy code. Even more, it also allows for executing NumPy code on CUDA 
+just by running it through torch.compile under torch.device(" cuda")!="" in="" this="" post,="" we="" go="" over="" how="" to="" use="" feature="" and="" give="" a="" few="" tips="" tricks="" make="" the="" most="" out="" of="" it.="" compiling="" numpy="" code="" into="" parallel="" c++="" take="" as="" our="" running="" example="" one="" step="" k-means="" algorithm.="" piece="" is="" borrowed="" from="" book="" import="" np="" def="" kmeans(x,="" means):="" return="" np.argmin(np.linalg.norm(x="" -="" means[:,="" none],="" axis="2)," create="" synthetic="" dataset="" with="" 20m="" random="" 2-d="" points.="" can="" see="" that,="" given="" that="" means="" are="" chosen="" appropriately,="" function="" returns="" correct="" cluster="" for="" all="" them="" npts="10_000_000" x="np.repeat([[5," 5],="" [10,="" 10]],="" [npts,="" npts],="" +="" np.random.randn(*x.shape)="" #="" 2="" distinct="" "blobs"="" 10]])="" np_pred="kmeans(X," means)="" benchmarking="" gives="" us="" baseline="" 1.26s="" on="" an="" amd="" 3970x="" cpu.="" now="" easy="" wrapping="" it="" torch.compile="" executing="" inputs="" torch="" compiled_fn="torch.compile(kmeans)" compiled_pred="compiled_fn(X," assert="" np.allclose(np_pred,="" compiled_pred)="" compiled="" yields="" 9x="" speed-up="" when="" 1="" core.="" even="" better,="" opposed="" numpy,="" generated="" does="" advantage="" cores="" processor.="" such,="" run="" 32="" cores,="" get="" 57x="" speed-up.="" note="" pytorch="" always="" uses="" available="" unless="" explicitly="" restricted,="" so="" default="" behavior="" you="" using="" torch.compile.="" may="" inspect="" by="" script="" environment="" variable="" torch_logs="output_code." doing="" so,="" was="" able="" compile="" broadcasting="" two="" reductions="" just="" for-loop,="" parallelize="" openmp="" extern="" "c"="" void="" kernel(const="" double*="" in_ptr0,="" const="" long*="" in_ptr1,="" out_ptr0)="" {="" #pragma="" omp="" num_threads(32)="" for(long="" i0="0L;" i0&lt;20000000l;="" i0+="1L)" auto="" tmp0="in_ptr0[2L*i0];" tmp1="in_ptr1[0L];" tmp5="in_ptr0[1L" (2l*i0)];="" tmp6="in_ptr1[1L];" rest="" kernel="" omitted="" brevity="" cuda="" runs="" simple="" setting="" device="" be="" torch.device("cuda"):="" cuda_pred="compiled_fn(X," cuda_pred)="" inspecting="" via="" rather="" than="" generating="" directly,="" generates="" readable="" triton="" triton_(in_ptr0,="" out_ptr0,="" xblock="" :="" tl.constexpr):="" xnumel="20000000" xoffset="tl.program_id(0)" *="" xindex="xoffset" tl.arange(0,="" xblock)[:]="" xmask="xindex" &lt;="" x0="xindex" (2*x0),="" xmask)="" (0))="" small="" snippet="" rtx="" 2060="" 8x="" original="" code.="" something,="" but="" not="" particularly="" impressive,="" speed-ups="" have="" seen="" let’s="" look="" squeeze="" gpu="" couple="" minor="" changes.="" float64="" vs="" float32.="" many="" gpus,="" particular="" consumer-grade="" ones,="" sluggish="" operations="" float64.="" reason,="" changing="" data="" generation="" float32,="" gets="" bit="" faster,="" about="" 9%,="" 40%="" yielding="" 11x="" plain="" torch.compile,="" default,="" respects="" semantics,="" np.float64="" its="" dtype="" creation="" ops.="" discussed,="" hinder="" performance,="" possible="" change="" torch._dynamo="" config="" config.numpy_default_float="float32" cpu="" &lt;&gt;="" copies.="" good,="" close="" numbers.="" caused="" transformation="" behind="" scenes.="" above="" takes="" arrays="" arrays.="" these="" cpu,="" computations="" performed="" gpu.="" every="" time="" called,="" has="" copy="" gpu,="" then="" result="" back="" preserve="" semantics.="" there="" no="" native="" solution="" issue="" notion="" device.="" being="" said,="" work="" around="" creating="" wrapper="" accepts="" tensors="" tensors.="" @torch.compile="" tensor_fn(x,="" x,="" means.numpy()="" ret="kmeans(X," torch.from_numpy(ret)="" cuda_fn(x,="" memory="" memory,="" itself="" written="" numpy!="" numpy()="" from_numpy()="" calls="" hints,="" optimizes="" away,="" internally="" simply="" works="" without="" moving="" at="" all.="" keep="" perform="" 200x="" initial="" implementation="" float32="" mixing="" pytorch.="" example,="" had="" write="" adaptor="" convert="" ndarrays="" programs="" mix="" converting="" tensor="" ndarray="" often="" implemented="" x.detach().cpu().numpy(),="" or="" x.numpy(force="True)." since="" under="" cuda,="" implement="" conversion="" pattern="" call="" x.numpy(),="" did="" above.="" resulting="" device("cuda")="" will="" generate="" efficient="" copying="" eager="" mode="" would="" need="" rollback="" further="" general="" advice.="" shown="" already="" quite="" efficient,="" true="" short.="" dealing="" larger="" programs,="" tweak="" parts="" more="" efficient.="" good="" place="" start="" multiple="" tutorials="" faqs="" showcases="" number="" ways="" tracing="" process,="" identify="" problematic="" cause="" slowdowns.="" advice="" if="" similar="" pytorch,="" used="" very="" differently.="" common="" do="" else="" depending="" values="" within="" array,="" in-place,="" perhaps="" boolean="" masks.="" constructions,="" while="" supported="" hamper="" performance.="" changes="" like="" writing="" branchless="" way="" avoid="" graph="" breaks,="" avoiding="" in-place="" ops="" long="" way.="" fast="" code,="" best="" loops,="" sometimes="" they="" unavoidable.="" through="" loop,="" try="" fully="" unroll="" desirable,="" possible,="" dynamic="" stopping="" condition,="" loop.="" cases,="" body="" iterations="" (loop="" unrolling).="" debugging="" tricky="" compiler="" involved.="" figure="" whether="" error="" hitting="" error,="" program,="" execute="" your="" program="" replacing="" torch._numpy="" np.="" should="" purposes="" replacement="" api,="" much="" slower="" and,="" private="" notice.="" also="" faq="" other="" tricks.="" differences="" between="" scalars.="" scalars="" almost="" any="" case="" where="" 0-d="" (e.g.="" np.sum).="" treated="" fine="" cases.="" only="" their="" diverges="" implicitly="" python="" &gt;&gt;&gt;="" np.asarray(2)="" [1,="" 2,="" 3]="" array="" array-like="" array([2,="" 4,="" 6])="" u="np.int32(2)" scalar="" decays="" int="" 3,="" 1,="" torch.compile(lambda:="" 3])()="" acts="" ?!?!="" first="" lines,="" treats="" array.="" recover="" casting="" explicit="" int(u)="" type="" promotion="" versioning.="" numpy’s="" rules="" be,="" times,="" surprising="" np.zeros(1,="" 127="" array([127],="" 128="" array([128],="" 2.0="" follow="" others="" closer="" those="" relevant="" technical="" document="" nep="" 50.="" went="" ahead="" 50="" about-to-be-deprecated="" rules.="" general,="" follows="" pre-release.="" beyond="" numpy:="" scipy="" scikit-learn="" effort="" making="" understand="" quansight="" engineers="" designed="" proposed="" support="" scipy.="" received="" enthusiastically="" maintainers="" libraries,="" backend="" yield="" considerable="" speed-ups.="" both="" projects="" merged="" across="" apis="" submodules.="" sets="" stepping="" stone="" move="" towards="" future="" libraries="" ecosystem.="" more,="" enable="" gpus="" what="" been="" discussed="" post.="" want="" learn="" effort,="" it,="" help="" forward,="" blogpost.="" conclusion="" committed="" inception="" framework="" compatible="" enabling="" establishing="" tools="" necessary="" same="" prominent="" steps="" direction.="" meta="" continue="" working="" hand="" hand,="" improving="" compatibility="" quansight,="" thank="" mengwei,="" voz,="" ed="" invaluable="" integrating="" funding="" project="" well="" previous="" led="" supporting="" giant="" leaps="" consolidating="" choice="" open="" source="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Compiling NumPy code into C++ or CUDA via torch.compile">
+<meta name="twitter:description" content="Quansight engineers have implemented support for tracing through NumPy code via 
+torch.compile in PyTorch 2.1. This feature leverages PyTorch’s compiler to 
+generate efficient fused vectorized code without having to modify your original 
+NumPy code. Even more, it also allows for executing NumPy code on CUDA 
+just by running it through torch.compile under torch.device(" cuda")!="" in="" this="" post,="" we="" go="" over="" how="" to="" use="" feature="" and="" give="" a="" few="" tips="" tricks="" make="" the="" most="" out="" of="" it.="" compiling="" numpy="" code="" into="" parallel="" c++="" take="" as="" our="" running="" example="" one="" step="" k-means="" algorithm.="" piece="" is="" borrowed="" from="" book="" import="" np="" def="" kmeans(x,="" means):="" return="" np.argmin(np.linalg.norm(x="" -="" means[:,="" none],="" axis="2)," create="" synthetic="" dataset="" with="" 20m="" random="" 2-d="" points.="" can="" see="" that,="" given="" that="" means="" are="" chosen="" appropriately,="" function="" returns="" correct="" cluster="" for="" all="" them="" npts="10_000_000" x="np.repeat([[5," 5],="" [10,="" 10]],="" [npts,="" npts],="" +="" np.random.randn(*x.shape)="" #="" 2="" distinct="" "blobs"="" 10]])="" np_pred="kmeans(X," means)="" benchmarking="" gives="" us="" baseline="" 1.26s="" on="" an="" amd="" 3970x="" cpu.="" now="" easy="" wrapping="" it="" torch.compile="" executing="" inputs="" torch="" compiled_fn="torch.compile(kmeans)" compiled_pred="compiled_fn(X," assert="" np.allclose(np_pred,="" compiled_pred)="" compiled="" yields="" 9x="" speed-up="" when="" 1="" core.="" even="" better,="" opposed="" numpy,="" generated="" does="" advantage="" cores="" processor.="" such,="" run="" 32="" cores,="" get="" 57x="" speed-up.="" note="" pytorch="" always="" uses="" available="" unless="" explicitly="" restricted,="" so="" default="" behavior="" you="" using="" torch.compile.="" may="" inspect="" by="" script="" environment="" variable="" torch_logs="output_code." doing="" so,="" was="" able="" compile="" broadcasting="" two="" reductions="" just="" for-loop,="" parallelize="" openmp="" extern="" "c"="" void="" kernel(const="" double*="" in_ptr0,="" const="" long*="" in_ptr1,="" out_ptr0)="" {="" #pragma="" omp="" num_threads(32)="" for(long="" i0="0L;" i0&lt;20000000l;="" i0+="1L)" auto="" tmp0="in_ptr0[2L*i0];" tmp1="in_ptr1[0L];" tmp5="in_ptr0[1L" (2l*i0)];="" tmp6="in_ptr1[1L];" rest="" kernel="" omitted="" brevity="" cuda="" runs="" simple="" setting="" device="" be="" torch.device("cuda"):="" cuda_pred="compiled_fn(X," cuda_pred)="" inspecting="" via="" rather="" than="" generating="" directly,="" generates="" readable="" triton="" triton_(in_ptr0,="" out_ptr0,="" xblock="" :="" tl.constexpr):="" xnumel="20000000" xoffset="tl.program_id(0)" *="" xindex="xoffset" tl.arange(0,="" xblock)[:]="" xmask="xindex" &lt;="" x0="xindex" (2*x0),="" xmask)="" (0))="" small="" snippet="" rtx="" 2060="" 8x="" original="" code.="" something,="" but="" not="" particularly="" impressive,="" speed-ups="" have="" seen="" let’s="" look="" squeeze="" gpu="" couple="" minor="" changes.="" float64="" vs="" float32.="" many="" gpus,="" particular="" consumer-grade="" ones,="" sluggish="" operations="" float64.="" reason,="" changing="" data="" generation="" float32,="" gets="" bit="" faster,="" about="" 9%,="" 40%="" yielding="" 11x="" plain="" torch.compile,="" default,="" respects="" semantics,="" np.float64="" its="" dtype="" creation="" ops.="" discussed,="" hinder="" performance,="" possible="" change="" torch._dynamo="" config="" config.numpy_default_float="float32" cpu="" &lt;&gt;="" copies.="" good,="" close="" numbers.="" caused="" transformation="" behind="" scenes.="" above="" takes="" arrays="" arrays.="" these="" cpu,="" computations="" performed="" gpu.="" every="" time="" called,="" has="" copy="" gpu,="" then="" result="" back="" preserve="" semantics.="" there="" no="" native="" solution="" issue="" notion="" device.="" being="" said,="" work="" around="" creating="" wrapper="" accepts="" tensors="" tensors.="" @torch.compile="" tensor_fn(x,="" x,="" means.numpy()="" ret="kmeans(X," torch.from_numpy(ret)="" cuda_fn(x,="" memory="" memory,="" itself="" written="" numpy!="" numpy()="" from_numpy()="" calls="" hints,="" optimizes="" away,="" internally="" simply="" works="" without="" moving="" at="" all.="" keep="" perform="" 200x="" initial="" implementation="" float32="" mixing="" pytorch.="" example,="" had="" write="" adaptor="" convert="" ndarrays="" programs="" mix="" converting="" tensor="" ndarray="" often="" implemented="" x.detach().cpu().numpy(),="" or="" x.numpy(force="True)." since="" under="" cuda,="" implement="" conversion="" pattern="" call="" x.numpy(),="" did="" above.="" resulting="" device("cuda")="" will="" generate="" efficient="" copying="" eager="" mode="" would="" need="" rollback="" further="" general="" advice.="" shown="" already="" quite="" efficient,="" true="" short.="" dealing="" larger="" programs,="" tweak="" parts="" more="" efficient.="" good="" place="" start="" multiple="" tutorials="" faqs="" showcases="" number="" ways="" tracing="" process,="" identify="" problematic="" cause="" slowdowns.="" advice="" if="" similar="" pytorch,="" used="" very="" differently.="" common="" do="" else="" depending="" values="" within="" array,="" in-place,="" perhaps="" boolean="" masks.="" constructions,="" while="" supported="" hamper="" performance.="" changes="" like="" writing="" branchless="" way="" avoid="" graph="" breaks,="" avoiding="" in-place="" ops="" long="" way.="" fast="" code,="" best="" loops,="" sometimes="" they="" unavoidable.="" through="" loop,="" try="" fully="" unroll="" desirable,="" possible,="" dynamic="" stopping="" condition,="" loop.="" cases,="" body="" iterations="" (loop="" unrolling).="" debugging="" tricky="" compiler="" involved.="" figure="" whether="" error="" hitting="" error,="" program,="" execute="" your="" program="" replacing="" torch._numpy="" np.="" should="" purposes="" replacement="" api,="" much="" slower="" and,="" private="" notice.="" also="" faq="" other="" tricks.="" differences="" between="" scalars.="" scalars="" almost="" any="" case="" where="" 0-d="" (e.g.="" np.sum).="" treated="" fine="" cases.="" only="" their="" diverges="" implicitly="" python="" &gt;&gt;&gt;="" np.asarray(2)="" [1,="" 2,="" 3]="" array="" array-like="" array([2,="" 4,="" 6])="" u="np.int32(2)" scalar="" decays="" int="" 3,="" 1,="" torch.compile(lambda:="" 3])()="" acts="" ?!?!="" first="" lines,="" treats="" array.="" recover="" casting="" explicit="" int(u)="" type="" promotion="" versioning.="" numpy’s="" rules="" be,="" times,="" surprising="" np.zeros(1,="" 127="" array([127],="" 128="" array([128],="" 2.0="" follow="" others="" closer="" those="" relevant="" technical="" document="" nep="" 50.="" went="" ahead="" 50="" about-to-be-deprecated="" rules.="" general,="" follows="" pre-release.="" beyond="" numpy:="" scipy="" scikit-learn="" effort="" making="" understand="" quansight="" engineers="" designed="" proposed="" support="" scipy.="" received="" enthusiastically="" maintainers="" libraries,="" backend="" yield="" considerable="" speed-ups.="" both="" projects="" merged="" across="" apis="" submodules.="" sets="" stepping="" stone="" move="" towards="" future="" libraries="" ecosystem.="" more,="" enable="" gpus="" what="" been="" discussed="" post.="" want="" learn="" effort,="" it,="" help="" forward,="" blogpost.="" conclusion="" committed="" inception="" framework="" compatible="" enabling="" establishing="" tools="" necessary="" same="" prominent="" steps="" direction.="" meta="" continue="" working="" hand="" hand,="" improving="" compatibility="" quansight,="" thank="" mengwei,="" voz,="" ed="" invaluable="" integrating="" funding="" project="" well="" previous="" led="" supporting="" giant="" leaps="" consolidating="" choice="" open="" source="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年10月17日</p>
+            <h1>
+                <a class="blog-title">将 NumPy 代码编译成 C++或 CUDA 通过 torch.compile</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Evgeni Burovski、Ralf Gommers 和 Mario Lezcano 撰写</p>
+                    <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">Quansight 工程师实现了通过 NumPy 代码进行追踪的支持
+<code class="language-plaintext highlighter-rouge">torch.compile</code> 在 PyTorch 2.1 中。此功能利用 PyTorch 的编译器生成高效的融合向量化代码，无需修改您的原始 NumPy 代码。更重要的是，它还允许在 <code class="language-plaintext highlighter-rouge">torch.compile</code> 下通过 <code class="language-plaintext highlighter-rouge">torch.device("cuda")</code> 执行 NumPy 代码，只需运行一次即可！</font></font></font></p>
+
+<p>在本文中，我们将介绍如何使用此功能，并提供一些技巧和窍门，帮助您充分利用它。</p>
+
+<h2 id="compiling-numpy-code-into-parallel-c">将 NumPy 代码编译成并行 C++</h2>
+
+<p>以 K-Means 算法中的一步作为我们的运行示例。此段代码来自这本 <a href="https://realpython.com/numpy-array-programming/#clustering-algorithms">NumPy 书籍</a></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import numpy as np
+
+def kmeans(X, means):
+    return np.argmin(np.linalg.norm(X - means[:, None], axis=2), axis=0)
+</code></pre></div></div>
+
+<p>我们创建了一个包含 2000 万个随机 2-D 点的合成数据集。我们可以看到，如果选择合适的均值，该函数将为所有这些点返回正确的簇</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>npts = 10_000_000
+X = np.repeat([[5, 5], [10, 10]], [npts, npts], axis=0)
+X = X + np.random.randn(*X.shape)  # 2 distinct "blobs"
+means = np.array([[5, 5], [10, 10]])
+np_pred = kmeans(X, means)
+</code></pre></div></div>
+
+<p>在 AMD 3970X CPU 上基准测试此函数，为我们提供了一个基准值 <strong>1.26 秒</strong></p>
+
+<p>编译这个函数现在就像用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 包裹它并在示例输入上执行它一样简单</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
+
+compiled_fn = torch.compile(kmeans)
+compiled_pred = compiled_fn(X, means)
+assert np.allclose(np_pred, compiled_pred)
+</code></pre></div></div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在单核上运行时，编译后的函数速度提高了 9 倍。更好的是，与 NumPy 相比，我们生成的代码确实利用了处理器的所有核心。因此，当我们用 32 核运行时，我们得到了一个 <strong>57 倍 </strong> 的速度提升。请注意，PyTorch 始终使用所有可用的核心，除非 <strong> 明确限制 </strong>，因此这是您使用时的默认行为
+注意，PyTorch 始终使用所有可用的核心，除非
+明确限制，因此这是您使用时的默认行为
+<code class="language-plaintext highlighter-rouge">torch.compile</code>.</font></font></font></p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">我们可以通过运行脚本并设置环境变量 <code class="language-plaintext highlighter-rouge">TORCH_LOGS=output_code</code> 来检查生成的 C++ 代码。这样做时，我们可以看到，
+<code class="language-plaintext highlighter-rouge">torch.compile</code> 能够将广播和两个缩减操作编译成一个循环，并使用 OpenMP 进行并行化</font></font></font></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>extern "C" void kernel(const double* in_ptr0, const long* in_ptr1, long* out_ptr0) {
+    #pragma omp parallel num_threads(32)
+    #pragma omp for
+    for(long i0=0L; i0&lt;20000000L; i0+=1L) {
+        auto tmp0 = in_ptr0[2L*i0];
+        auto tmp1 = in_ptr1[0L];
+        auto tmp5 = in_ptr0[1L + (2L*i0)];
+        auto tmp6 = in_ptr1[1L];
+        // Rest of the kernel omitted for brevity
+</code></pre></div></div>
+
+<h2 id="compiling-numpy-code-into-cuda">将 NumPy 代码编译成 CUDA</h2>
+
+<p>将我们的代码编译为 CUDA 运行，就像设置默认设备为 CUDA 一样简单</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>with torch.device("cuda"):
+    cuda_pred = compiled_fn(X, means)
+assert np.allclose(np_pred, cuda_pred)
+</code></pre></div></div>
+
+<p>通过检查生成的代码 <code class="language-plaintext highlighter-rouge">TORCH_LOGS=output_code</code>，我们发现，<code class="language-plaintext highlighter-rouge">torch.compile</code> 并不是直接生成 CUDA 代码，而是生成可读性较高的 <a href="https://triton-lang.org/main/index.html">triton</a> 代码</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>def triton_(in_ptr0, in_ptr1, out_ptr0, XBLOCK : tl.constexpr):
+    xnumel = 20000000
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = xindex &lt; xnumel
+    x0 = xindex
+    tmp0 = tl.load(in_ptr0 + (2*x0), xmask)
+    tmp1 = tl.load(in_ptr1 + (0))
+    // Rest of the kernel omitted for brevity
+</code></pre></div></div>
+
+<p>在 RTX 2060 上运行这个小片段，比原始的 NumPy 代码快了 <strong>8 倍 </strong>。这已经很不错了，但与 CPU 上的速度提升相比，并不算特别惊人。让我们看看如何通过一些小的改动来最大限度地发挥 GPU 的潜力。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><code class="language-plaintext highlighter-rouge">float64</code> 与 <code class="language-plaintext highlighter-rouge">float32</code>。许多 GPU，尤其是消费级 GPU，在执行 <code class="language-plaintext highlighter-rouge">float64</code> 操作时相当缓慢。因此，将数据生成改为 <code class="language-plaintext highlighter-rouge">float32</code>，原始 NumPy 代码只是稍微快了一点，大约快了 9%，但我们的 CUDA 代码却快了 <strong>40%</strong>，达到了 <strong>11 倍</strong>
+加速于纯 NumPy 代码。</font></font></font></p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">默认情况下，<code class="language-plaintext highlighter-rouge">torch.compile</code> 遵循 NumPy 语义，因此它使用
+<code class="language-plaintext highlighter-rouge">np.float64</code> 作为其所有创建操作的默认数据类型。正如讨论的那样，这可能会影响性能，因此可以通过设置来更改此默认值</font></font></font></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from torch._dynamo import config
+config.numpy_default_float = "float32"
+</code></pre></div></div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><strong>CPU &lt;&gt; CUDA 复制 </strong>。11 倍的速度提升是好的，但与 CPU 数值相比还远远不够。这是由于 torch.compile 的小型转换造成的
+在幕后进行。上面的代码接收 NumPy 数组并返回 NumPy 数组。所有这些数组都在 CPU 上，但计算是在 GPU 上进行的。这意味着每次调用函数时，<code class="language-plaintext highlighter-rouge">torch.compile</code> 都必须将这些数组从 CPU 复制到 GPU，然后再将结果复制回 CPU 以保持原始语义。在 NumPy 中没有原生的解决方案来解决这个问题，因为 NumPy 没有 <code class="language-plaintext highlighter-rouge">device</code> 的概念。话虽如此，我们可以通过创建一个包装器来解决这个问题，使其接受 PyTorch 张量并返回 PyTorch 张量。</font></font></font></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>@torch.compile
+def tensor_fn(X, means):
+    X, means = X.numpy(), means.numpy()
+    ret = kmeans(X, means)
+    return torch.from_numpy(ret)
+
+def cuda_fn(X, means):
+    with torch.device("cuda"):
+        return tensor_fn(X, means)
+</code></pre></div></div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">此函数现在接收 CUDA 内存中的张量，并返回 CUDA 内存中的张量，但该函数本身是用 NumPy 编写的！<code class="language-plaintext highlighter-rouge">torch.compile</code> 使用
+<code class="language-plaintext highlighter-rouge">numpy()</code> 和 <code class="language-plaintext highlighter-rouge">from_numpy()</code> 调用作为提示，并优化它们，然后
+在内部它只是使用 PyTorch 张量而不移动内存
+所有。当我们把张量保存在 CUDA 中并执行计算时，
+<code class="language-plaintext highlighter-rouge">float32</code>，我们看到了相对于初始 NumPy 实现的
+  <strong>200 倍的速度提升 </strong>。
+<code class="language-plaintext highlighter-rouge">float32</code> 数组。</font></font></font></p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><strong>混合 NumPy 和 PyTorch</strong>。在这个例子中，我们不得不编写一个小型的适配器，
+将张量转换为 ndarrays，然后再将其转换回张量。
+在混合使用 PyTorch 和 NumPy 的程序中，将张量转换为 ndarrays 通常实现为
+<code class="language-plaintext highlighter-rouge">x.detach().cpu().numpy()</code>，或者简单地 <code class="language-plaintext highlighter-rouge">x.numpy(force=True)</code>。由于在运行 <code class="language-plaintext highlighter-rouge">torch.compile</code> 时，我们可以在 CUDA 下运行 NumPy 代码，因此我们可以将这种转换模式实现为对 <code class="language-plaintext highlighter-rouge">x.numpy()</code> 的调用，就像上面那样。这样做并在 <code class="language-plaintext highlighter-rouge">device("cuda")</code> 下运行生成的代码，将直接从原始 NumPy 调用生成高效的 CUDA 代码，而无需将数据从 CUDA 复制到 CPU。请注意，生成的代码在没有 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的情况下无法运行。要在 eager 模式下运行，需要回滚到 <code class="language-plaintext highlighter-rouge">x.numpy(force=True)</code>。</font></font></font></p>
+
+<h2 id="further-speed-up-tricks">进一步的加速技巧</h2>
+
+<p><strong>一般建议 </strong>。我们展示的 CUDA 代码已经相当高效，但确实，运行示例相对较短。在处理更大的程序时，我们可能需要对其进行调整以提高效率。一个好的起点是多个 <a href="https://pytorch.org/docs/main/torch.compiler.html#read-more">torch.compile 教程和常见问题解答 </a>。这展示了检查跟踪过程和识别可能导致性能下降的问题代码的多种方法。</p>
+
+<p><strong>编译 NumPy 代码时的建议 </strong>。尽管 NumPy 与 PyTorch 相当相似，但通常使用方式却大不相同。在 NumPy 中进行计算后，根据数组中的值进行 if/else 判断，或者在原地执行操作，例如通过布尔掩码，这种情况相当常见。这些结构虽然由 <code class="language-plaintext highlighter-rouge">torch.compile</code> 支持，但会对其性能产生负面影响。将代码以无分支方式编写以避免图断裂，或避免原地操作等更改可以大有裨益。</p>
+
+<p>要编写快速的 NumPy 代码，最好避免循环，但有时它们是不可避免的。在追踪循环时，<code class="language-plaintext highlighter-rouge">torch.compile</code> 会尝试完全展开它。这有时是可取的，但有时甚至可能不可能，比如当我们有一个动态的停止条件时，就像在 while 循环中。在这些情况下，最好只编译循环体，也许一次编译几个迭代（循环展开）。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">调试 NumPy 代码。当涉及到编译器时，调试相当棘手。为了确定你遇到的错误是否是一个 <code class="language-plaintext highlighter-rouge">torch.compile
+错误，或者程序中的错误，您可以在不执行程序的情况下运行您的 NumPy 程序
+torch.compile 通过将 NumPy 导入替换为 <code class="language-plaintext highlighter-rouge">import torch._numpy as np</code>。这仅应用于<strong>调试目的 </strong>，并且绝对不能替代 PyTorch API，因为它<strong>速度要慢得多 </strong>，并且作为一个私有 API，
+<strong>可能随时更改 </strong>。另请参阅<a href="https://pytorch.org/docs/stable/torch.compiler_faq.html#does-numpy-work-with-torch-compile">本常见问题解答</a>了解其他技巧。</code></font></font></font></p>
+
+<h2 id="differences-between-numpy-and-torchcompile-numpy">NumPy 与 <code class="language-plaintext highlighter-rouge">torch.compile</code> NumPy 之间的区别</h2>
+
+<p><strong>NumPy 标量 </strong>。在几乎所有 PyTorch 返回 0-D 张量（例如从 <code class="language-plaintext highlighter-rouge">np.sum</code>）的情况下，NumPy 都会返回 NumPy 标量。在 <code class="language-plaintext highlighter-rouge">torch.compile</code> 下，NumPy 标量被视为 0-D 数组。在大多数情况下，这完全没问题。唯一它们行为不同的情况是当 NumPy 标量被隐式用作 Python 标量时。例如，</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt;&gt;&gt; np.asarray(2) * [1, 2, 3]  # 0-D array is an array-like
+array([2, 4, 6])
+&gt;&gt;&gt; u = np.int32(2)
+&gt;&gt;&gt; u * [1, 2, 3]              # scalar decays into a Python int
+[1, 2, 3, 1, 2, 3]
+&gt;&gt;&gt; torch.compile(lambda: u * [1, 2, 3])()
+array([2, 4, 6])               # acts as a 0-D array, not as a scalar ?!?!
+</code></pre></div></div>
+
+<p>如果我们编译前两行，我们会看到 <code class="language-plaintext highlighter-rouge">torch.compile</code> 将 <code class="language-plaintext highlighter-rouge">u</code> 视为一个 0-D 数组。为了恢复急切语义，我们只需要显式地进行类型转换即可</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt;&gt;&gt; torch.compile(lambda: int(u) * [1, 2, 3])()
+[1, 2, 3, 1, 2, 3]
+</code></pre></div></div>
+
+<p><strong>类型提升和版本控制 </strong>. NumPy 的类型提升规则有时可能会让人有些惊讶</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&gt;&gt;&gt; np.zeros(1, dtype=np.int8) + 127
+array([127], dtype=int8)
+&gt;&gt;&gt; np.zeros(1, dtype=np.int8) + 128
+array([128], dtype=int16)
+</code></pre></div></div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">NumPy 2.0 正在改变这些规则，使其更接近 PyTorch 的规则。相关技术文档是 <a href="https://numpy.org/neps/nep-0050-scalar-promotion.html">NEP 50</a>。
+<code class="language-plaintext highlighter-rouge">torch.compile</code> 已经实现了 NEP 50，而不是即将被弃用的规则。</font></font></font></p>
+
+<p>通常情况下，在 torch.compile 中的 NumPy 遵循 NumPy 2.0 的预发布版本。</p>
+
+<h2 id="beyond-numpy-scipy-and-scikit-learn">超越 NumPy：SciPy 和 scikit-learn</h2>
+
+<p>在使 <code class="language-plaintext highlighter-rouge">torch.compile</code> 理解 NumPy 代码的努力并行进行的同时，其他 Quansight 工程师设计并提出了一种支持 PyTorch 张量在 scikit-learn 和 SciPy 中的方法。这一举措得到了这些库维护者的热烈欢迎，因为已经证明使用 PyTorch 作为后端通常会带来显著的加速。这两个项目现在已合并了对 PyTorch 张量在多个 API 和子模块中的初始支持。</p>
+
+<p>这为 PyTorch 张量在 Python 数据生态系统中其他库中的应用奠定了基础。更重要的是，这将使这些库在 GPU 上运行成为可能，甚至可以编译混合这些库和 PyTorch 的代码，正如我们在本文中讨论的那样。</p>
+
+<p>如想了解更多关于这项工作的信息，了解如何使用它或如何帮助推动其发展，请参阅<a href="https://labs.quansight.org/blog/array-api-support-scikit-learn">这篇其他博客文章 </a>。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>PyTorch 自诞生以来就致力于与整个 Python 生态系统兼容的框架。使 NumPy 程序可编译，以及为其他知名库建立必要的工具是这一方向上的两个更多步骤。Quansight 和 Meta 继续携手合作，提高 PyTorch 与整个生态系统之间的兼容性。</p>
+
+<p>我们想从 Quansight 感谢 Mengwei、Voz 和 Ed 在将我们的工作与 <code class="language-plaintext highlighter-rouge">torch.compile</code> 集成方面的宝贵帮助。我们还要感谢 Meta 为这个项目以及之前在 PyTorch 中提高 NumPy 兼容性的工作，以及支持 scikit-learn 和 SciPy 中 PyTorch 的项目提供资金。这些都是巩固 PyTorch 作为开源 Python 数据生态系统中首选框架的巨大飞跃。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,1349 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      New Library Updates in PyTorch 2.1 | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Summary
+
+We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 2.1 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.&nbsp;
+
+Along with 2.1, we are also releasing a series of beta updates to the PyTorch domain libraries including TorchAudio and TorchVision. Please find the list of the latest stable versions and updates below.
+
+
+  
+    
+      Latest Stable Library Versions
+      (Full List)*
+      &nbsp;
+    
+  
+  
+    
+      TorchArrow 0.1.0
+      TorchRec 0.5.0
+      TorchVision 0.16
+    
+    
+      TorchAudio 2.1
+      TorchServe 0.8.2
+      TorchX 0.5.0
+    
+    
+      TorchData 0.7.0
+      TorchText 0.16.0
+      PyTorch on XLA Devices 1.14
+    
+  
+
+
+*To see prior versions or (unstable) nightlies, click on versions in the top left menu above ‘Search Docs’.
+
+TorchAudio
+
+TorchAudio v2.1 introduces the following new features and backward-incompatible changes:
+
+[Beta] A new API to apply filter, effects and codec
+
+`torchaudio.io.AudioEffector` can apply filters, effects and encodings to waveforms in online/offline fashion. You can use it as a form of augmentation.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/effector_tutorial.html for the usage and examples.
+
+[Beta] Tools for Forced alignment
+
+New functions and a pre-trained model for forced alignment were added. `torchaudio.functional.forced_align` computes alignment from an emission and `torchaudio.pipelines.MMS_FA` provides access to the model trained for multilingual forced alignment in MMS: Scaling Speech Technology to 1000+ languages project.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/ctc_forced_alignment_api_tutorial.html for the usage of `forced_align` function, and https://pytorch.org/audio/2.1/tutorials/forced_alignment_for_multilingual_data_tutorial.html for how one can use `MMS_FA` to align transcript in multiple languages.
+
+[Beta] TorchAudio-Squim : Models for reference-free speech assessment
+
+Model architectures and pre-trained models from the paper TorchAudio-Sequim: Reference-less Speech Quality and Intelligibility measures in TorchAudio were added.
+
+You can use the pre-trained models `torchaudio.pipelines.SQUIM_SUBJECTIVE` and `torchaudio.pipelines.SQUIM_OBJECTIVE`. They can estimate the various speech quality and intelligibility metrics (e.g. STOI, wideband PESQ, Si-SDR, and MOS). This is helpful when evaluating the quality of speech generation models, such as Text-to-Speech (TTS).
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/squim_tutorial.html for the details.
+
+[Beta] CUDA-based CTC decoder
+
+`torchaudio.models.decoder.CUCTCDecoder` performs CTC beam search in CUDA devices. The beam search is fast. It eliminates the need to move data from CUDA device to CPU when performing automatic speech recognition. With PyTorch’s CUDA support, it is now possible to perform the entire speech recognition pipeline in CUDA.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html for the detail.
+
+[Prototype] Utilities for AI music generation
+
+We are working to add utilities that are relevant to music AI. Since the last release, the following APIs were added to the prototype.
+
+Please refer to respective documentation for the usage.
+
+  torchaudio.prototype.chroma_filterbank
+  torchaudio.prototype.transforms.ChromaScale
+  torchaudio.prototype.transforms.ChromaSpectrogram
+  torchaudio.prototype.pipelines.VGGISH
+
+
+New recipes for training models
+
+Recipes for Audio-visual ASR, multi-channel DNN beamforming and TCPGen context-biasing were added.
+
+Please refer to the recipes
+
+  https://github.com/pytorch/audio/tree/release/2.1/examples/avsr
+  https://github.com/pytorch/audio/tree/release/2.1/examples/dnn_beamformer
+  https://github.com/pytorch/audio/tree/release/2.1/examples/asr/librispeech_conformer_rnnt_biasing
+
+
+Update to FFmpeg support
+
+The version of supported FFmpeg libraries was updated. TorchAudio v2.1 works with FFmpeg 6, 5 and 4.4. The support for 4.3, 4.2 and 4.1 are dropped.
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the detail of the new FFmpeg integration mechanism.
+
+Update to libsox integration
+
+TorchAudio now depends on libsox installed separately from torchaudio. Sox I/O backend no longer supports file-like objects. (This is supported by FFmpeg backend and soundfile.)
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the details.
+
+TorchRL
+
+Our RLHF components make it easy to build an RLHF training loop with limited RL knowledge. TensorDict enables an easy interaction between datasets (eg, HF datasets) and RL models. The new algorithms we provide deliver a wide range of solutions for offline RL training, which is more data efficient.
+
+Through RoboHive and IsaacGym, TorchRL now provides a built-in interface with hardware (robots), tying training at scale with policy deployment on device. Thanks to SMAC, VMAS, and PettingZoo and related MARL-oriented losses, TorchRL is now fully capable of training complex policies in multi-agent settings.
+
+New algorithms
+
+  [BETA] We integrate some RLHF components and examples: we provide building blocks for data formatting in RL frameworks, reward model design, specific transforms that enable efficient learning (eg. KL correction) and training scripts
+  [Stable] New algorithms include Decision transformers, CQL, multi-agent losses such as MAPPO and QMixer.New features- [Stable] New transforms such as Visual Cortex 1 (VC1), a foundational model for RL.&nbsp;
+  We widened the panel of library covered by TorchRL:&nbsp;
+    
+      [Beta] IsaacGym, a powerful GPU-based simulator that allows interaction and rendering of thousands of vectorized environments by NVIDIA.
+      [Stable] PettingZoo, a multi-agent library by the Farama Foundation.
+      [Stable] SMAC-v2, the new Starcraft Multi-agent simulator
+      [Stable] RoboHive, a collection of environments/tasks simulated with the MuJoCo physics engine.
+    
+  
+
+
+Performance improvements
+
+We provide faster data collection through refactoring and integration of SB3 and Gym asynchronous environments execution. We also made our value functions faster to execute.
+
+TorchRec
+
+[Prototype] Zero Collision / Managed Collision Embedding Bags
+
+A common constraint in Recommender Systems is the sparse id input range is larger than the number of embeddings the model can learn for a given parameter size. &nbsp; To resolve this issue, the conventional solution is to hash sparse ids into the same size range as the embedding table.&nbsp; This will ultimately lead to hash collisions, with multiple sparse ids sharing the same embedding space. &nbsp; We have developed a performant alternative algorithm that attempts to address this problem by tracking the N most common sparse ids and ensuring that they have a unique embedding representation. The module is defined here and an example can be found here.
+
+[Prototype] UVM Caching - Prefetch Training Pipeline
+
+For tables where on-device memory is insufficient to hold the entire embedding table, it is common to leverage a caching architecture where part of the embedding table is cached on device and the full embedding table is on host memory (typically DDR SDRAM). &nbsp; However, in practice, caching misses are common, and hurt performance due to relatively high latency of going to host memory. &nbsp; Building on TorchRec’s existing data pipelining, we developed a new Prefetch Training Pipeline to avoid these cache misses by prefetching the relevant embeddings for upcoming batch from host memory, effectively eliminating cache misses in the forward path.
+
+TorchVision&nbsp;
+Transforms and augmentations
+
+Major speedups
+
+The new transforms in torchvision.transforms.v2 are now 10%-40% faster than before! This is mostly achieved thanks to 2X-4X improvements made to v2.Resize(), which now supports native uint8 tensors for Bilinear and Bicubic mode. Output results are also now closer to PIL’s! Check out our performance recommendations to learn more.
+
+Additionally, torchvision now ships with libjpeg-turbo instead of libjpeg, which should significantly speed-up the jpeg decoding utilities (read_image, decode_jpeg), and avoid compatibility issues with PIL.
+
+CutMix and MixUp
+
+Long-awaited support for the CutMix and MixUp augmentations is now here! Check our tutorial to learn how to use them.
+
+Towards stable V2 transforms
+
+In the previous release 0.15 we BETA-released a new set of transforms in torchvision.transforms.v2 with native support for tasks like segmentation, detection, or videos. We have now stabilized the design decisions of these transforms and made further improvements in terms of speedups, usability, new transforms support, etc.
+
+We’re keeping the torchvision.transforms.v2 and torchvision.tv_tensors namespaces as BETA until 0.17 out of precaution, but we do not expect disruptive API changes in the future.
+
+Whether you’re new to Torchvision transforms, or you’re already experienced with them, we encourage you to start with Getting started with transforms v2 in order to learn more about what can be done with the new v2 transforms.
+
+Browse our main docs for general information and performance tips. The available transforms and functionals are listed in the API reference. Additional information and tutorials can also be found in our example gallery, e.g. Transforms v2: End-to-end object detection/segmentation example or How to write your own v2 transforms.
+
+[BETA] MPS support
+
+The nms and roi-align kernels (roi_align, roi_pool, ps_roi_align, ps_roi_pool) now support MPS. Thanks to Li-Huai (Allan) Lin for this contribution!
+
+TorchX
+
+Schedulers
+
+  
+    [Prototype] Kubernetes MCAD Scheduler: Integration for easily scheduling jobs on Multi-Cluster-Application-Dispatcher (MCAD)
+  
+  
+    AWS Batch&nbsp;
+
+    
+      Add privileged option to enable running containers on EFA enabled instances with elevated networking permissions
+    
+  
+
+
+TorchX Tracker
+
+  [Prototype] MLFlow backend for TorchX Tracker: in addition to fsspec based tracker, TorchX can use MLFlow instance to track metadata/experiments&nbsp;
+
+
+Components
+
+  dist.spmd component to support Single-Process-Multiple-Data style applications
+
+
+Workspace
+
+  Add ability to access image and workspace path from Dockerfile while building docker workspace
+
+
+Release includes number of other bugfixes.
+
+To learn more about Torchx visit https://pytorch.org/torchx/latest/
+
+TorchText and TorchData
+
+As of September 2023 we have paused active development of TorchText and TorchData as we re-evaluate how we want to serve the needs of the community in this space.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="New Library Updates in PyTorch 2.1">
+<meta property="og:description" content="Summary
+
+We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 2.1 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.&nbsp;
+
+Along with 2.1, we are also releasing a series of beta updates to the PyTorch domain libraries including TorchAudio and TorchVision. Please find the list of the latest stable versions and updates below.
+
+
+  
+    
+      Latest Stable Library Versions
+      (Full List)*
+      &nbsp;
+    
+  
+  
+    
+      TorchArrow 0.1.0
+      TorchRec 0.5.0
+      TorchVision 0.16
+    
+    
+      TorchAudio 2.1
+      TorchServe 0.8.2
+      TorchX 0.5.0
+    
+    
+      TorchData 0.7.0
+      TorchText 0.16.0
+      PyTorch on XLA Devices 1.14
+    
+  
+
+
+*To see prior versions or (unstable) nightlies, click on versions in the top left menu above ‘Search Docs’.
+
+TorchAudio
+
+TorchAudio v2.1 introduces the following new features and backward-incompatible changes:
+
+[Beta] A new API to apply filter, effects and codec
+
+`torchaudio.io.AudioEffector` can apply filters, effects and encodings to waveforms in online/offline fashion. You can use it as a form of augmentation.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/effector_tutorial.html for the usage and examples.
+
+[Beta] Tools for Forced alignment
+
+New functions and a pre-trained model for forced alignment were added. `torchaudio.functional.forced_align` computes alignment from an emission and `torchaudio.pipelines.MMS_FA` provides access to the model trained for multilingual forced alignment in MMS: Scaling Speech Technology to 1000+ languages project.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/ctc_forced_alignment_api_tutorial.html for the usage of `forced_align` function, and https://pytorch.org/audio/2.1/tutorials/forced_alignment_for_multilingual_data_tutorial.html for how one can use `MMS_FA` to align transcript in multiple languages.
+
+[Beta] TorchAudio-Squim : Models for reference-free speech assessment
+
+Model architectures and pre-trained models from the paper TorchAudio-Sequim: Reference-less Speech Quality and Intelligibility measures in TorchAudio were added.
+
+You can use the pre-trained models `torchaudio.pipelines.SQUIM_SUBJECTIVE` and `torchaudio.pipelines.SQUIM_OBJECTIVE`. They can estimate the various speech quality and intelligibility metrics (e.g. STOI, wideband PESQ, Si-SDR, and MOS). This is helpful when evaluating the quality of speech generation models, such as Text-to-Speech (TTS).
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/squim_tutorial.html for the details.
+
+[Beta] CUDA-based CTC decoder
+
+`torchaudio.models.decoder.CUCTCDecoder` performs CTC beam search in CUDA devices. The beam search is fast. It eliminates the need to move data from CUDA device to CPU when performing automatic speech recognition. With PyTorch’s CUDA support, it is now possible to perform the entire speech recognition pipeline in CUDA.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html for the detail.
+
+[Prototype] Utilities for AI music generation
+
+We are working to add utilities that are relevant to music AI. Since the last release, the following APIs were added to the prototype.
+
+Please refer to respective documentation for the usage.
+
+  torchaudio.prototype.chroma_filterbank
+  torchaudio.prototype.transforms.ChromaScale
+  torchaudio.prototype.transforms.ChromaSpectrogram
+  torchaudio.prototype.pipelines.VGGISH
+
+
+New recipes for training models
+
+Recipes for Audio-visual ASR, multi-channel DNN beamforming and TCPGen context-biasing were added.
+
+Please refer to the recipes
+
+  https://github.com/pytorch/audio/tree/release/2.1/examples/avsr
+  https://github.com/pytorch/audio/tree/release/2.1/examples/dnn_beamformer
+  https://github.com/pytorch/audio/tree/release/2.1/examples/asr/librispeech_conformer_rnnt_biasing
+
+
+Update to FFmpeg support
+
+The version of supported FFmpeg libraries was updated. TorchAudio v2.1 works with FFmpeg 6, 5 and 4.4. The support for 4.3, 4.2 and 4.1 are dropped.
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the detail of the new FFmpeg integration mechanism.
+
+Update to libsox integration
+
+TorchAudio now depends on libsox installed separately from torchaudio. Sox I/O backend no longer supports file-like objects. (This is supported by FFmpeg backend and soundfile.)
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the details.
+
+TorchRL
+
+Our RLHF components make it easy to build an RLHF training loop with limited RL knowledge. TensorDict enables an easy interaction between datasets (eg, HF datasets) and RL models. The new algorithms we provide deliver a wide range of solutions for offline RL training, which is more data efficient.
+
+Through RoboHive and IsaacGym, TorchRL now provides a built-in interface with hardware (robots), tying training at scale with policy deployment on device. Thanks to SMAC, VMAS, and PettingZoo and related MARL-oriented losses, TorchRL is now fully capable of training complex policies in multi-agent settings.
+
+New algorithms
+
+  [BETA] We integrate some RLHF components and examples: we provide building blocks for data formatting in RL frameworks, reward model design, specific transforms that enable efficient learning (eg. KL correction) and training scripts
+  [Stable] New algorithms include Decision transformers, CQL, multi-agent losses such as MAPPO and QMixer.New features- [Stable] New transforms such as Visual Cortex 1 (VC1), a foundational model for RL.&nbsp;
+  We widened the panel of library covered by TorchRL:&nbsp;
+    
+      [Beta] IsaacGym, a powerful GPU-based simulator that allows interaction and rendering of thousands of vectorized environments by NVIDIA.
+      [Stable] PettingZoo, a multi-agent library by the Farama Foundation.
+      [Stable] SMAC-v2, the new Starcraft Multi-agent simulator
+      [Stable] RoboHive, a collection of environments/tasks simulated with the MuJoCo physics engine.
+    
+  
+
+
+Performance improvements
+
+We provide faster data collection through refactoring and integration of SB3 and Gym asynchronous environments execution. We also made our value functions faster to execute.
+
+TorchRec
+
+[Prototype] Zero Collision / Managed Collision Embedding Bags
+
+A common constraint in Recommender Systems is the sparse id input range is larger than the number of embeddings the model can learn for a given parameter size. &nbsp; To resolve this issue, the conventional solution is to hash sparse ids into the same size range as the embedding table.&nbsp; This will ultimately lead to hash collisions, with multiple sparse ids sharing the same embedding space. &nbsp; We have developed a performant alternative algorithm that attempts to address this problem by tracking the N most common sparse ids and ensuring that they have a unique embedding representation. The module is defined here and an example can be found here.
+
+[Prototype] UVM Caching - Prefetch Training Pipeline
+
+For tables where on-device memory is insufficient to hold the entire embedding table, it is common to leverage a caching architecture where part of the embedding table is cached on device and the full embedding table is on host memory (typically DDR SDRAM). &nbsp; However, in practice, caching misses are common, and hurt performance due to relatively high latency of going to host memory. &nbsp; Building on TorchRec’s existing data pipelining, we developed a new Prefetch Training Pipeline to avoid these cache misses by prefetching the relevant embeddings for upcoming batch from host memory, effectively eliminating cache misses in the forward path.
+
+TorchVision&nbsp;
+Transforms and augmentations
+
+Major speedups
+
+The new transforms in torchvision.transforms.v2 are now 10%-40% faster than before! This is mostly achieved thanks to 2X-4X improvements made to v2.Resize(), which now supports native uint8 tensors for Bilinear and Bicubic mode. Output results are also now closer to PIL’s! Check out our performance recommendations to learn more.
+
+Additionally, torchvision now ships with libjpeg-turbo instead of libjpeg, which should significantly speed-up the jpeg decoding utilities (read_image, decode_jpeg), and avoid compatibility issues with PIL.
+
+CutMix and MixUp
+
+Long-awaited support for the CutMix and MixUp augmentations is now here! Check our tutorial to learn how to use them.
+
+Towards stable V2 transforms
+
+In the previous release 0.15 we BETA-released a new set of transforms in torchvision.transforms.v2 with native support for tasks like segmentation, detection, or videos. We have now stabilized the design decisions of these transforms and made further improvements in terms of speedups, usability, new transforms support, etc.
+
+We’re keeping the torchvision.transforms.v2 and torchvision.tv_tensors namespaces as BETA until 0.17 out of precaution, but we do not expect disruptive API changes in the future.
+
+Whether you’re new to Torchvision transforms, or you’re already experienced with them, we encourage you to start with Getting started with transforms v2 in order to learn more about what can be done with the new v2 transforms.
+
+Browse our main docs for general information and performance tips. The available transforms and functionals are listed in the API reference. Additional information and tutorials can also be found in our example gallery, e.g. Transforms v2: End-to-end object detection/segmentation example or How to write your own v2 transforms.
+
+[BETA] MPS support
+
+The nms and roi-align kernels (roi_align, roi_pool, ps_roi_align, ps_roi_pool) now support MPS. Thanks to Li-Huai (Allan) Lin for this contribution!
+
+TorchX
+
+Schedulers
+
+  
+    [Prototype] Kubernetes MCAD Scheduler: Integration for easily scheduling jobs on Multi-Cluster-Application-Dispatcher (MCAD)
+  
+  
+    AWS Batch&nbsp;
+
+    
+      Add privileged option to enable running containers on EFA enabled instances with elevated networking permissions
+    
+  
+
+
+TorchX Tracker
+
+  [Prototype] MLFlow backend for TorchX Tracker: in addition to fsspec based tracker, TorchX can use MLFlow instance to track metadata/experiments&nbsp;
+
+
+Components
+
+  dist.spmd component to support Single-Process-Multiple-Data style applications
+
+
+Workspace
+
+  Add ability to access image and workspace path from Dockerfile while building docker workspace
+
+
+Release includes number of other bugfixes.
+
+To learn more about Torchx visit https://pytorch.org/torchx/latest/
+
+TorchText and TorchData
+
+As of September 2023 we have paused active development of TorchText and TorchData as we re-evaluate how we want to serve the needs of the community in this space.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="New Library Updates in PyTorch 2.1">
+<meta name="twitter:description" content="Summary
+
+We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 2.1 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.&nbsp;
+
+Along with 2.1, we are also releasing a series of beta updates to the PyTorch domain libraries including TorchAudio and TorchVision. Please find the list of the latest stable versions and updates below.
+
+
+  
+    
+      Latest Stable Library Versions
+      (Full List)*
+      &nbsp;
+    
+  
+  
+    
+      TorchArrow 0.1.0
+      TorchRec 0.5.0
+      TorchVision 0.16
+    
+    
+      TorchAudio 2.1
+      TorchServe 0.8.2
+      TorchX 0.5.0
+    
+    
+      TorchData 0.7.0
+      TorchText 0.16.0
+      PyTorch on XLA Devices 1.14
+    
+  
+
+
+*To see prior versions or (unstable) nightlies, click on versions in the top left menu above ‘Search Docs’.
+
+TorchAudio
+
+TorchAudio v2.1 introduces the following new features and backward-incompatible changes:
+
+[Beta] A new API to apply filter, effects and codec
+
+`torchaudio.io.AudioEffector` can apply filters, effects and encodings to waveforms in online/offline fashion. You can use it as a form of augmentation.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/effector_tutorial.html for the usage and examples.
+
+[Beta] Tools for Forced alignment
+
+New functions and a pre-trained model for forced alignment were added. `torchaudio.functional.forced_align` computes alignment from an emission and `torchaudio.pipelines.MMS_FA` provides access to the model trained for multilingual forced alignment in MMS: Scaling Speech Technology to 1000+ languages project.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/ctc_forced_alignment_api_tutorial.html for the usage of `forced_align` function, and https://pytorch.org/audio/2.1/tutorials/forced_alignment_for_multilingual_data_tutorial.html for how one can use `MMS_FA` to align transcript in multiple languages.
+
+[Beta] TorchAudio-Squim : Models for reference-free speech assessment
+
+Model architectures and pre-trained models from the paper TorchAudio-Sequim: Reference-less Speech Quality and Intelligibility measures in TorchAudio were added.
+
+You can use the pre-trained models `torchaudio.pipelines.SQUIM_SUBJECTIVE` and `torchaudio.pipelines.SQUIM_OBJECTIVE`. They can estimate the various speech quality and intelligibility metrics (e.g. STOI, wideband PESQ, Si-SDR, and MOS). This is helpful when evaluating the quality of speech generation models, such as Text-to-Speech (TTS).
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/squim_tutorial.html for the details.
+
+[Beta] CUDA-based CTC decoder
+
+`torchaudio.models.decoder.CUCTCDecoder` performs CTC beam search in CUDA devices. The beam search is fast. It eliminates the need to move data from CUDA device to CPU when performing automatic speech recognition. With PyTorch’s CUDA support, it is now possible to perform the entire speech recognition pipeline in CUDA.
+
+Please refer to https://pytorch.org/audio/2.1/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html for the detail.
+
+[Prototype] Utilities for AI music generation
+
+We are working to add utilities that are relevant to music AI. Since the last release, the following APIs were added to the prototype.
+
+Please refer to respective documentation for the usage.
+
+  torchaudio.prototype.chroma_filterbank
+  torchaudio.prototype.transforms.ChromaScale
+  torchaudio.prototype.transforms.ChromaSpectrogram
+  torchaudio.prototype.pipelines.VGGISH
+
+
+New recipes for training models
+
+Recipes for Audio-visual ASR, multi-channel DNN beamforming and TCPGen context-biasing were added.
+
+Please refer to the recipes
+
+  https://github.com/pytorch/audio/tree/release/2.1/examples/avsr
+  https://github.com/pytorch/audio/tree/release/2.1/examples/dnn_beamformer
+  https://github.com/pytorch/audio/tree/release/2.1/examples/asr/librispeech_conformer_rnnt_biasing
+
+
+Update to FFmpeg support
+
+The version of supported FFmpeg libraries was updated. TorchAudio v2.1 works with FFmpeg 6, 5 and 4.4. The support for 4.3, 4.2 and 4.1 are dropped.
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the detail of the new FFmpeg integration mechanism.
+
+Update to libsox integration
+
+TorchAudio now depends on libsox installed separately from torchaudio. Sox I/O backend no longer supports file-like objects. (This is supported by FFmpeg backend and soundfile.)
+
+Please refer to https://pytorch.org/audio/2.1/installation.html#optional-dependencies for the details.
+
+TorchRL
+
+Our RLHF components make it easy to build an RLHF training loop with limited RL knowledge. TensorDict enables an easy interaction between datasets (eg, HF datasets) and RL models. The new algorithms we provide deliver a wide range of solutions for offline RL training, which is more data efficient.
+
+Through RoboHive and IsaacGym, TorchRL now provides a built-in interface with hardware (robots), tying training at scale with policy deployment on device. Thanks to SMAC, VMAS, and PettingZoo and related MARL-oriented losses, TorchRL is now fully capable of training complex policies in multi-agent settings.
+
+New algorithms
+
+  [BETA] We integrate some RLHF components and examples: we provide building blocks for data formatting in RL frameworks, reward model design, specific transforms that enable efficient learning (eg. KL correction) and training scripts
+  [Stable] New algorithms include Decision transformers, CQL, multi-agent losses such as MAPPO and QMixer.New features- [Stable] New transforms such as Visual Cortex 1 (VC1), a foundational model for RL.&nbsp;
+  We widened the panel of library covered by TorchRL:&nbsp;
+    
+      [Beta] IsaacGym, a powerful GPU-based simulator that allows interaction and rendering of thousands of vectorized environments by NVIDIA.
+      [Stable] PettingZoo, a multi-agent library by the Farama Foundation.
+      [Stable] SMAC-v2, the new Starcraft Multi-agent simulator
+      [Stable] RoboHive, a collection of environments/tasks simulated with the MuJoCo physics engine.
+    
+  
+
+
+Performance improvements
+
+We provide faster data collection through refactoring and integration of SB3 and Gym asynchronous environments execution. We also made our value functions faster to execute.
+
+TorchRec
+
+[Prototype] Zero Collision / Managed Collision Embedding Bags
+
+A common constraint in Recommender Systems is the sparse id input range is larger than the number of embeddings the model can learn for a given parameter size. &nbsp; To resolve this issue, the conventional solution is to hash sparse ids into the same size range as the embedding table.&nbsp; This will ultimately lead to hash collisions, with multiple sparse ids sharing the same embedding space. &nbsp; We have developed a performant alternative algorithm that attempts to address this problem by tracking the N most common sparse ids and ensuring that they have a unique embedding representation. The module is defined here and an example can be found here.
+
+[Prototype] UVM Caching - Prefetch Training Pipeline
+
+For tables where on-device memory is insufficient to hold the entire embedding table, it is common to leverage a caching architecture where part of the embedding table is cached on device and the full embedding table is on host memory (typically DDR SDRAM). &nbsp; However, in practice, caching misses are common, and hurt performance due to relatively high latency of going to host memory. &nbsp; Building on TorchRec’s existing data pipelining, we developed a new Prefetch Training Pipeline to avoid these cache misses by prefetching the relevant embeddings for upcoming batch from host memory, effectively eliminating cache misses in the forward path.
+
+TorchVision&nbsp;
+Transforms and augmentations
+
+Major speedups
+
+The new transforms in torchvision.transforms.v2 are now 10%-40% faster than before! This is mostly achieved thanks to 2X-4X improvements made to v2.Resize(), which now supports native uint8 tensors for Bilinear and Bicubic mode. Output results are also now closer to PIL’s! Check out our performance recommendations to learn more.
+
+Additionally, torchvision now ships with libjpeg-turbo instead of libjpeg, which should significantly speed-up the jpeg decoding utilities (read_image, decode_jpeg), and avoid compatibility issues with PIL.
+
+CutMix and MixUp
+
+Long-awaited support for the CutMix and MixUp augmentations is now here! Check our tutorial to learn how to use them.
+
+Towards stable V2 transforms
+
+In the previous release 0.15 we BETA-released a new set of transforms in torchvision.transforms.v2 with native support for tasks like segmentation, detection, or videos. We have now stabilized the design decisions of these transforms and made further improvements in terms of speedups, usability, new transforms support, etc.
+
+We’re keeping the torchvision.transforms.v2 and torchvision.tv_tensors namespaces as BETA until 0.17 out of precaution, but we do not expect disruptive API changes in the future.
+
+Whether you’re new to Torchvision transforms, or you’re already experienced with them, we encourage you to start with Getting started with transforms v2 in order to learn more about what can be done with the new v2 transforms.
+
+Browse our main docs for general information and performance tips. The available transforms and functionals are listed in the API reference. Additional information and tutorials can also be found in our example gallery, e.g. Transforms v2: End-to-end object detection/segmentation example or How to write your own v2 transforms.
+
+[BETA] MPS support
+
+The nms and roi-align kernels (roi_align, roi_pool, ps_roi_align, ps_roi_pool) now support MPS. Thanks to Li-Huai (Allan) Lin for this contribution!
+
+TorchX
+
+Schedulers
+
+  
+    [Prototype] Kubernetes MCAD Scheduler: Integration for easily scheduling jobs on Multi-Cluster-Application-Dispatcher (MCAD)
+  
+  
+    AWS Batch&nbsp;
+
+    
+      Add privileged option to enable running containers on EFA enabled instances with elevated networking permissions
+    
+  
+
+
+TorchX Tracker
+
+  [Prototype] MLFlow backend for TorchX Tracker: in addition to fsspec based tracker, TorchX can use MLFlow instance to track metadata/experiments&nbsp;
+
+
+Components
+
+  dist.spmd component to support Single-Process-Multiple-Data style applications
+
+
+Workspace
+
+  Add ability to access image and workspace path from Dockerfile while building docker workspace
+
+
+Release includes number of other bugfixes.
+
+To learn more about Torchx visit https://pytorch.org/torchx/latest/
+
+TorchText and TorchData
+
+As of September 2023 we have paused active development of TorchText and TorchData as we re-evaluate how we want to serve the needs of the community in this space.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年10月4日</p>
+            <h1>
+                <a class="blog-title">PyTorch 2.1 中的新库更新</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <h2 id="summary"><strong>摘要</strong></h2>
+
+<p>我们正在将一系列改进引入当前的 PyTorch 库，同时发布 PyTorch 2.1 版本。这些更新展示了我们致力于开发跨所有领域的通用和可扩展的 API，以使我们的社区更容易在 PyTorch 上构建生态系统项目。</p>
+
+<p>除了 2.1 版本外，我们还发布了 PyTorch 领域库（包括 TorchAudio 和 TorchVision）的一系列 beta 更新。以下是最新稳定版本的列表和更新。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>最新稳定库版本</th>
+      <th>（<a href="https://pytorch.org/docs/stable/index.html"> 完整列表 </a>）*</th>
+      <th>&nbsp;</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>TorchArrow 0.1.0</td>
+      <td>TorchRec 0.5.0</td>
+      <td>TorchVision 0.16</td>
+    </tr>
+    <tr>
+      <td>TorchAudio 2.1</td>
+      <td>TorchServe 0.8.2</td>
+      <td>TorchX 0.5.0</td>
+    </tr>
+    <tr>
+      <td>TorchData 0.7.0</td>
+      <td>TorchText 0.16.0</td>
+      <td>PyTorch 在 XLA 设备上 1.14</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>查看先前版本或（不稳定）夜间版本，请点击顶部左侧菜单中的“搜索文档”上方的版本。</p>
+
+<h2 id="torchaudio"><strong>TorchAudio</strong></h2>
+
+<p>TorchAudio v2.1 引入以下新功能和向后不兼容的更改：</p>
+
+<p><strong>[Beta] 新的 API，用于应用过滤器、效果和编解码器</strong></p>
+
+<p>`torchaudio.io.AudioEffector` 可在线/离线方式应用过滤器、效果和编码到波形，可作为增强的一种形式使用。</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/tutorials/effector_tutorial.html">https://pytorch.org/audio/2.1/tutorials/effector_tutorial.html</a> 了解用法和示例。</p>
+
+<p><strong>[Beta] 强制对齐工具</strong></p>
+
+<p>新增了强制对齐的功能和预训练模型。`torchaudio.functional.forced_align` 从发射计算对齐，`torchaudio.pipelines.MMS_FA` 提供了对在 <a href="https://ai.meta.com/blog/multilingual-model-speech-recognition/">MMS: 将语音技术扩展到 1000+种语言 </a> 项目中训练的多语言强制对齐模型的访问。</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/tutorials/ctc_forced_alignment_api_tutorial.html">https://pytorch.org/audio/2.1/tutorials/ctc_forced_alignment_api_tutorial.html</a> 了解 `forced_align` 函数的使用方法，以及 <a href="https://pytorch.org/audio/2.1/tutorials/forced_alignment_for_multilingual_data_tutorial.html">https://pytorch.org/audio/2.1/tutorials/forced_alignment_for_multilingual_data_tutorial.html</a> 了解如何使用 `MMS_FA` 对多语言转录进行对齐。</p>
+
+<p><strong>[Beta] TorchAudio-Squim：无参考语音评估模型</strong></p>
+
+<p>添加了来自论文 <a href="https://arxiv.org/abs/2304.01448">TorchAudio-Sequim：在 TorchAudio 中无参考语音质量和可懂度度量 </a> 的模型架构和预训练模型。</p>
+
+<p>您可以使用预训练模型 `torchaudio.pipelines.SQUIM_SUBJECTIVE` 和 `torchaudio.pipelines.SQUIM_OBJECTIVE`。它们可以估计各种语音质量与可懂度指标（例如 STOI、宽带 PESQ、Si-SDR 和 MOS）。这在评估语音生成模型（如文本到语音 TTS）的质量时非常有用。</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/tutorials/squim_tutorial.html">https://pytorch.org/audio/2.1/tutorials/squim_tutorial.html</a> 获取详细信息。</p>
+
+<p><strong>[Beta] 基于 CUDA 的 CTC 解码器</strong></p>
+
+<p>`torchaudio.models.decoder.CUCTCDecoder` 在 CUDA 设备上执行 CTC 轨迹搜索。轨迹搜索速度快。它消除了在执行自动语音识别时需要将数据从 CUDA 设备移动到 CPU 的需求。借助 PyTorch 的 CUDA 支持，现在可以在 CUDA 中执行整个语音识别流程。</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html">https://pytorch.org/audio/2.1/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html</a> 获取详细信息。</p>
+
+<p><strong>[原型] 人工智能音乐生成工具</strong></p>
+
+<p>我们正在努力添加与音乐 AI 相关的工具。自上次发布以来，原型中已添加以下 API。</p>
+
+<p>请参阅相应文档了解使用方法。</p>
+<ul>
+  <li><a href="https://pytorch.org/audio/main/generated/torchaudio.prototype.functional.chroma_filterbank.html">torchaudio.prototype.chroma_filterbank</a></li>
+  <li><a href="https://pytorch.org/audio/main/generated/torchaudio.prototype.transforms.ChromaScale.html">torchaudio.prototype.transforms.ChromaScale</a></li>
+  <li><a href="https://pytorch.org/audio/main/generated/torchaudio.prototype.transforms.ChromaSpectrogram.html">torchaudio.prototype.transforms.ChromaSpectrogram</a></li>
+  <li><a href="https://pytorch.org/audio/main/generated/torchaudio.prototype.pipelines.VGGISH.html">torchaudio.prototype.pipelines.VGGISH</a></li>
+</ul>
+
+<p><strong>模型训练的新食谱</strong></p>
+
+<p>添加了音频-视觉 ASR、多通道 DNN 波束成形和 TCPGen 上下文偏置的食谱。</p>
+
+<p>请参阅食谱。</p>
+<ul>
+  <li><a href="https://github.com/pytorch/audio/tree/release/2.1/examples/avsr">https://github.com/pytorch/audio/tree/release/2.1/examples/avsr</a></li>
+  <li><a href="https://github.com/pytorch/audio/tree/release/2.1/examples/dnn_beamformer">https://github.com/pytorch/audio/tree/release/2.1/examples/dnn_beamformer</a></li>
+  <li><a href="https://github.com/pytorch/audio/tree/release/2.1/examples/asr/librispeech_conformer_rnnt_biasing">https://github.com/pytorch/audio/tree/release/2.1/examples/asr/librispeech_conformer_rnnt_biasing</a></li>
+</ul>
+
+<p><strong>更新 FFmpeg 支持。</strong></p>
+
+<p>支持的 FFmpeg 库版本已更新。TorchAudio v2.1 与 FFmpeg 6、5 和 4.4 兼容。对 4.3、4.2 和 4.1 的支持已取消。</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/installation.html#optional-dependencies">https://pytorch.org/audio/2.1/installation.html#optional-dependencies</a> 以获取新的 FFmpeg 集成机制的详细信息。</p>
+
+<p><strong>更新 libsox 集成</strong></p>
+
+<p>TorchAudio 现在依赖于从 torchaudio 独立安装的 libsox。Sox I/O 后端不再支持文件-like 对象。（这由 FFmpeg 后端和 soundfile 支持。）</p>
+
+<p>请参阅 <a href="https://pytorch.org/audio/2.1/installation.html#optional-dependencies">https://pytorch.org/audio/2.1/installation.html#optional-dependencies</a> 获取详细信息。</p>
+
+<h2 id="torchrl">TorchRL</h2>
+
+<p>我们的 RLHF 组件使得在有限的 RL 知识下构建 RLHF 训练循环变得简单。TensorDict 使得数据集（例如，HF 数据集）与 RL 模型之间的交互变得容易。我们提供的新算法为离线 RL 训练提供了广泛的解决方案，这更加数据高效。</p>
+
+<p>通过 RoboHive 和 IsaacGym，TorchRL 现在提供了与硬件（机器人）的内置接口，将大规模训练与设备上的策略部署相连接。得益于 SMAC、VMAS、PettingZoo 以及面向 MARL 的损失函数，TorchRL 现在能够完全在多智能体环境中训练复杂的策略。</p>
+
+<p><strong>新算法</strong></p>
+<ul>
+  <li>[BETA] 我们集成了某些 RLHF 组件和示例：我们提供了 RL 框架中的数据格式化构建块、奖励模型设计、特定的转换以实现高效学习（例如 KL 校正）和训练脚本</li>
+  <li>[稳定] 新算法包括决策转换器、CQL、多智能体损失如 MAPPO 和 QMixer。<strong> 新功能 </strong>- [稳定] 新增转换，如视觉皮层 1（VC1），RL 的基础模型。</li>
+  <li>我们扩大了 TorchRL 支持的库面板：<ul>
+      <li>[Beta] IsaacGym，一款基于 GPU 的强大模拟器，允许通过 NVIDIA 交互和渲染数千个向量化环境。</li>
+      <li>[Stable] PettingZoo，由 Farama 基金会开发的多智能体库。</li>
+      <li>[Stable] SMAC-v2，新的星际争霸多智能体模拟器</li>
+      <li>[Stable] RoboHive，使用 MuJoCo 物理引擎模拟的环境/任务集合。</li>
+    </ul>
+  </li>
+</ul>
+
+<p><strong>性能提升</strong></p>
+
+<p>我们通过重构和集成 SB3 和 Gym 异步环境执行，提供更快的数据收集。我们还使我们的价值函数执行速度更快。</p>
+
+<h2 id="torchrec">TorchRec</h2>
+
+<p><strong>[原型] 零碰撞/管理碰撞嵌入包</strong></p>
+
+<p>推荐系统中一个常见的约束是稀疏的 ID 输入范围大于模型在给定参数大小下可以学习的嵌入数量。为了解决这个问题，传统的解决方案是将稀疏 ID 哈希到与嵌入表相同大小的范围内。这最终会导致哈希冲突，多个稀疏 ID 共享相同的嵌入空间。我们开发了一种高效的替代算法，该算法试图通过跟踪 <em>N</em> 个最常见的稀疏 ID 并确保它们具有唯一的嵌入表示来解决这个问题。该模块定义<a href="https://github.com/pytorch/torchrec/blob/b992eebd80e8ccfc3b96a7fd39cb072c17e8907d/torchrec/modules/mc_embedding_modules.py#L26">在这里 </a>，示例<a href="https://github.com/pytorch/torchrec/blob/b992eebd80e8ccfc3b96a7fd39cb072c17e8907d/torchrec/modules/mc_embedding_modules.py#L26">在这里</a>可以找到。</p>
+
+<p><strong>[原型] UVM 缓存 - 预取训练管道</strong></p>
+
+<p>对于设备内存不足以存储整个嵌入表的情况，通常采用缓存架构，将嵌入表的一部分缓存在设备上，而整个嵌入表存储在主机内存中（通常是 DDR SDRAM）。然而，在实践中，缓存未命中很常见，由于访问主机内存的相对高延迟，这会损害性能。基于 TorchRec 现有的数据管道，我们开发了一个新的<a href="https://pytorch.org/torchrec/torchrec.distributed.html#torchrec.distributed.train_pipeline.PrefetchPipelinedForward"><em>预取训练管道 </em></a>，通过从主机内存中预取即将到来的批次的相关嵌入，从而避免这些缓存未命中，有效地消除了正向路径中的缓存未命中。</p>
+
+<h2 id="torchvision">TorchVision&nbsp;</h2>
+<h3 id="transforms-and-augmentations"><strong>转换和增强</strong></h3>
+
+<p><strong>主要加速</strong></p>
+
+<p>新的 <code class="language-plaintext highlighter-rouge">torchvision.transforms.v2</code> 转换现在比之前快了 10%-40%！这主要得益于对 <code class="language-plaintext highlighter-rouge">v2.Resize()</code> 的 2X-4X 性能提升，现在它支持 Bilinear 和 Bicubic 模式的原生 <code class="language-plaintext highlighter-rouge">uint8</code> 张量。输出结果也更加接近 PIL 了！查看我们的<a href="https://pytorch.org/vision/stable/transforms.html#performance-considerations">性能建议 </a> 了解更多。</p>
+
+<p>此外，<code class="language-plaintext highlighter-rouge">torchvision</code> 现在随附 <code class="language-plaintext highlighter-rouge">libjpeg-turbo</code> 而不是 <code class="language-plaintext highlighter-rouge">libjpeg</code>，这应该会显著加快 jpeg 解码工具（<a href="https://pytorch.org/vision/stable/generated/torchvision.io.read_image.html#torchvision.io.read_image"><code class="language-plaintext highlighter-rouge">read_image</code></a>，<a href="https://pytorch.org/vision/stable/generated/torchvision.io.read_image.html#torchvision.io.decode_jpeg"> <code class="language-plaintext highlighter-rouge">decode_jpeg</code></a>）的速度，并避免与 PIL 的兼容性问题。</p>
+
+<p><strong>CutMix 和 MixUp</strong></p>
+
+<p>长期期待的 <code class="language-plaintext highlighter-rouge">CutMix</code> 和 <code class="language-plaintext highlighter-rouge">MixUp</code> 增强功能现已推出！查看<a href="https://pytorch.org/vision/stable/auto_examples/transforms/plot_cutmix_mixup.html#sphx-glr-auto-examples-transforms-plot-cutmix-mixup-py">我们的教程 </a> 了解如何使用它们。</p>
+
+<p><strong>向稳定的 V2 转换迈进</strong></p>
+
+<p>在<a href="https://github.com/pytorch/vision/releases/tag/v0.15.1">上一个版本 0.15</a> 中，我们 BETA 发布了 <code class="language-plaintext highlighter-rouge">torchvision.transforms.v2 中的一组新转换，这些转换具有对分割、检测或视频等任务的本地支持。现在，我们已经稳定了这些转换的设计决策，并在速度提升、可用性、新转换支持等方面进行了进一步改进。</code></p>
+
+<p>我们出于谨慎，将 <code class="language-plaintext highlighter-rouge">torchvision.transforms.v2 和 <code class="language-plaintext highlighter-rouge">torchvision.tv_tensors 命名空间保持为 BETA 状态直到 0.17，但我们不期望未来会有破坏性的 API 更改。</code></code></p>
+
+<p>无论您是 Torchvision 转换的新手，还是已经对它们有经验，我们都鼓励您从<a href="https://pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_getting_started.html#sphx-glr-auto-examples-transforms-plot-transforms-getting-started-py">开始使用 v2 转换</a>学习更多关于新 v2 转换可以做什么。</p>
+
+<p>浏览我们的<a href="https://pytorch.org/vision/stable/transforms.html#">主要文档</a>获取一般信息和性能技巧。可用的转换和功能列表在 <a href="https://pytorch.org/vision/stable/transforms.html#v2-api-ref">API 参考</a>中。您还可以在我们的<a href="https://pytorch.org/vision/stable/auto_examples/index.html#gallery">示例画廊</a>中找到更多信息和学习教程，例如 <a href="https://pytorch.org/vision/stable/auto_examples/transforms/plot_transforms_e2e.html#sphx-glr-auto-examples-transforms-plot-transforms-e2e-py">Transforms v2：端到端目标检测/分割示例</a>或<a href="https://pytorch.org/vision/stable/auto_examples/transforms/plot_custom_transforms.html#sphx-glr-auto-examples-transforms-plot-custom-transforms-py">如何编写自己的 v2 转换 </a>。</p>
+
+<h3 id="beta-mps-support">[BETA] MPS 支持</h3>
+
+<p>现在的 <code class="language-plaintext highlighter-rouge">nms</code> 和 roi-align 内核（<code class="language-plaintext highlighter-rouge">roi_align</code>、<code class="language-plaintext highlighter-rouge">roi_pool</code>、<code class="language-plaintext highlighter-rouge">ps_roi_align</code>、<code class="language-plaintext highlighter-rouge">ps_roi_pool</code>）支持 MPS。感谢 <a href="https://github.com/qqaatw"> Li-Huai (Allan) Lin</a> 为此贡献！</p>
+
+<h2 id="torchx">TorchX</h2>
+
+<p><strong>调度器</strong></p>
+<ul>
+  <li>
+    <p>[原型] Kubernetes MCAD 调度器：为 Multi-Cluster-Application-Dispatcher (MCAD) 实现轻松调度作业的集成</p>
+  </li>
+  <li>
+    <p>AWS 批处理</p>
+
+    <ul>
+      <li>添加特权选项以启用在具有提升网络权限的 EFA 启用实例上运行容器</li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="torchx-tracker"><strong>火炬 X 追踪器</strong></h3>
+<ul>
+  <li>[原型] TorchX 追踪器的 MLFlow 后端：除了基于 <em>fsspec</em> 的追踪器外，TorchX 还可以使用 MLFlow 实例来跟踪元数据/实验</li>
+</ul>
+
+<p><strong>组件</strong></p>
+<ul>
+  <li><em>dist.spmd</em> 组件以支持单进程多数据 (Single-Process-Multiple-Data) 风格的应用程序</li>
+</ul>
+
+<p><strong>工作空间</strong></p>
+<ul>
+  <li>在构建 Docker 工作空间时，添加从 Dockerfile 访问图像和工作空间路径的功能</li>
+</ul>
+
+<p>本次发布还包括其他错误修复。</p>
+
+<p>想了解更多关于 Torchx 的信息，请访问 <a href="https://pytorch.org/torchx/latest/">https://pytorch.org/torchx/latest/</a></p>
+
+<h2 id="torchtext-and-torchdata">TorchText 和 TorchData</h2>
+
+<p>截至 2023 年 9 月，我们已暂停 TorchText 和 TorchData 的积极开发，因为我们正在重新评估我们如何满足该领域社区的需求。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

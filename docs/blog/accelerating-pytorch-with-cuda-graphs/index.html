@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerating PyTorch with CUDA Graphs | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Today, we are pleased to announce a new advanced CUDA feature, CUDA Graphs, has been brought to PyTorch. Modern DL frameworks have complicated software stacks that incur significant overheads associated with the submission of each operation to the GPU. When DL workloads are strong-scaled to many GPUs for performance, the time taken by each GPU operation diminishes to just a few microseconds and, in these cases, the high work submission latencies of frameworks often lead to low utilization of the GPU. As GPUs get faster and workloads are scaled to more devices, the likelihood of workloads suffering from these launch-induced stalls increases. To overcome these performance overheads, NVIDIA engineers worked with PyTorch developers to enable CUDA graph execution natively in PyTorch. This design was instrumental in scaling NVIDIA’s MLPerf workloads (implemented in PyTorch) to over 4000 GPUs in order to achieve record-breaking performance.
+
+
+  
+
+
+CUDA graphs support in PyTorch is just one more example of a long collaboration between NVIDIA and Facebook engineers. torch.cuda.amp, for example, trains with half precision while maintaining the network accuracy achieved with single precision and automatically utilizing tensor cores wherever possible. AMP delivers up to 3X higher performance than FP32 with just a few lines of code change. Similarly, NVIDIA’s Megatron-LM was trained using PyTorch on up to 3072 GPUs. In PyTorch, one of the most performant methods to scale-out GPU training is with torch.nn.parallel.DistributedDataParallel coupled with the NVIDIA Collective Communications Library (NCCL) backend.
+
+CUDA Graphs
+
+CUDA Graphs, which made its debut in CUDA 10, let a series of CUDA kernels to be defined and encapsulated as a single unit, i.e., a graph of operations, rather than a sequence of individually-launched operations. It provides a mechanism to launch multiple GPU operations through a single CPU operation, and hence reduces the launching overheads.
+
+The benefits of CUDA graphs can be demonstrated with the simple example in Figure 1. On the top, a sequence of short kernels is launched one-by-one by the CPU. The CPU launching overhead creates a significant gap in between the kernels. If we replace this sequence of kernels with a CUDA graph, initially we will need to spend a little extra time on building the graph and launching the whole graph in one go on the first occasion, but subsequent executions will be very fast, as there will be very little gap between the kernels. The difference is more pronounced when the same sequence of operations is repeated many times, for example, overy many training steps. In that case, the initial costs of building and launching the graph will be amortized over the entire number of training iterations. For a more comprehensive introduction on the topic, see our blog 
+ Getting Started with CUDA Graphs and GTC talk Effortless CUDA Graphs.
+
+
+
+
+	Figure 1. Benefits of using CUDA graphs
+
+
+NCCL support for CUDA graphs
+
+The previously mentioned benefits of reducing launch overheads also extend to NCCL kernel launches. NCCL enables GPU-based collective and P2P communications. With NCCL support for CUDA graphs, we can eliminate the NCCL kernel launch overhead.
+
+Additionally, kernel launch timing can be unpredictable due to various CPU load and operating system factors. Such time skews can be harmful to the performance of NCCL collective operations. With CUDA graphs, kernels are clustered together so that performance is consistent across ranks in a distributed workload. This is especially useful in large clusters where even a single slow node can bring down overall cluster level performance.
+
+For distributed multi-GPU workloads, NCCL is used for collective communications. If we look at training a neural network that leverages data parallelism, without NCCL support for CUDA graphs, we’ll need a separate launch for each of forward/back propagation and NCCL AllReduce. By contrast, with NCCL support for CUDA graphs, we can reduce launch overhead by lumping together the forward/backward propagation and NCCL AllReduce all in a single graph launch.
+
+
+
+
+    Figure 2. Looking at a typical neural network, all the kernel launches for NCCL AllReduce can be bundled into a graph to reduce overhead launch time.
+
+
+PyTorch CUDA Graphs
+
+From PyTorch v1.10, the CUDA graphs functionality is made available as a set of beta APIs.
+
+API overview
+
+PyTorch supports the construction of CUDA graphs using stream capture, which puts a CUDA stream in capture mode. CUDA work issued to a capturing stream doesn’t actually run on the GPU. Instead, the work is recorded in a graph. After capture, the graph can be launched to run the GPU work as many times as needed. Each replay runs the same kernels with the same arguments. For pointer arguments this means the same memory addresses are used. By filling input memory with new data (e.g., from a new batch) before each replay, you can rerun the same work on new data.
+
+Replaying a graph sacrifices the dynamic flexibility of typical eager execution in exchange for greatly reduced CPU overhead. A graph’s arguments and kernels are fixed, so a graph replay skips all layers of argument setup and kernel dispatch, including Python, C++, and CUDA driver overheads. Under the hood, a replay submits the entire graph’s work to the GPU with a single call to cudaGraphLaunch. Kernels in a replay also execute slightly faster on the GPU, but eliding CPU overhead is the main benefit.
+
+You should try CUDA graphs if all or part of your network is graph-safe (usually this means static shapes and static control flow, but see the other constraints) and you suspect its runtime is at least somewhat CPU-limited.
+
+API example
+
+PyTorch exposes graphs via a raw torch.cuda.CUDAGraphclass and two convenience wrappers, torch.cuda.graph and torch.cuda.make_graphed_callables.
+
+torch.cuda.graph is a simple, versatile context manager that captures CUDA work in its context. Before capture, warm up the workload to be captured by running a few eager iterations. Warmup must occur on a side stream. Because the graph reads from and writes to the same memory addresses in every replay, you must maintain long-lived references to tensors that hold input and output data during capture. To run the graph on new input data, copy new data to the capture’s input tensor(s), replay the graph, then read the new output from the capture’s output tensor(s).
+
+If the entire network is capture safe, one can capture and replay the whole network as in the following example.
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+model = torch.nn.Sequential(torch.nn.Linear(D_in, H),
+                            torch.nn.Dropout(p=0.2),
+                            torch.nn.Linear(H, D_out),
+                            torch.nn.Dropout(p=0.1)).cuda()
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+# Placeholders used for capture
+static_input = torch.randn(N, D_in, device='cuda')
+static_target = torch.randn(N, D_out, device='cuda')
+
+# warmup
+# Uses static_input and static_target here for convenience,
+# but in a real setting, because the warmup includes optimizer.step()
+# you must use a few batches of real data.
+s = torch.cuda.Stream()
+s.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(s):
+    for i in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        y_pred = model(static_input)
+        loss = loss_fn(y_pred, static_target)
+        loss.backward()
+        optimizer.step()
+torch.cuda.current_stream().wait_stream(s)
+
+# capture
+g = torch.cuda.CUDAGraph()
+# Sets grads to None before capture, so backward() will create
+# .grad attributes with allocations from the graph's private pool
+optimizer.zero_grad(set_to_none=True)
+with torch.cuda.graph(g):
+    static_y_pred = model(static_input)
+    static_loss = loss_fn(static_y_pred, static_target)
+    static_loss.backward()
+    optimizer.step()
+
+real_inputs = [torch.rand_like(static_input) for _ in range(10)]
+real_targets = [torch.rand_like(static_target) for _ in range(10)]
+
+for data, target in zip(real_inputs, real_targets):
+    # Fills the graph's input memory with new data to compute on
+    static_input.copy_(data)
+    static_target.copy_(target)
+    # replay() includes forward, backward, and step.
+    # You don't even need to call optimizer.zero_grad() between iterations
+    # because the captured backward refills static .grad tensors in place.
+    g.replay()
+    # Params have been updated. static_y_pred, static_loss, and .grad
+    # attributes hold values from computing on this iteration's data.
+
+
+If some of your network is unsafe to capture (e.g., due to dynamic control flow, dynamic shapes, CPU syncs, or essential CPU-side logic), you can run the unsafe part(s) eagerly and use torch.cuda.make_graphed_callables to graph only the capture-safe part(s). This is demonstrated next.
+
+make_graphed_callables accepts callables (functions or nn.Module and returns graphed versions. By default, callables returned by make_graphed_callables are autograd-aware, and can be used in the training loop as direct replacements for the functions or nn.Module you passed. make_graphed_callables internally creates CUDAGraph objects, runs warm up iterations, and maintains static inputs and outputs as needed. Therefore, (unlike with torch.cuda.graph) you don’t need to handle those manually.
+
+In the following example, data-dependent dynamic control flow means the network isn’t capturable end-to-end, but make_graphed_callables() lets us capture and run graph-safe sections as graphs regardless:
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+
+module1 = torch.nn.Linear(D_in, H).cuda()
+module2 = torch.nn.Linear(H, D_out).cuda()
+module3 = torch.nn.Linear(H, D_out).cuda()
+
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(chain(module1.parameters(),
+                                  module2.parameters(),
+                                  module3.parameters()),
+                            lr=0.1)
+
+# Sample inputs used for capture
+# requires_grad state of sample inputs must match
+# requires_grad state of real inputs each callable will see.
+x = torch.randn(N, D_in, device='cuda')
+h = torch.randn(N, H, device='cuda', requires_grad=True)
+
+module1 = torch.cuda.make_graphed_callables(module1, (x,))
+module2 = torch.cuda.make_graphed_callables(module2, (h,))
+module3 = torch.cuda.make_graphed_callables(module3, (h,))
+
+real_inputs = [torch.rand_like(x) for _ in range(10)]
+real_targets = [torch.randn(N, D_out, device=" cuda")="" for="" _="" in="" range(10)]="" data,="" target="" zip(real_inputs,="" real_targets):="" optimizer.zero_grad(set_to_none="True)" tmp="module1(data)" #="" forward="" ops="" run="" as="" a="" graph="" if="" tmp.sum().item()="" &gt;="" 0:="" else:="" loss="loss_fn(tmp," target)="" module2's="" or="" module3's="" (whichever="" was="" chosen)="" backward="" ops,="" well="" module1's="" graphs="" loss.backward()="" optimizer.step()="" example="" use="" cases="" mlperf="" v1.0="" training="" workloads="" the="" pytorch="" cuda="" functionality="" instrumental="" scaling="" nvidia’s="" (implemented="" pytorch)="" to="" over="" 4000="" gpus,="" setting="" new="" records="" across="" board.="" we="" illustrate="" below="" two="" where="" most="" significant="" gains="" were="" observed="" with="" of="" graphs,="" yielding="" up="" ~1.7x="" speedup.=""  ="" number="" gpus="" speedup="" from="" cuda-graphs="" mask="" r-cnn="" 272="" 1.70×="" bert="" 4096="" 1.12×="" table="" 1.="" performance="" improvement="" graph.="" deep="" learning="" frameworks="" accelerate="" computations,="" but="" amount="" code="" still="" runs="" on="" cpu="" cores.="" cores="" process="" meta-data="" like="" tensor="" shapes="" order="" prepare="" arguments="" needed="" launch="" gpu="" kernels.="" processing="" is="" fixed="" cost="" while="" computational="" work="" done="" by="" positively="" correlated="" batch="" size.="" large="" sizes,="" overhead="" negligible="" percentage="" total="" time="" cost,="" at="" small="" sizes="" can="" become="" larger="" than="" time.="" when="" that="" happens,="" go="" idle="" between="" kernel="" calls.="" this="" issue="" be="" identified="" an="" nsight="" timeline="" plot="" figure="" 3.="" shows="" “backbone”="" portion="" per-gpu="" size="" 1="" before="" graphing.="" green="" load="" blue="" load.="" profile="" see="" maxed="" out="" 100%="" time,="" there="" lot="" empty="" space="" 3:="" automatically="" eliminate="" are="" static.="" complete="" all="" calls="" captured="" during="" first="" step,="" subsequent="" steps="" entire="" launched="" single="" op,="" eliminating="" overhead,="" 4..="" 4:="" optimization="" graphing,="" kernels="" tightly="" packed="" and="" utilization="" remains="" high.="" graphed="" now="" 6="" ms="" instead="" 31ms,="" 5x.="" did="" not="" model,="" mostly="" just="" resnet="" backbone,="" which="" resulted="" overall="" ~1.7x.="" increase="" scope="" graph,="" made="" some="" changes="" software="" stack="" cpu-gpu="" synchronization="" points.="" v1.0,="" included="" changing="" implementation="" torch.randperm="" function="" cub="" thrust="" because="" latter="" synchronous="" c++="" template="" library.="" these="" improvements="" available="" latest="" ngc="" container.="" similarly,="" capturing="" accompanying="" overhead.="" results="" 1.12x="" boost="" our="" max-scale="" configuration.="" maximize="" benefits="" it="" important="" keep="" possible.="" achieve="" this,="" modified="" model="" script="" remove="" synchronizations="" execution="" such="" full="" captured.="" furthermore,="" also="" sure="" static="" within="" instance,="" bert,="" only="" specific="" subset="" tokens="" contribute="" function,="" determined="" pre-generated="" tensor.="" extracting="" indices="" valid="" mask,="" using="" gather="" loss,="" dynamic="" shape,="" i.e.="" shape="" constant="" iterations.="" make="" static,="" dynamic-shape="" tensors="" computation,="" used="" indicate="" elements="" valid.="" result,="" require="" since="" has="" involve="" framework’s="" memory="" management="" side.="" static-only="" shapes,="" no="" necessary.="" shown="" 5.="" boolean="" described="" text,="" able="" sized="" nvidia="" dl="" examples="" collection="" benefit="" graphs.="" particularly="" true="" launching="" many="" short="" batches.="" good="" inference="" recommender="" systems.="" present="" preliminary="" benchmark="" recommendation="" (dlrm)="" collection.="" workload="" provides="" speedups="" both="" inference.="" effect="" visible="" very="" overheads="" more="" pronounced.="" being="" actively="" integrated="" into="" other="" scripts="" github="" examples.="" stay="" tuned="" how="" it.="" 6:="" dlrm="" model.="" call="" action:="" v1.10="" provide="" substantial="" comprise="" hence="" bogged="" down="" overheads.="" been="" demonstrated="" efforts,="" optimizing="" models.="" optimizations,="" including="" have="" will="" eventually="" now,="" check="" open-source="" could="" serve="" starting="" point="" action.="" alternatively,="" try="" api="" your="" own="" workloads.="" thank="" nvidian’s="" facebook="" engineers="" their="" discussions="" suggestions:="" karthik="" mandakolathur="" us,="" tomasz="" grel,="" pljoey="" conway,="" arslan="" zulfiqar="" us="" authors="" bios="" vinh="" nguyen="" engineer,="" engineer="" data="" scientist,="" having="" published="" 50="" scientific="" articles="" attracting="" 2500="" citations.="" nvidia,="" his="" spans="" wide="" range="" ai="" applications,="" speech,="" language="" vision="" processing,="" michael="" carilli="" senior="" developer="" technology="" worked="" air="" force="" research="" laboratory="" cfd="" modern="" parallel="" architectures.="" he="" holds="" phd="" physics="" university="" california,="" santa="" barbara.="" member="" team,="" focuses="" making="" fast,="" numerically="" stable,="" easy(er)="" internal="" teams,="" external="" customers,="" community="" users.="" sukru="" burc="" eryilmaz="" architect="" dev="" arch,="" received="" stanford="" university,="" b.s="" bilkent="" university.="" currently="" works="" improving="" end-to-end="" neural="" network="" single-node="" scale="" supercomputer="" scale.="" vartika="" singh="" tech="" partner="" lead="" libraries,="" led="" teams="" working="" confluence="" cloud="" distributed="" computing,="" ai,="" influencing="" design="" strategy="" major="" corporations.="" she="" compiler="" organizations="" developers="" outside="" help="" efficiently="" optimally="" hardware.="" michelle="" lin="" product="" intern,="" pursuing="" undergraduate="" degree="" computer="" science="" business="" administration="" uc="" berkeley.="" managing="" projects="" conducting="" market="" creating="" marketing="" assets="" magnum="" io.="" natalia="" gimelshein="" applied="" facebook.="" core="" partners="" seamlessly="" support="" hardware="" features.="" alban="" desmaison="" studied="" engineering="" machine="" optimization,="" oss="" contributor="" prior="" joining="" main="" responsibilities="" maintaining="" library="" features="" (autograd,="" optim,="" nn)="" better="" general.="" edward="" yang="" cs="" mit="" then="" part="" team="" one="" leading="" contributors="" pytorch.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/cudagraphs-pytorch.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/cudagraphs-pytorch.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerating PyTorch with CUDA Graphs">
+<meta property="og:description" content="Today, we are pleased to announce a new advanced CUDA feature, CUDA Graphs, has been brought to PyTorch. Modern DL frameworks have complicated software stacks that incur significant overheads associated with the submission of each operation to the GPU. When DL workloads are strong-scaled to many GPUs for performance, the time taken by each GPU operation diminishes to just a few microseconds and, in these cases, the high work submission latencies of frameworks often lead to low utilization of the GPU. As GPUs get faster and workloads are scaled to more devices, the likelihood of workloads suffering from these launch-induced stalls increases. To overcome these performance overheads, NVIDIA engineers worked with PyTorch developers to enable CUDA graph execution natively in PyTorch. This design was instrumental in scaling NVIDIA’s MLPerf workloads (implemented in PyTorch) to over 4000 GPUs in order to achieve record-breaking performance.
+
+
+  
+
+
+CUDA graphs support in PyTorch is just one more example of a long collaboration between NVIDIA and Facebook engineers. torch.cuda.amp, for example, trains with half precision while maintaining the network accuracy achieved with single precision and automatically utilizing tensor cores wherever possible. AMP delivers up to 3X higher performance than FP32 with just a few lines of code change. Similarly, NVIDIA’s Megatron-LM was trained using PyTorch on up to 3072 GPUs. In PyTorch, one of the most performant methods to scale-out GPU training is with torch.nn.parallel.DistributedDataParallel coupled with the NVIDIA Collective Communications Library (NCCL) backend.
+
+CUDA Graphs
+
+CUDA Graphs, which made its debut in CUDA 10, let a series of CUDA kernels to be defined and encapsulated as a single unit, i.e., a graph of operations, rather than a sequence of individually-launched operations. It provides a mechanism to launch multiple GPU operations through a single CPU operation, and hence reduces the launching overheads.
+
+The benefits of CUDA graphs can be demonstrated with the simple example in Figure 1. On the top, a sequence of short kernels is launched one-by-one by the CPU. The CPU launching overhead creates a significant gap in between the kernels. If we replace this sequence of kernels with a CUDA graph, initially we will need to spend a little extra time on building the graph and launching the whole graph in one go on the first occasion, but subsequent executions will be very fast, as there will be very little gap between the kernels. The difference is more pronounced when the same sequence of operations is repeated many times, for example, overy many training steps. In that case, the initial costs of building and launching the graph will be amortized over the entire number of training iterations. For a more comprehensive introduction on the topic, see our blog 
+ Getting Started with CUDA Graphs and GTC talk Effortless CUDA Graphs.
+
+
+
+
+	Figure 1. Benefits of using CUDA graphs
+
+
+NCCL support for CUDA graphs
+
+The previously mentioned benefits of reducing launch overheads also extend to NCCL kernel launches. NCCL enables GPU-based collective and P2P communications. With NCCL support for CUDA graphs, we can eliminate the NCCL kernel launch overhead.
+
+Additionally, kernel launch timing can be unpredictable due to various CPU load and operating system factors. Such time skews can be harmful to the performance of NCCL collective operations. With CUDA graphs, kernels are clustered together so that performance is consistent across ranks in a distributed workload. This is especially useful in large clusters where even a single slow node can bring down overall cluster level performance.
+
+For distributed multi-GPU workloads, NCCL is used for collective communications. If we look at training a neural network that leverages data parallelism, without NCCL support for CUDA graphs, we’ll need a separate launch for each of forward/back propagation and NCCL AllReduce. By contrast, with NCCL support for CUDA graphs, we can reduce launch overhead by lumping together the forward/backward propagation and NCCL AllReduce all in a single graph launch.
+
+
+
+
+    Figure 2. Looking at a typical neural network, all the kernel launches for NCCL AllReduce can be bundled into a graph to reduce overhead launch time.
+
+
+PyTorch CUDA Graphs
+
+From PyTorch v1.10, the CUDA graphs functionality is made available as a set of beta APIs.
+
+API overview
+
+PyTorch supports the construction of CUDA graphs using stream capture, which puts a CUDA stream in capture mode. CUDA work issued to a capturing stream doesn’t actually run on the GPU. Instead, the work is recorded in a graph. After capture, the graph can be launched to run the GPU work as many times as needed. Each replay runs the same kernels with the same arguments. For pointer arguments this means the same memory addresses are used. By filling input memory with new data (e.g., from a new batch) before each replay, you can rerun the same work on new data.
+
+Replaying a graph sacrifices the dynamic flexibility of typical eager execution in exchange for greatly reduced CPU overhead. A graph’s arguments and kernels are fixed, so a graph replay skips all layers of argument setup and kernel dispatch, including Python, C++, and CUDA driver overheads. Under the hood, a replay submits the entire graph’s work to the GPU with a single call to cudaGraphLaunch. Kernels in a replay also execute slightly faster on the GPU, but eliding CPU overhead is the main benefit.
+
+You should try CUDA graphs if all or part of your network is graph-safe (usually this means static shapes and static control flow, but see the other constraints) and you suspect its runtime is at least somewhat CPU-limited.
+
+API example
+
+PyTorch exposes graphs via a raw torch.cuda.CUDAGraphclass and two convenience wrappers, torch.cuda.graph and torch.cuda.make_graphed_callables.
+
+torch.cuda.graph is a simple, versatile context manager that captures CUDA work in its context. Before capture, warm up the workload to be captured by running a few eager iterations. Warmup must occur on a side stream. Because the graph reads from and writes to the same memory addresses in every replay, you must maintain long-lived references to tensors that hold input and output data during capture. To run the graph on new input data, copy new data to the capture’s input tensor(s), replay the graph, then read the new output from the capture’s output tensor(s).
+
+If the entire network is capture safe, one can capture and replay the whole network as in the following example.
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+model = torch.nn.Sequential(torch.nn.Linear(D_in, H),
+                            torch.nn.Dropout(p=0.2),
+                            torch.nn.Linear(H, D_out),
+                            torch.nn.Dropout(p=0.1)).cuda()
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+# Placeholders used for capture
+static_input = torch.randn(N, D_in, device='cuda')
+static_target = torch.randn(N, D_out, device='cuda')
+
+# warmup
+# Uses static_input and static_target here for convenience,
+# but in a real setting, because the warmup includes optimizer.step()
+# you must use a few batches of real data.
+s = torch.cuda.Stream()
+s.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(s):
+    for i in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        y_pred = model(static_input)
+        loss = loss_fn(y_pred, static_target)
+        loss.backward()
+        optimizer.step()
+torch.cuda.current_stream().wait_stream(s)
+
+# capture
+g = torch.cuda.CUDAGraph()
+# Sets grads to None before capture, so backward() will create
+# .grad attributes with allocations from the graph's private pool
+optimizer.zero_grad(set_to_none=True)
+with torch.cuda.graph(g):
+    static_y_pred = model(static_input)
+    static_loss = loss_fn(static_y_pred, static_target)
+    static_loss.backward()
+    optimizer.step()
+
+real_inputs = [torch.rand_like(static_input) for _ in range(10)]
+real_targets = [torch.rand_like(static_target) for _ in range(10)]
+
+for data, target in zip(real_inputs, real_targets):
+    # Fills the graph's input memory with new data to compute on
+    static_input.copy_(data)
+    static_target.copy_(target)
+    # replay() includes forward, backward, and step.
+    # You don't even need to call optimizer.zero_grad() between iterations
+    # because the captured backward refills static .grad tensors in place.
+    g.replay()
+    # Params have been updated. static_y_pred, static_loss, and .grad
+    # attributes hold values from computing on this iteration's data.
+
+
+If some of your network is unsafe to capture (e.g., due to dynamic control flow, dynamic shapes, CPU syncs, or essential CPU-side logic), you can run the unsafe part(s) eagerly and use torch.cuda.make_graphed_callables to graph only the capture-safe part(s). This is demonstrated next.
+
+make_graphed_callables accepts callables (functions or nn.Module and returns graphed versions. By default, callables returned by make_graphed_callables are autograd-aware, and can be used in the training loop as direct replacements for the functions or nn.Module you passed. make_graphed_callables internally creates CUDAGraph objects, runs warm up iterations, and maintains static inputs and outputs as needed. Therefore, (unlike with torch.cuda.graph) you don’t need to handle those manually.
+
+In the following example, data-dependent dynamic control flow means the network isn’t capturable end-to-end, but make_graphed_callables() lets us capture and run graph-safe sections as graphs regardless:
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+
+module1 = torch.nn.Linear(D_in, H).cuda()
+module2 = torch.nn.Linear(H, D_out).cuda()
+module3 = torch.nn.Linear(H, D_out).cuda()
+
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(chain(module1.parameters(),
+                                  module2.parameters(),
+                                  module3.parameters()),
+                            lr=0.1)
+
+# Sample inputs used for capture
+# requires_grad state of sample inputs must match
+# requires_grad state of real inputs each callable will see.
+x = torch.randn(N, D_in, device='cuda')
+h = torch.randn(N, H, device='cuda', requires_grad=True)
+
+module1 = torch.cuda.make_graphed_callables(module1, (x,))
+module2 = torch.cuda.make_graphed_callables(module2, (h,))
+module3 = torch.cuda.make_graphed_callables(module3, (h,))
+
+real_inputs = [torch.rand_like(x) for _ in range(10)]
+real_targets = [torch.randn(N, D_out, device=" cuda")="" for="" _="" in="" range(10)]="" data,="" target="" zip(real_inputs,="" real_targets):="" optimizer.zero_grad(set_to_none="True)" tmp="module1(data)" #="" forward="" ops="" run="" as="" a="" graph="" if="" tmp.sum().item()="" &gt;="" 0:="" else:="" loss="loss_fn(tmp," target)="" module2's="" or="" module3's="" (whichever="" was="" chosen)="" backward="" ops,="" well="" module1's="" graphs="" loss.backward()="" optimizer.step()="" example="" use="" cases="" mlperf="" v1.0="" training="" workloads="" the="" pytorch="" cuda="" functionality="" instrumental="" scaling="" nvidia’s="" (implemented="" pytorch)="" to="" over="" 4000="" gpus,="" setting="" new="" records="" across="" board.="" we="" illustrate="" below="" two="" where="" most="" significant="" gains="" were="" observed="" with="" of="" graphs,="" yielding="" up="" ~1.7x="" speedup.=""  ="" number="" gpus="" speedup="" from="" cuda-graphs="" mask="" r-cnn="" 272="" 1.70×="" bert="" 4096="" 1.12×="" table="" 1.="" performance="" improvement="" graph.="" deep="" learning="" frameworks="" accelerate="" computations,="" but="" amount="" code="" still="" runs="" on="" cpu="" cores.="" cores="" process="" meta-data="" like="" tensor="" shapes="" order="" prepare="" arguments="" needed="" launch="" gpu="" kernels.="" processing="" is="" fixed="" cost="" while="" computational="" work="" done="" by="" positively="" correlated="" batch="" size.="" large="" sizes,="" overhead="" negligible="" percentage="" total="" time="" cost,="" at="" small="" sizes="" can="" become="" larger="" than="" time.="" when="" that="" happens,="" go="" idle="" between="" kernel="" calls.="" this="" issue="" be="" identified="" an="" nsight="" timeline="" plot="" figure="" 3.="" shows="" “backbone”="" portion="" per-gpu="" size="" 1="" before="" graphing.="" green="" load="" blue="" load.="" profile="" see="" maxed="" out="" 100%="" time,="" there="" lot="" empty="" space="" 3:="" automatically="" eliminate="" are="" static.="" complete="" all="" calls="" captured="" during="" first="" step,="" subsequent="" steps="" entire="" launched="" single="" op,="" eliminating="" overhead,="" 4..="" 4:="" optimization="" graphing,="" kernels="" tightly="" packed="" and="" utilization="" remains="" high.="" graphed="" now="" 6="" ms="" instead="" 31ms,="" 5x.="" did="" not="" model,="" mostly="" just="" resnet="" backbone,="" which="" resulted="" overall="" ~1.7x.="" increase="" scope="" graph,="" made="" some="" changes="" software="" stack="" cpu-gpu="" synchronization="" points.="" v1.0,="" included="" changing="" implementation="" torch.randperm="" function="" cub="" thrust="" because="" latter="" synchronous="" c++="" template="" library.="" these="" improvements="" available="" latest="" ngc="" container.="" similarly,="" capturing="" accompanying="" overhead.="" results="" 1.12x="" boost="" our="" max-scale="" configuration.="" maximize="" benefits="" it="" important="" keep="" possible.="" achieve="" this,="" modified="" model="" script="" remove="" synchronizations="" execution="" such="" full="" captured.="" furthermore,="" also="" sure="" static="" within="" instance,="" bert,="" only="" specific="" subset="" tokens="" contribute="" function,="" determined="" pre-generated="" tensor.="" extracting="" indices="" valid="" mask,="" using="" gather="" loss,="" dynamic="" shape,="" i.e.="" shape="" constant="" iterations.="" make="" static,="" dynamic-shape="" tensors="" computation,="" used="" indicate="" elements="" valid.="" result,="" require="" since="" has="" involve="" framework’s="" memory="" management="" side.="" static-only="" shapes,="" no="" necessary.="" shown="" 5.="" boolean="" described="" text,="" able="" sized="" nvidia="" dl="" examples="" collection="" benefit="" graphs.="" particularly="" true="" launching="" many="" short="" batches.="" good="" inference="" recommender="" systems.="" present="" preliminary="" benchmark="" recommendation="" (dlrm)="" collection.="" workload="" provides="" speedups="" both="" inference.="" effect="" visible="" very="" overheads="" more="" pronounced.="" being="" actively="" integrated="" into="" other="" scripts="" github="" examples.="" stay="" tuned="" how="" it.="" 6:="" dlrm="" model.="" call="" action:="" v1.10="" provide="" substantial="" comprise="" hence="" bogged="" down="" overheads.="" been="" demonstrated="" efforts,="" optimizing="" models.="" optimizations,="" including="" have="" will="" eventually="" now,="" check="" open-source="" could="" serve="" starting="" point="" action.="" alternatively,="" try="" api="" your="" own="" workloads.="" thank="" nvidian’s="" facebook="" engineers="" their="" discussions="" suggestions:="" karthik="" mandakolathur="" us,="" tomasz="" grel,="" pljoey="" conway,="" arslan="" zulfiqar="" us="" authors="" bios="" vinh="" nguyen="" engineer,="" engineer="" data="" scientist,="" having="" published="" 50="" scientific="" articles="" attracting="" 2500="" citations.="" nvidia,="" his="" spans="" wide="" range="" ai="" applications,="" speech,="" language="" vision="" processing,="" michael="" carilli="" senior="" developer="" technology="" worked="" air="" force="" research="" laboratory="" cfd="" modern="" parallel="" architectures.="" he="" holds="" phd="" physics="" university="" california,="" santa="" barbara.="" member="" team,="" focuses="" making="" fast,="" numerically="" stable,="" easy(er)="" internal="" teams,="" external="" customers,="" community="" users.="" sukru="" burc="" eryilmaz="" architect="" dev="" arch,="" received="" stanford="" university,="" b.s="" bilkent="" university.="" currently="" works="" improving="" end-to-end="" neural="" network="" single-node="" scale="" supercomputer="" scale.="" vartika="" singh="" tech="" partner="" lead="" libraries,="" led="" teams="" working="" confluence="" cloud="" distributed="" computing,="" ai,="" influencing="" design="" strategy="" major="" corporations.="" she="" compiler="" organizations="" developers="" outside="" help="" efficiently="" optimally="" hardware.="" michelle="" lin="" product="" intern,="" pursuing="" undergraduate="" degree="" computer="" science="" business="" administration="" uc="" berkeley.="" managing="" projects="" conducting="" market="" creating="" marketing="" assets="" magnum="" io.="" natalia="" gimelshein="" applied="" facebook.="" core="" partners="" seamlessly="" support="" hardware="" features.="" alban="" desmaison="" studied="" engineering="" machine="" optimization,="" oss="" contributor="" prior="" joining="" main="" responsibilities="" maintaining="" library="" features="" (autograd,="" optim,="" nn)="" better="" general.="" edward="" yang="" cs="" mit="" then="" part="" team="" one="" leading="" contributors="" pytorch.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerating PyTorch with CUDA Graphs">
+<meta name="twitter:description" content="Today, we are pleased to announce a new advanced CUDA feature, CUDA Graphs, has been brought to PyTorch. Modern DL frameworks have complicated software stacks that incur significant overheads associated with the submission of each operation to the GPU. When DL workloads are strong-scaled to many GPUs for performance, the time taken by each GPU operation diminishes to just a few microseconds and, in these cases, the high work submission latencies of frameworks often lead to low utilization of the GPU. As GPUs get faster and workloads are scaled to more devices, the likelihood of workloads suffering from these launch-induced stalls increases. To overcome these performance overheads, NVIDIA engineers worked with PyTorch developers to enable CUDA graph execution natively in PyTorch. This design was instrumental in scaling NVIDIA’s MLPerf workloads (implemented in PyTorch) to over 4000 GPUs in order to achieve record-breaking performance.
+
+
+  
+
+
+CUDA graphs support in PyTorch is just one more example of a long collaboration between NVIDIA and Facebook engineers. torch.cuda.amp, for example, trains with half precision while maintaining the network accuracy achieved with single precision and automatically utilizing tensor cores wherever possible. AMP delivers up to 3X higher performance than FP32 with just a few lines of code change. Similarly, NVIDIA’s Megatron-LM was trained using PyTorch on up to 3072 GPUs. In PyTorch, one of the most performant methods to scale-out GPU training is with torch.nn.parallel.DistributedDataParallel coupled with the NVIDIA Collective Communications Library (NCCL) backend.
+
+CUDA Graphs
+
+CUDA Graphs, which made its debut in CUDA 10, let a series of CUDA kernels to be defined and encapsulated as a single unit, i.e., a graph of operations, rather than a sequence of individually-launched operations. It provides a mechanism to launch multiple GPU operations through a single CPU operation, and hence reduces the launching overheads.
+
+The benefits of CUDA graphs can be demonstrated with the simple example in Figure 1. On the top, a sequence of short kernels is launched one-by-one by the CPU. The CPU launching overhead creates a significant gap in between the kernels. If we replace this sequence of kernels with a CUDA graph, initially we will need to spend a little extra time on building the graph and launching the whole graph in one go on the first occasion, but subsequent executions will be very fast, as there will be very little gap between the kernels. The difference is more pronounced when the same sequence of operations is repeated many times, for example, overy many training steps. In that case, the initial costs of building and launching the graph will be amortized over the entire number of training iterations. For a more comprehensive introduction on the topic, see our blog 
+ Getting Started with CUDA Graphs and GTC talk Effortless CUDA Graphs.
+
+
+
+
+	Figure 1. Benefits of using CUDA graphs
+
+
+NCCL support for CUDA graphs
+
+The previously mentioned benefits of reducing launch overheads also extend to NCCL kernel launches. NCCL enables GPU-based collective and P2P communications. With NCCL support for CUDA graphs, we can eliminate the NCCL kernel launch overhead.
+
+Additionally, kernel launch timing can be unpredictable due to various CPU load and operating system factors. Such time skews can be harmful to the performance of NCCL collective operations. With CUDA graphs, kernels are clustered together so that performance is consistent across ranks in a distributed workload. This is especially useful in large clusters where even a single slow node can bring down overall cluster level performance.
+
+For distributed multi-GPU workloads, NCCL is used for collective communications. If we look at training a neural network that leverages data parallelism, without NCCL support for CUDA graphs, we’ll need a separate launch for each of forward/back propagation and NCCL AllReduce. By contrast, with NCCL support for CUDA graphs, we can reduce launch overhead by lumping together the forward/backward propagation and NCCL AllReduce all in a single graph launch.
+
+
+
+
+    Figure 2. Looking at a typical neural network, all the kernel launches for NCCL AllReduce can be bundled into a graph to reduce overhead launch time.
+
+
+PyTorch CUDA Graphs
+
+From PyTorch v1.10, the CUDA graphs functionality is made available as a set of beta APIs.
+
+API overview
+
+PyTorch supports the construction of CUDA graphs using stream capture, which puts a CUDA stream in capture mode. CUDA work issued to a capturing stream doesn’t actually run on the GPU. Instead, the work is recorded in a graph. After capture, the graph can be launched to run the GPU work as many times as needed. Each replay runs the same kernels with the same arguments. For pointer arguments this means the same memory addresses are used. By filling input memory with new data (e.g., from a new batch) before each replay, you can rerun the same work on new data.
+
+Replaying a graph sacrifices the dynamic flexibility of typical eager execution in exchange for greatly reduced CPU overhead. A graph’s arguments and kernels are fixed, so a graph replay skips all layers of argument setup and kernel dispatch, including Python, C++, and CUDA driver overheads. Under the hood, a replay submits the entire graph’s work to the GPU with a single call to cudaGraphLaunch. Kernels in a replay also execute slightly faster on the GPU, but eliding CPU overhead is the main benefit.
+
+You should try CUDA graphs if all or part of your network is graph-safe (usually this means static shapes and static control flow, but see the other constraints) and you suspect its runtime is at least somewhat CPU-limited.
+
+API example
+
+PyTorch exposes graphs via a raw torch.cuda.CUDAGraphclass and two convenience wrappers, torch.cuda.graph and torch.cuda.make_graphed_callables.
+
+torch.cuda.graph is a simple, versatile context manager that captures CUDA work in its context. Before capture, warm up the workload to be captured by running a few eager iterations. Warmup must occur on a side stream. Because the graph reads from and writes to the same memory addresses in every replay, you must maintain long-lived references to tensors that hold input and output data during capture. To run the graph on new input data, copy new data to the capture’s input tensor(s), replay the graph, then read the new output from the capture’s output tensor(s).
+
+If the entire network is capture safe, one can capture and replay the whole network as in the following example.
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+model = torch.nn.Sequential(torch.nn.Linear(D_in, H),
+                            torch.nn.Dropout(p=0.2),
+                            torch.nn.Linear(H, D_out),
+                            torch.nn.Dropout(p=0.1)).cuda()
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+# Placeholders used for capture
+static_input = torch.randn(N, D_in, device='cuda')
+static_target = torch.randn(N, D_out, device='cuda')
+
+# warmup
+# Uses static_input and static_target here for convenience,
+# but in a real setting, because the warmup includes optimizer.step()
+# you must use a few batches of real data.
+s = torch.cuda.Stream()
+s.wait_stream(torch.cuda.current_stream())
+with torch.cuda.stream(s):
+    for i in range(3):
+        optimizer.zero_grad(set_to_none=True)
+        y_pred = model(static_input)
+        loss = loss_fn(y_pred, static_target)
+        loss.backward()
+        optimizer.step()
+torch.cuda.current_stream().wait_stream(s)
+
+# capture
+g = torch.cuda.CUDAGraph()
+# Sets grads to None before capture, so backward() will create
+# .grad attributes with allocations from the graph's private pool
+optimizer.zero_grad(set_to_none=True)
+with torch.cuda.graph(g):
+    static_y_pred = model(static_input)
+    static_loss = loss_fn(static_y_pred, static_target)
+    static_loss.backward()
+    optimizer.step()
+
+real_inputs = [torch.rand_like(static_input) for _ in range(10)]
+real_targets = [torch.rand_like(static_target) for _ in range(10)]
+
+for data, target in zip(real_inputs, real_targets):
+    # Fills the graph's input memory with new data to compute on
+    static_input.copy_(data)
+    static_target.copy_(target)
+    # replay() includes forward, backward, and step.
+    # You don't even need to call optimizer.zero_grad() between iterations
+    # because the captured backward refills static .grad tensors in place.
+    g.replay()
+    # Params have been updated. static_y_pred, static_loss, and .grad
+    # attributes hold values from computing on this iteration's data.
+
+
+If some of your network is unsafe to capture (e.g., due to dynamic control flow, dynamic shapes, CPU syncs, or essential CPU-side logic), you can run the unsafe part(s) eagerly and use torch.cuda.make_graphed_callables to graph only the capture-safe part(s). This is demonstrated next.
+
+make_graphed_callables accepts callables (functions or nn.Module and returns graphed versions. By default, callables returned by make_graphed_callables are autograd-aware, and can be used in the training loop as direct replacements for the functions or nn.Module you passed. make_graphed_callables internally creates CUDAGraph objects, runs warm up iterations, and maintains static inputs and outputs as needed. Therefore, (unlike with torch.cuda.graph) you don’t need to handle those manually.
+
+In the following example, data-dependent dynamic control flow means the network isn’t capturable end-to-end, but make_graphed_callables() lets us capture and run graph-safe sections as graphs regardless:
+
+N, D_in, H, D_out = 640, 4096, 2048, 1024
+
+module1 = torch.nn.Linear(D_in, H).cuda()
+module2 = torch.nn.Linear(H, D_out).cuda()
+module3 = torch.nn.Linear(H, D_out).cuda()
+
+loss_fn = torch.nn.MSELoss()
+optimizer = torch.optim.SGD(chain(module1.parameters(),
+                                  module2.parameters(),
+                                  module3.parameters()),
+                            lr=0.1)
+
+# Sample inputs used for capture
+# requires_grad state of sample inputs must match
+# requires_grad state of real inputs each callable will see.
+x = torch.randn(N, D_in, device='cuda')
+h = torch.randn(N, H, device='cuda', requires_grad=True)
+
+module1 = torch.cuda.make_graphed_callables(module1, (x,))
+module2 = torch.cuda.make_graphed_callables(module2, (h,))
+module3 = torch.cuda.make_graphed_callables(module3, (h,))
+
+real_inputs = [torch.rand_like(x) for _ in range(10)]
+real_targets = [torch.randn(N, D_out, device=" cuda")="" for="" _="" in="" range(10)]="" data,="" target="" zip(real_inputs,="" real_targets):="" optimizer.zero_grad(set_to_none="True)" tmp="module1(data)" #="" forward="" ops="" run="" as="" a="" graph="" if="" tmp.sum().item()="" &gt;="" 0:="" else:="" loss="loss_fn(tmp," target)="" module2's="" or="" module3's="" (whichever="" was="" chosen)="" backward="" ops,="" well="" module1's="" graphs="" loss.backward()="" optimizer.step()="" example="" use="" cases="" mlperf="" v1.0="" training="" workloads="" the="" pytorch="" cuda="" functionality="" instrumental="" scaling="" nvidia’s="" (implemented="" pytorch)="" to="" over="" 4000="" gpus,="" setting="" new="" records="" across="" board.="" we="" illustrate="" below="" two="" where="" most="" significant="" gains="" were="" observed="" with="" of="" graphs,="" yielding="" up="" ~1.7x="" speedup.=""  ="" number="" gpus="" speedup="" from="" cuda-graphs="" mask="" r-cnn="" 272="" 1.70×="" bert="" 4096="" 1.12×="" table="" 1.="" performance="" improvement="" graph.="" deep="" learning="" frameworks="" accelerate="" computations,="" but="" amount="" code="" still="" runs="" on="" cpu="" cores.="" cores="" process="" meta-data="" like="" tensor="" shapes="" order="" prepare="" arguments="" needed="" launch="" gpu="" kernels.="" processing="" is="" fixed="" cost="" while="" computational="" work="" done="" by="" positively="" correlated="" batch="" size.="" large="" sizes,="" overhead="" negligible="" percentage="" total="" time="" cost,="" at="" small="" sizes="" can="" become="" larger="" than="" time.="" when="" that="" happens,="" go="" idle="" between="" kernel="" calls.="" this="" issue="" be="" identified="" an="" nsight="" timeline="" plot="" figure="" 3.="" shows="" “backbone”="" portion="" per-gpu="" size="" 1="" before="" graphing.="" green="" load="" blue="" load.="" profile="" see="" maxed="" out="" 100%="" time,="" there="" lot="" empty="" space="" 3:="" automatically="" eliminate="" are="" static.="" complete="" all="" calls="" captured="" during="" first="" step,="" subsequent="" steps="" entire="" launched="" single="" op,="" eliminating="" overhead,="" 4..="" 4:="" optimization="" graphing,="" kernels="" tightly="" packed="" and="" utilization="" remains="" high.="" graphed="" now="" 6="" ms="" instead="" 31ms,="" 5x.="" did="" not="" model,="" mostly="" just="" resnet="" backbone,="" which="" resulted="" overall="" ~1.7x.="" increase="" scope="" graph,="" made="" some="" changes="" software="" stack="" cpu-gpu="" synchronization="" points.="" v1.0,="" included="" changing="" implementation="" torch.randperm="" function="" cub="" thrust="" because="" latter="" synchronous="" c++="" template="" library.="" these="" improvements="" available="" latest="" ngc="" container.="" similarly,="" capturing="" accompanying="" overhead.="" results="" 1.12x="" boost="" our="" max-scale="" configuration.="" maximize="" benefits="" it="" important="" keep="" possible.="" achieve="" this,="" modified="" model="" script="" remove="" synchronizations="" execution="" such="" full="" captured.="" furthermore,="" also="" sure="" static="" within="" instance,="" bert,="" only="" specific="" subset="" tokens="" contribute="" function,="" determined="" pre-generated="" tensor.="" extracting="" indices="" valid="" mask,="" using="" gather="" loss,="" dynamic="" shape,="" i.e.="" shape="" constant="" iterations.="" make="" static,="" dynamic-shape="" tensors="" computation,="" used="" indicate="" elements="" valid.="" result,="" require="" since="" has="" involve="" framework’s="" memory="" management="" side.="" static-only="" shapes,="" no="" necessary.="" shown="" 5.="" boolean="" described="" text,="" able="" sized="" nvidia="" dl="" examples="" collection="" benefit="" graphs.="" particularly="" true="" launching="" many="" short="" batches.="" good="" inference="" recommender="" systems.="" present="" preliminary="" benchmark="" recommendation="" (dlrm)="" collection.="" workload="" provides="" speedups="" both="" inference.="" effect="" visible="" very="" overheads="" more="" pronounced.="" being="" actively="" integrated="" into="" other="" scripts="" github="" examples.="" stay="" tuned="" how="" it.="" 6:="" dlrm="" model.="" call="" action:="" v1.10="" provide="" substantial="" comprise="" hence="" bogged="" down="" overheads.="" been="" demonstrated="" efforts,="" optimizing="" models.="" optimizations,="" including="" have="" will="" eventually="" now,="" check="" open-source="" could="" serve="" starting="" point="" action.="" alternatively,="" try="" api="" your="" own="" workloads.="" thank="" nvidian’s="" facebook="" engineers="" their="" discussions="" suggestions:="" karthik="" mandakolathur="" us,="" tomasz="" grel,="" pljoey="" conway,="" arslan="" zulfiqar="" us="" authors="" bios="" vinh="" nguyen="" engineer,="" engineer="" data="" scientist,="" having="" published="" 50="" scientific="" articles="" attracting="" 2500="" citations.="" nvidia,="" his="" spans="" wide="" range="" ai="" applications,="" speech,="" language="" vision="" processing,="" michael="" carilli="" senior="" developer="" technology="" worked="" air="" force="" research="" laboratory="" cfd="" modern="" parallel="" architectures.="" he="" holds="" phd="" physics="" university="" california,="" santa="" barbara.="" member="" team,="" focuses="" making="" fast,="" numerically="" stable,="" easy(er)="" internal="" teams,="" external="" customers,="" community="" users.="" sukru="" burc="" eryilmaz="" architect="" dev="" arch,="" received="" stanford="" university,="" b.s="" bilkent="" university.="" currently="" works="" improving="" end-to-end="" neural="" network="" single-node="" scale="" supercomputer="" scale.="" vartika="" singh="" tech="" partner="" lead="" libraries,="" led="" teams="" working="" confluence="" cloud="" distributed="" computing,="" ai,="" influencing="" design="" strategy="" major="" corporations.="" she="" compiler="" organizations="" developers="" outside="" help="" efficiently="" optimally="" hardware.="" michelle="" lin="" product="" intern,="" pursuing="" undergraduate="" degree="" computer="" science="" business="" administration="" uc="" berkeley.="" managing="" projects="" conducting="" market="" creating="" marketing="" assets="" magnum="" io.="" natalia="" gimelshein="" applied="" facebook.="" core="" partners="" seamlessly="" support="" hardware="" features.="" alban="" desmaison="" studied="" engineering="" machine="" optimization,="" oss="" contributor="" prior="" joining="" main="" responsibilities="" maintaining="" library="" features="" (autograd,="" optim,="" nn)="" better="" general.="" edward="" yang="" cs="" mit="" then="" part="" team="" one="" leading="" contributors="" pytorch.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年10月26日</p>
+            <h1>
+                <a class="blog-title">使用 CUDA 图加速 PyTorch</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Vinh Nguyen, Michael Carilli, Sukru Burc Eryilmaz, Vartika Singh, Michelle Lin, Natalia Gimelshein, Alban Desmaison, Edward Yang 著</p>
+                    <p>今天，我们很高兴地宣布，PyTorch 已引入一项新的高级 CUDA 功能——CUDA 图。现代深度学习框架具有复杂的软件堆栈，每个操作提交到 GPU 都会产生显著的开销。当深度学习工作负载在多个 GPU 上进行强扩展以获得性能时，每个 GPU 操作所需的时间减少到仅有几微秒，在这些情况下，框架的高工作提交延迟往往导致 GPU 利用率低下。随着 GPU 速度的提高和工作负载扩展到更多设备，工作负载因启动引起的停滞而受到影响的可能性增加。为了克服这些性能开销，NVIDIA 工程师与 PyTorch 开发者合作，在 PyTorch 中原生启用 CUDA 图执行。这种设计对于将 NVIDIA 的 MLPerf 工作负载（在 PyTorch 中实现）扩展到超过 4000 个 GPU 以实现<a href="https://blogs.nvidia.com/blog/2021/06/30/mlperf-ai-training-partners/">创纪录的性能</a>至关重要。</p>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/cudagraphs-pytorch.png" width="100%">
+</div>
+
+<p>PyTorch 对 CUDA 图的支持只是 NVIDIA 和 Facebook 工程师长期合作的一个例子。例如，<a href="https://pytorch.org/docs/stable/amp.html">torch.cuda.amp</a> 可以在保持与单精度相同的网络精度的情况下以半精度进行训练，并尽可能自动利用张量核心。AMP 只需更改几行代码即可将性能提高 3 倍以上。同样，NVIDIA 的 <a href="https://github.com/NVIDIA/Megatron-LM">Megatron-LM</a> 也是使用 PyTorch 在最多 3072 个 GPU 上训练的。在 PyTorch 中，最有效的扩展 GPU 训练的方法之一是使用 <a href="https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html#torch.nn.parallel.DistributedDataParallel">torch.nn.parallel.DistributedDataParallel</a> 与 NVIDIA 集体通信库（<a href="https://developer.nvidia.com/nccl">NCCL</a>）后端相结合。</p>
+
+<h1 id="cuda-graphs">CUDA 图</h1>
+
+<p><a href="https://developer.nvidia.com/blog/cuda-10-features-revealed/">CUDA 图</a>首次在 CUDA 10 中亮相，允许将一系列 CUDA 内核定义并封装为一个单一单元，即操作图，而不是一系列单独启动的操作。它提供了一种通过单个 CPU 操作启动多个 GPU 操作的方法，从而减少了启动开销。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">使用 CUDA 图的优点可以通过图 1 中的简单示例进行展示。在顶部，CPU 逐个启动一系列短内核。CPU 启动开销在内核之间产生了显著的差距。如果我们用 CUDA 图替换这个内核序列，最初我们需要花费一点额外的时间来构建图并在第一次一次性启动整个图，但随后的执行将会非常快，因为内核之间的间隔非常小。当相同的操作序列重复多次时，这种差异更为明显，例如，在许多训练步骤中。在这种情况下，构建和启动图的开销将分摊在整个训练迭代次数上。有关该主题的更全面介绍，请参阅我们的博客
+<a href="https://developer.nvidia.com/blog/cuda-graphs">开始使用 CUDA 图 </a> 和 GTC 演讲 <a href="https://www.nvidia.com/en-us/on-demand/session/gtcspring21-s32082/"> 轻松使用 CUDA 图 </a>。</font></font></font></p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/cuda-image-2.png" alt="Cuda graphs reduce launching overhead by bundling multiple GPU operations into a single launchable unit, i.e., a graph. On the top, you can see five individual launches; whereas on the bottom, with CUDA graphs, they are all bundled into a single launch, reducing overhead." width="100%">
+<br>图 1. 使用 CUDA 图的优点</p>
+
+<h2 id="nccl-support-for-cuda-graphs">NCCL 对 CUDA 图的支持</h2>
+
+<p>前文提到的减少启动开销的好处也适用于 NCCL 内核启动。NCCL 支持基于 GPU 的集体和 P2P 通信。通过 <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/cudagraph.html">NCCL 对 CUDA 图的支持 </a>，我们可以消除 NCCL 内核启动开销。</p>
+
+<p>此外，由于各种 CPU 负载和操作系统因素，内核启动时间可能不可预测。这种时间偏差可能对 NCCL 集体操作的性能有害。使用 CUDA 图，内核被聚集在一起，以确保分布式工作负载中各个 rank 的性能一致。这在大型集群中特别有用，因为即使是单个慢节点也可能降低整体集群级别的性能。</p>
+
+<p>对于分布式多 GPU 工作负载，NCCL 用于集体通信。如果我们观察训练利用数据并行的神经网络，如果没有 NCCL 对 CUDA 图的支持，我们需要为前向/反向传播和 NCCL AllReduce 分别启动。相比之下，有了 NCCL 对 CUDA 图的支持，我们可以通过将前向/反向传播和 NCCL AllReduce 全部合并到单个图启动中，来减少启动开销。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/cuda-image-3.png" alt="With NCCL CUDA graph support, all the kernel launches for NCCL AllReduce for  the forward/backward propagation can be bundled into a graph to reduce overhead launch time." width="100%">
+<br>图 2. 观察一个典型的神经网络，所有 NCCL AllReduce 的内核启动都可以打包成一个图，以减少启动开销时间。</p>
+
+<h1 id="pytorch-cuda-graphs">PyTorch CUDA 图</h1>
+
+<p>从 PyTorch v1.10 版本开始，CUDA 图功能作为一组测试版 API 提供。</p>
+
+<h3 id="api-overview">API 概述</h3>
+
+<p>PyTorch 支持使用<a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#creating-a-graph-using-stream-capture">流捕获</a>构建 CUDA 图，这会将 CUDA 流置于捕获模式。分配给捕获流的 CUDA 工作实际上不会在 GPU 上运行。相反，工作被记录在图中。捕获后，可以启动图以按需多次运行 GPU 工作。每次重放都会运行相同的内核和相同的参数。对于指针参数，这意味着使用相同的内存地址。通过在每个重放之前用新数据（例如，来自新批次的）填充输入内存，可以在新数据上重新运行相同的工作。</p>
+
+<p>重放图以换取大大降低的 CPU 开销，牺牲了典型即时执行（eager execution）的动态灵活性。图的参数和内核是固定的，因此图重放跳过了所有参数设置和内核调度的层次，包括 Python、C++和 CUDA 驱动程序的开销。在底层，重放通过一次调用 <a href="https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__GRAPH.html#group__CUDART__GRAPH_1g1accfe1da0c605a577c22d9751a09597">cudaGraphLaunch</a> 将整个图的工作提交给 GPU。重放中的内核在 GPU 上执行也略快，但省略 CPU 开销是主要好处。</p>
+
+<p>如果您的网络全部或部分是图安全的（通常这意味着静态形状和静态控制流，但请参阅其他<a href="https://pytorch.org/docs/master/notes/cuda.html#constraints">约束 </a>），并且您怀疑其运行时间至少部分受 CPU 限制，那么您应该尝试使用 CUDA 图。</p>
+
+<h3 id="api-example">API 示例</h3>
+
+<p>PyTorch 通过原始 <a href="https://pytorch.org/docs/master/generated/torch.cuda.graph.html#torch.cuda.graph"><code class="language-plaintext highlighter-rouge">torch.cuda.CUDAGraph</code></a> 类以及两个便利包装器 <a href="https://pytorch.org/docs/master/generated/torch.cuda.graph.html#torch.cuda.graph"><code class="language-plaintext highlighter-rouge">torch.cuda.graph</code></a> 和 <a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"> <code class="language-plaintext highlighter-rouge">torch.cuda.make_graphed_callables</code> </a> 公开图。</p>
+
+<p><a href="https://pytorch.org/docs/master/generated/torch.cuda.graph.html#torch.cuda.graph"><code class="language-plaintext highlighter-rouge">torch.cuda.graph</code></a> 是一个简单、通用的上下文管理器，它捕获上下文中的 CUDA 工作。在捕获之前，通过运行几个急切迭代来预热要捕获的工作负载。预热必须在侧流上执行。因为图在每次重放时都从相同的内存地址读取并写入，所以您必须在捕获期间维护对包含输入和输出数据的张量的长期引用。要在新的输入数据上运行图，请将新数据复制到捕获的输入张量（s），重放图，然后从捕获的输出张量（s）读取新的输出。</p>
+
+<p>如果整个网络是捕获安全的，就可以像以下示例那样捕获和重放整个网络。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">N</span><span class="p">,</span> <span class="n">D_in</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_out</span> <span class="o">=</span> <span class="mi">640</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="mi">1024</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">D_in</span><span class="p">,</span> <span class="n">H</span><span class="p">),</span>
+                            <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="mf">0.2</span><span class="p">),</span>
+                            <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">H</span><span class="p">,</span> <span class="n">D_out</span><span class="p">),</span>
+                            <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)).</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">loss_fn</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">MSELoss</span><span class="p">()</span>
+<span class="n">optimizer</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">SGD</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+
+<span class="c1"># Placeholders used for capture
+</span><span class="n">static_input</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">D_in</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">)</span>
+<span class="n">static_target</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">D_out</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">)</span>
+
+<span class="c1"># warmup
+# Uses static_input and static_target here for convenience,
+# but in a real setting, because the warmup includes optimizer.step()
+# you must use a few batches of real data.
+</span><span class="n">s</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">Stream</span><span class="p">()</span>
+<span class="n">s</span><span class="p">.</span><span class="n">wait_stream</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">current_stream</span><span class="p">())</span>
+<span class="k">with</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">stream</span><span class="p">(</span><span class="n">s</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
+        <span class="n">optimizer</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">(</span><span class="n">set_to_none</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+        <span class="n">y_pred</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">static_input</span><span class="p">)</span>
+        <span class="n">loss</span> <span class="o">=</span> <span class="n">loss_fn</span><span class="p">(</span><span class="n">y_pred</span><span class="p">,</span> <span class="n">static_target</span><span class="p">)</span>
+        <span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+        <span class="n">optimizer</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+<span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">current_stream</span><span class="p">().</span><span class="n">wait_stream</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+
+<span class="c1"># capture
+</span><span class="n">g</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">CUDAGraph</span><span class="p">()</span>
+<span class="c1"># Sets grads to None before capture, so backward() will create
+# .grad attributes with allocations from the graph's private pool
+</span><span class="n">optimizer</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">(</span><span class="n">set_to_none</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="k">with</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">graph</span><span class="p">(</span><span class="n">g</span><span class="p">):</span>
+    <span class="n">static_y_pred</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">static_input</span><span class="p">)</span>
+    <span class="n">static_loss</span> <span class="o">=</span> <span class="n">loss_fn</span><span class="p">(</span><span class="n">static_y_pred</span><span class="p">,</span> <span class="n">static_target</span><span class="p">)</span>
+    <span class="n">static_loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+    <span class="n">optimizer</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+
+<span class="n">real_inputs</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand_like</span><span class="p">(</span><span class="n">static_input</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+<span class="n">real_targets</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand_like</span><span class="p">(</span><span class="n">static_target</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+
+<span class="k">for</span> <span class="n">data</span><span class="p">,</span> <span class="n">target</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">real_inputs</span><span class="p">,</span> <span class="n">real_targets</span><span class="p">):</span>
+    <span class="c1"># Fills the graph's input memory with new data to compute on
+</span>    <span class="n">static_input</span><span class="p">.</span><span class="n">copy_</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+    <span class="n">static_target</span><span class="p">.</span><span class="n">copy_</span><span class="p">(</span><span class="n">target</span><span class="p">)</span>
+    <span class="c1"># replay() includes forward, backward, and step.
+</span>    <span class="c1"># You don't even need to call optimizer.zero_grad() between iterations
+</span>    <span class="c1"># because the captured backward refills static .grad tensors in place.
+</span>    <span class="n">g</span><span class="p">.</span><span class="n">replay</span><span class="p">()</span>
+    <span class="c1"># Params have been updated. static_y_pred, static_loss, and .grad
+</span>    <span class="c1"># attributes hold values from computing on this iteration's data.
+</span></code></pre></div></div>
+
+<p>如果您的网络中某些部分不安全进行捕获（例如，由于动态控制流、动态形状、CPU 同步或必要的 CPU 端逻辑），您可以提前运行不安全部分，并使用 <a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"> <code class="language-plaintext highlighter-rouge">torch.cuda.make_graphed_callables</code> </a> 来仅图形化捕获安全的部分。这将在下面进行演示。</p>
+
+<p><a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"><code class="language-plaintext highlighter-rouge">make_graphed_callables</code></a> 接受可调用对象（函数或 <a href="https://pytorch.org/docs/master/generated/torch.nn.Module.html#torch.nn.Module"><code class="language-plaintext highlighter-rouge">nn.Module</code></a>）并返回图形化版本。默认情况下，<a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"><code class="language-plaintext highlighter-rouge">make_graphed_callables</code></a> 返回的可调用对象是 autograd-aware 的，可以用作训练循环中的函数或 <a href="https://pytorch.org/docs/master/generated/torch.nn.Module.html#torch.nn.Module"><code class="language-plaintext highlighter-rouge">nn.Module</code></a> 的直接替代。内部创建 <a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"><code class="language-plaintext highlighter-rouge">make_graphed_callables</code></a> 的 <a href="https://pytorch.org/docs/master/generated/torch.cuda.CUDAGraph.html#torch.cuda.CUDAGraph"><code class="language-plaintext highlighter-rouge">CUDAGraph</code></a> 对象，运行预热迭代，并按需维护静态输入和输出。因此，与 <a href="https://pytorch.org/docs/master/generated/torch.cuda.graph.html#torch.cuda.graph"><code class="language-plaintext highlighter-rouge">torch.cuda.graph</code></a> 不同，您无需手动处理这些操作。</p>
+
+<p>在以下示例中，数据依赖的动态控制流意味着网络无法端到端捕获，但 <a href="https://pytorch.org/docs/master/generated/torch.cuda.make_graphed_callables.html#torch.cuda.make_graphed_callables"><code class="language-plaintext highlighter-rouge">make_graphed_callables</code></a>()允许我们捕获并作为图运行图安全部分，无论：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">N</span><span class="p">,</span> <span class="n">D_in</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">D_out</span> <span class="o">=</span> <span class="mi">640</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">2048</span><span class="p">,</span> <span class="mi">1024</span>
+
+<span class="n">module1</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">D_in</span><span class="p">,</span> <span class="n">H</span><span class="p">).</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">module2</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">H</span><span class="p">,</span> <span class="n">D_out</span><span class="p">).</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">module3</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">H</span><span class="p">,</span> <span class="n">D_out</span><span class="p">).</span><span class="n">cuda</span><span class="p">()</span>
+
+<span class="n">loss_fn</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">MSELoss</span><span class="p">()</span>
+<span class="n">optimizer</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">SGD</span><span class="p">(</span><span class="n">chain</span><span class="p">(</span><span class="n">module1</span><span class="p">.</span><span class="n">parameters</span><span class="p">(),</span>
+                                  <span class="n">module2</span><span class="p">.</span><span class="n">parameters</span><span class="p">(),</span>
+                                  <span class="n">module3</span><span class="p">.</span><span class="n">parameters</span><span class="p">()),</span>
+                            <span class="n">lr</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+
+<span class="c1"># Sample inputs used for capture
+# requires_grad state of sample inputs must match
+# requires_grad state of real inputs each callable will see.
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">D_in</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">)</span>
+<span class="n">h</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+<span class="n">module1</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">make_graphed_callables</span><span class="p">(</span><span class="n">module1</span><span class="p">,</span> <span class="p">(</span><span class="n">x</span><span class="p">,))</span>
+<span class="n">module2</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">make_graphed_callables</span><span class="p">(</span><span class="n">module2</span><span class="p">,</span> <span class="p">(</span><span class="n">h</span><span class="p">,))</span>
+<span class="n">module3</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">make_graphed_callables</span><span class="p">(</span><span class="n">module3</span><span class="p">,</span> <span class="p">(</span><span class="n">h</span><span class="p">,))</span>
+
+<span class="n">real_inputs</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+<span class="n">real_targets</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">D_out</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">"cuda"</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)]</span>
+
+<span class="k">for</span> <span class="n">data</span><span class="p">,</span> <span class="n">target</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">real_inputs</span><span class="p">,</span> <span class="n">real_targets</span><span class="p">):</span>
+    <span class="n">optimizer</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">(</span><span class="n">set_to_none</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+    <span class="n">tmp</span> <span class="o">=</span> <span class="n">module1</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>  <span class="c1"># forward ops run as a graph
+</span>
+    <span class="k">if</span> <span class="n">tmp</span><span class="p">.</span><span class="nb">sum</span><span class="p">().</span><span class="n">item</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">tmp</span> <span class="o">=</span> <span class="n">module2</span><span class="p">(</span><span class="n">tmp</span><span class="p">)</span>  <span class="c1"># forward ops run as a graph
+</span>    <span class="k">else</span><span class="p">:</span>
+        <span class="n">tmp</span> <span class="o">=</span> <span class="n">module3</span><span class="p">(</span><span class="n">tmp</span><span class="p">)</span>  <span class="c1"># forward ops run as a graph
+</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">loss_fn</span><span class="p">(</span><span class="n">tmp</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+    <span class="c1"># module2's or module3's (whichever was chosen) backward ops,
+</span>    <span class="c1"># as well as module1's backward ops, run as graphs
+</span>    <span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+    <span class="n">optimizer</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h1 id="example-use-cases">示例用例</h1>
+<h2 id="mlperf-v10-training-workloads">MLPerf v1.0 训练工作负载</h2>
+
+<p>PyTorch CUDA 图功能对于扩展 NVIDIA 的 MLPerf 训练 v1.0 工作负载（在 PyTorch 中实现）至超过 4000 个 GPU 至关重要，创造了全面的新<a href="https://blogs.nvidia.com/blog/2021/06/30/mlperf-ai-training-partners/">记录 </a>。以下展示了两个 MLPerf 工作负载，使用 CUDA 图观察到最显著的性能提升，速度提升高达~1.7 倍。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>&nbsp;</th>
+      <th style="text-align: right">GPU 数量</th>
+      <th style="text-align: right">CUDA 图加速</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Mask R-CNN</td>
+      <td style="text-align: right">272</td>
+      <td style="text-align: right">1.70×</td>
+    </tr>
+    <tr>
+      <td>BERT</td>
+      <td style="text-align: right">4096</td>
+      <td style="text-align: right">1.12×</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>表 1. 使用 PyTorch CUDA 图实现的 MLPerf 训练 v1.0 性能提升。</p>
+
+<h3 id="mask-r-cnn">Mask R-CNN</h3>
+
+<p>深度学习框架使用 GPU 加速计算，但仍有大量代码在 CPU 核心上运行。CPU 核心处理元数据，如张量形状，以准备启动 GPU 内核所需的参数。处理元数据是固定成本，而 GPU 完成的计算成本与批大小呈正相关。对于大批大小，CPU 开销占总运行时间成本的百分比可以忽略不计，但在小批大小下，CPU 开销可能大于 GPU 运行时间。当这种情况发生时，GPU 在内核调用之间会空闲。这个问题可以在图 3 的 NSight 时间线图中识别出来。下面的图显示了在绘图之前的 Mask R-CNN 的“骨干”部分，每个 GPU 的批大小为 1。绿色部分表示 CPU 负载，蓝色部分表示 GPU 负载。在这个配置文件中，我们看到 CPU 负载达到 100%，而 GPU 大部分时间处于空闲状态，GPU 内核之间有很多空白空间。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/cuda-image-4.png" alt="NSight timeline plot of Mask R-CNN shows that the CPU is maxed out at 100% load while GPU is idle most of the time, and a lot of empty space between GPU kernels" width="100%">
+<br>图 3：Mask R-CNN 的 NSight 时间线图</p>
+
+<p>当张量形状为静态时，CUDA 图可以自动消除 CPU 开销。在第一步中，捕获了所有内核调用的完整图，在后续步骤中，整个图通过一个单一的操作启动，消除了所有 CPU 开销，如图 4 所示。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/cuda-image-5.png" alt="With CUDA graph, the entire graph is launched with a single op, eliminating all the CPU overhead" width="100%">
+<br>图 4：CUDA 图优化</p>
+
+<p>通过绘图，我们可以看到 GPU 内核紧密排列，GPU 利用率保持较高。绘图部分现在运行时间为 6 毫秒，而不是 31 毫秒，速度提高了 5 倍。我们没有绘制整个模型，主要是 ResNet 骨干网络，这导致了整体速度提高了约 1.7 倍。为了扩大绘图范围，我们在软件堆栈中做了一些修改，消除了某些 CPU-GPU 同步点。在 MLPerf v1.0 中，这项工作包括将 torch.randperm 函数的实现从 Thrust 改为 CUB，因为后者是一个同步的 C++模板库。这些改进已包含在最新的 NGC 容器中。</p>
+
+<h3 id="bert">BERT</h3>
+
+<p>同样，通过图捕获模型，我们消除了 CPU 开销和伴随的同步开销。CUDA 图实现使我们的最大规模 BERT 配置性能提升了 1.12 倍。为了最大限度地发挥 CUDA 图的优势，需要尽可能扩大图的范围。为了实现这一点，我们修改了模型脚本，在执行过程中移除了 CPU-GPU 同步，以便整个模型可以被图捕获。此外，我们还确保了在图的作用域内，执行过程中的张量大小是静态的。例如，在 BERT 中，只有特定的总标记子集对损失函数有贡献，由预先生成的掩码张量确定。从该掩码中提取有效标记的索引，并使用这些索引收集对损失有贡献的标记，结果得到一个具有动态形状的张量，即形状在迭代中不保持恒定。为了确保张量大小是静态的，在损失计算中，我们没有使用动态形状的张量，而是使用了静态形状的张量，其中使用掩码来指示哪些元素是有效的。因此，所有张量的形状都是静态的。 动态形状也需要 CPU-GPU 同步，因为它需要在 CPU 端涉及框架的内存管理。对于仅静态形状，不需要 CPU-GPU 同步。这如图 5 所示。</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/cuda-image-6.png" width="100%" alt="Synchronization free training eliminates CPU synchronization">
+	<br>如文中所述，通过使用固定大小的张量和布尔掩码，我们可以消除动态大小张量所需的 CPU 同步。</p>
+
+<h2 id="cuda-graphs-in-nvidia-dl-examples-collection">NVIDIA 深度学习示例库中的 CUDA 图</h2>
+
+<p>单 GPU 的使用案例也可以从使用 CUDA 图中获得好处。这对于启动许多短内核和小批次的负载尤其如此。一个很好的例子是推荐系统的训练和推理。以下是我们从深度学习示例库中提供的 NVIDIA 深度学习推荐模型（DLRM）的初步基准测试结果。对于这个负载使用 CUDA 图可以显著提高训练和推理的速度。当使用非常小的批次大小时，这种效果尤为明显，因为 CPU 开销更为明显。</p>
+
+<p>CUDA 图形正在积极集成到其他 PyTorch NGC 模型脚本和 NVIDIA Github 深度学习示例中。敬请期待更多使用示例。</p>
+
+<p align="center">
+	<img src="http://localhost:4000/assets/images/cuda-image-7.png" alt="CUDA graphs optimization for the DLRM model. The impact is larger for smaller batch sizes where CPU overheads are more pronounced." width="100%">
+</p>
+<p align="center">
+	<img src="http://localhost:4000/assets/images/cuda-image-8.png" alt="CUDA graphs optimization for the DLRM model. The impact is larger for smaller batch sizes where CPU overheads are more pronounced." width="100%">
+<br>图 6：DLRM 模型的 CUDA 图形优化。</p>
+
+<h1 id="call-to-action-cuda-graphs-in-pytorch-v110">呼吁行动：PyTorch v1.10 中的 CUDA 图形</h1>
+
+<p>CUDA 图形可以为包含许多小型 GPU 内核的工作负载提供显著的好处，因为这些工作负载通常被 CPU 启动开销拖累。这一点在我们的 MLPerf 努力中得到了证明，我们正在优化 PyTorch 模型。包括 CUDA 图形在内的许多这些优化最终将被集成到我们的 PyTorch NGC 模型脚本<a href="https://ngc.nvidia.com/catalog/collections?orderBy=scoreDESC&amp;pageNumber=0&amp;query=pytorch&amp;quickFilter=&amp;filters=">集合</a>和 NVIDIA <a href="https://github.com/NVIDIA/DeepLearningExamples/tree/master/PyTorch/">Github 深度学习示例</a>中。目前，您可以查看我们的开源 MLPerf 训练 v1.0 <a href="https://github.com/mlcommons/training_results_v1.0/tree/master/NVIDIA"> 实现 </a>，这可以作为观察 CUDA 图形实际应用的良好起点。或者，尝试在您自己的工作负载上使用 PyTorch CUDA 图形 API。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">我们感谢许多 NVIDIA 和 Facebook 的工程师就他们的讨论和建议表示感谢：
+<a href="mailto:karthik@nvidia.com">曼达科拉图尔·卡西克 US</a>,
+<a href="mailto:tgrel@nvidia.com">托马斯·格雷尔 </a>,
+<a href="mailto:jconway@nvidia.com">PLJoey 康威 </a>,
+<a href="mailto:azulfiqar@nvidia.com">Arslan Zulfiqar US</a></font></font></font></p>
+
+<h2 id="authors-bios">作者简介</h2>
+
+<p><a href="mailto:vinhn@nvidia.com"><strong>吴英</strong></a><em>深度学习工程师，英伟达</em></p>
+
+<p>吴英是一位深度学习工程师和数据科学家，发表了50多篇科学论文，获得了2500多次引用。在英伟达，他的工作涵盖了广泛的深度学习和人工智能应用，包括语音、语言和视觉处理以及推荐系统。</p>
+
+<p><a href="mailto:mcarilli@nvidia.com"><strong>迈克尔·卡里利</strong></a><em>高级技术工程师，英伟达</em></p>
+
+<p>迈克尔曾在空军研究实验室工作，优化现代并行架构的 CFD 代码。他拥有加州大学圣塔芭芭拉分校的计算物理学博士学位。作为 PyTorch 团队的一员，他专注于使 GPU 训练对内部团队、外部客户和 PyTorch 社区用户更快、数值更稳定、更容易使用。</p>
+
+<p><a href="mailto:seryilmaz@nvidia.com"><strong>苏克鲁·布尔奇·埃里伊尔马兹</strong></a><em>开发架构高级架构师，英伟达</em></p>
+
+<p>苏克鲁在斯坦福大学获得博士学位，在比尔肯特大学获得学士学位。他目前致力于在单节点规模和超级计算机规模上提高神经网络训练的端到端性能。</p>
+
+<p><a href="mailto:vartikas@nvidia.com"><strong>瓦蒂卡·辛格 </strong></a><em>DL 框架和库的技术合作伙伴负责人，英伟达</em></p>
+
+<p>瓦蒂卡领导了在云计算和分布式计算、扩展和人工智能交汇处的团队，影响了大型企业的设计和战略。她目前与英伟达内部和外部的主要框架、编译器组织和开发者合作，帮助设计在英伟达硬件上高效和优化地工作。</p>
+
+<p><a href="mailto:miclin@nvidia.com"><strong>米歇尔·林</strong></a><em>产品实习生，英伟达</em></p>
+
+<p>米歇尔目前在加州大学伯克利分校攻读计算机科学和商业管理学士学位。她目前负责执行项目，如进行市场研究和为 Magnum IO 创建营销资料。</p>
+
+<p><a href="mailto:ngimel@fb.com"><strong>娜塔莉亚·吉梅尔申</strong></a><em>应用研究科学家，Facebook</em></p>
+
+<p>娜塔莉亚·吉梅尔申曾在 NVIDIA 和 Facebook 从事 GPU 性能优化工作，针对深度学习负载。她目前是 PyTorch 核心团队的一员，与合作伙伴一起无缝支持新的软件和硬件功能。</p>
+
+<p><a href="mailto:albandes@fb.com"><strong>阿尔班·德马松</strong></a><em>研究工程师，Facebook</em></p>
+
+<p>阿尔班学习工程并获得了机器学习和优化博士学位，在此期间，他曾是 PyTorch 的开源软件贡献者，并在加入 Facebook 之前。他的主要职责是维护一些核心库和功能（autograd、optim、nn）以及使 PyTorch 在总体上变得更好。</p>
+
+<p><a href="mailto:ezyang@fb.com"><strong>杨·爱德华 </strong></a><em>Facebook 研究工程师</em></p>
+
+<p>爱德华在麻省理工学院学习计算机科学，之后又在斯坦福大学深造，随后加入 Facebook。他是 PyTorch 核心团队的一员，也是 PyTorch 的主要贡献者之一。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

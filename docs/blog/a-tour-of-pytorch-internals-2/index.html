@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch Internals Part II - The Build System | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="In the first post I explained how we generate a torch.Tensor object that you can use in your Python interpreter. Next, I will explore the build system for PyTorch. The PyTorch codebase has a variety of components:
+
+
+  The core Torch libraries: TH, THC, THNN, THCUNN
+  Vendor libraries: CuDNN, NCCL
+  Python Extension libraries
+  Additional third-party libraries: NumPy, MKL, LAPACK
+
+
+How does a simple invocation of python setup.py install do the work that allows you to call import torch and use the PyTorch library in your code?
+
+The first part of this document will explain the build process from and end-user point of view. This will explain how we take the components above to build the library. The second part of the document will be important for PyTorch developers. It will document ways to improve your iteration speed by building only a subset of the code that you are working on.
+
+Setuptools and PyTorch’s setup( ) function
+
+Python uses Setuptools to build the library. Setuptools is an extension to the original distutils system from the core Python library. The core component of Setuptools is the setup.py file which contains all the information needed to build the project. The most important function is the setup() function which serves as the main entry point. Let’s take a look at the one in PyTorch:
+
+setup(name=" torch",="" version="version," description="Tensors and Dynamic neural networks in Python with strong GPU acceleration" ,="" ext_modules="extensions," cmdclass="{" 'build':="" build,="" 'build_py':="" build_py,="" 'build_ext':="" build_ext,="" 'build_deps':="" build_deps,="" 'build_module':="" build_module,="" 'develop':="" develop,="" 'install':="" install,="" 'clean':="" clean,="" },="" packages="packages," package_data="{'torch':" [="" 'lib="" *.so*',="" *.dylib*',="" torch_shm_manager',="" *.h',="" include="" th="" generic="" thc="" *.h']},="" install_requires="['pyyaml']," )="" the="" function="" is="" composed="" entirely="" of="" keyword="" arguments,="" which="" serve="" two="" purposes:="" metadata="" (e.g.="" name,="" description,="" version)="" contents="" package="" we="" are="" concerned="" with="" #2.="" let’s="" break="" down="" individual="" components:="" ext_modules:="" python="" modules="" either="" “pure”="" modules,="" containing="" only="" code,="" or="" “extension”="" written="" in="" low-level="" language="" implementation.="" here="" listing="" extension="" including="" main="" torch._c="" library="" that="" contains="" our="" tensor="" cmdclass:="" when="" using="" setup.py="" script="" from="" command="" line,="" user="" must="" specify="" one="" more="" “commands”,="" code="" snippets="" perform="" a="" specific="" action.="" for="" example,="" “install”="" builds="" and="" installs="" package.="" this="" mapping="" routes="" commands="" to="" functions="" implement="" them="" packages:="" list="" project.="" these="" -="" i.e.="" they="" contain="" code.="" defined="" elsewhere="" package_data:="" additional="" files="" need="" be="" installed="" into="" package:="" case="" header="" shared="" libraries="" build="" will="" generate="" included="" installation="" install_requires:="" order="" pytorch,="" pyyaml.="" setuptools="" handle="" making="" sure="" pyyaml="" available,="" downloading="" installing="" it="" if="" necessary="" consider="" components="" detail,="" but="" now="" instructive="" look="" at="" end="" product="" an="" –="" what="" does="" after="" building="" site_packages="" third="" party="" by="" default="" lib="" &lt;version&gt;="" directory="" associated="" your="" binary.="" because="" i="" am="" miniconda="" environment,="" my="" binary="" found="" at:="" (p3)="" killeent@devgpu047:pytorch="" (master)$="" ~="" local="" miniconda2="" envs="" p3="" bin="" thus="" into:="" home="" killeent="" python3.6="" site-packages="" take="" torch="" folder="" site-packages:="" killeent@devgpu047:site-packages$="" cd="" killeent@devgpu047:torch$="" ls="" autograd="" backends="" _c.cpython-36m-x86_64-linux-gnu.so="" cuda="" distributed="" _dl.cpython-36m-x86_64-linux-gnu.so="" functional.py="" __init__.py="" legacy="" multiprocessing="" nn="" optim="" __pycache__="" serialization.py="" _six.py="" sparse="" storage.py="" _tensor_docs.py="" tensor.py="" _tensor_str.py="" _thnn="" _torch_docs.py="" utils="" _utils.py="" version.py="" note="" everything="" would="" expect="" here:="" all="" [todo="" print="" explain]="" ._c*="" ._dl*="" match="" exactly="" described="" setup="" function:="" libnccl.so.1="" libthc.so.1="" libthcunn.so.1="" libthnn.so.1="" libth.so.1="" thcunn.h="" torch_shm_manager="" libnccl.so="" libshm.so="" libthcs.so.1="" libthd.so.1="" libthpp.so.1="" libths.so.1="" thnn.h="" interpreter="" looks="" during="" import.="" call="" import="" find="" module="" initialize="" it.="" you="" can="" read="" about="" system="" here.="" parts="" next,="" various="" start="" finish.="" illustrate="" how="" combine="" mentioned="" introduction.="" backend="" vendor="" install="" cmd="" override="" pytorch’s="" setup.py:="" class="" install(setuptools.command.install.install):="" def="" run(self):="" not="" self.skip_build:="" self.run_command('build_deps')="" setuptools.command.install.install.run(self)="" first="" thing="" run="" called="" “build_deps”="" it’s="" run()="" method:="" tools.nnwrap="" generate_wrappers="" as="" generate_nn_wrappers="" build_all_cmd="['bash'," 'torch="" build_all.sh']="" with_cuda:="" +="['--with-cuda']" with_nccl="" system_nccl:="" with_distributed:="" subprocess.call(build_all_cmd)="" !="0:" sys.exit(1)="" generate_nn_wrappers()="" have="" shell="" build_all.sh="" directory.="" configurable="" whether="" on="" enabled,="" nccl="" enabled.="" lib:="" killeent@devgpu047:lib="" libshm="" readme.md="" thcs="" thcunn="" thd="" thnn="" thpp="" ths="" see="" directories="" libraries.="" th,="" thc,="" thnn,="" thcunn,="" git="" subtrees="" sync="" e.g.="" github.com="" torch.="" ths,="" thcs,="" thd,="" pytorch.="" cmakelists.txt="" indicating="" built="" cmake.="" essentially="" runs="" cmake="" configure="" step="" libraries,="" then="" make="" install.="" .="" left="" with:="" --with-cuda="" --with-nccl="" --with-distributed="" [various="" output="" logs]="" tmp_install="" there="" number="" extra="" things="" directory:="" each="" headers="" executable="" explore="" further.="" script,="" create="" subdir="" build:="" #="" library,="" output.="" $1="" mkdir="" -p="" configuration="" makefile="" also="" result="" running="" tmp_install:="" share="" like="" standard="" binaries,="" files.="" headers,="" file.="" so="" why="" directory?="" used="" compile="" depend="" other.="" depends="" its="" headers.="" referenced="" arguments="" command:="" install_dir="" ...="" -dth_include_path="$INSTALL_DIR/include" \="" -dth_lib_path="$INSTALL_DIR/lib" indeed="" built:="" ldd="" github="" pytorch="" (0x00007f84478b7000)="" way="" specifies="" paths="" little="" messy="" representative="" overall="" idea.="" finally,="" script:="" succeed="" copy="" binaries="" cp="" $install_dir="" *="" -r="" see,="" end,="" top-level="" explaining="" saw="" above.="" we’ll="" do="" next:="" wrappers="" briefly,="" touch="" last="" part="" build_deps="" generate_nn_wrappers().="" bind="" custom="" cwrap="" tooling,="" touched="" upon="" previous="" post.="" binding="" manually="" write="" yaml="" declarations="" function.="" however,="" due="" relative="" simplicity="" auto-generate="" both="" resulting="" c++="" reason="" where="" expects="" located.="" few="" things:="" parses="" files,="" generating="" writing="" .cwrap="" calls="" appropriate="" plugins="" source="" second="" time="" thnn_generic.h="" takes="" tensors,="" “generic”="" based="" dynamic="" type="" csrc="" output:="" killeent@devgpu047:nn="" thcunn.cpp="" thcunn.cwrap="" thnn.cpp="" thnn.cwrap="" thnn_generic.cpp="" thnn_generic.cwrap="" thnn_generic.inc.h="" generates="" like:="" [[="" name:="" floatbatchnormalization_updateoutput="" return:="" void="" cname:="" thnn_floatbatchnormalization_updateoutput="" arguments:="" void*="" state="" thfloattensor*="" input="" type:="" weight="" nullable:="" true="" bias="" running_mean="" running_var="" save_mean="" save_std="" bool="" train="" double="" momentum="" eps="" ]]="" corresponding="" .cpp:="" extern="" "c"="" thnn_floatbatchnormalization_updateoutput(void*,="" thfloattensor*,="" bool,="" double,="" double);="" pyobject="" floatbatchnormalization_updateoutput(pyobject="" *_unused,="" *args)="" {="" argument="" checking,="" unpacking="" pythreadstate="" *_save="NULL;" try="" py_unblock_threads;="" thnn_floatbatchnormalization_updateoutput(arg_state,="" arg_input,="" arg_output,="" arg_weight,="" arg_bias,="" arg_running_mean,="" arg_running_var,="" arg_save_mean,="" arg_save_std,="" arg_train,="" arg_momentum,="" arg_eps);="" py_block_threads;="" py_return_none;="" }="" catch="" (...)="" (_save)="" throw;="" generated="" this:="" batchnormalization_updateoutput(thpp::tensor*="" input,="" thpp::tensor*="" output,="" weight,="" bias,="" running_mean,="" running_var,="" save_mean,="" save_std,="" train,="" momentum,="" eps)="" type,="" cuda,="" etc.="" later.="" “building”="" pure="" (the="" “dependencies”)="" move="" forward="" actual="" next="" library.="" “packages”="" passed="" setup.py.="" setuptools’="" utility="" find_packages():="" ['torch',="" 'torch._thnn',="" 'torch.autograd',="" 'torch.backends',="" 'torch.cuda',="" 'torch.distributed',="" 'torch.legacy',="" 'torch.multiprocessing',="" 'torch.nn',="" 'torch.optim',="" 'torch.sparse',="" 'torch.utils',="" 'torch.autograd._functions',="" 'torch.backends.cudnn',="" 'torch.legacy.nn',="" 'torch.legacy.optim',="" 'torch.nn._functions',="" 'torch.nn.backends',="" 'torch.nn.modules',="" 'torch.nn.parallel',="" 'torch.nn.utils',="" 'torch.nn._functions.thnn',="" 'torch.utils.data',="" 'torch.utils.ffi',="" 'torch.utils.serialization',="" 'torch.utils.trainer',="" 'torch.utils.backcompat',="" 'torch.utils.trainer.plugins']="" find_package="" has="" recursively="" traversed="" directory,="" finding="" setuptools,="" tool="" creates="" distribution="" root,="" same="" location="" preserve="" information="" operating="" performing="" build.="" see:="" lib.linux-x86_64-3.6="" temp.linux-x86_64-3.6="" indicates="" i’ve="" project="" linux-x86-64="" 3.6.="" while="" temp="" aren’t="" needed="" final="" installation.="" just="" don’t="" “compiled”,="" build_py="" process="" simply="" copies="" their="" locations="" find_packages="" equivalent="" littered="" lines="" copying="" _functions="" blas.py="" -&gt;="" noted="" earlier="" could="" pass="" setup()="" function,="" those="" location.="" copied="" thctensor.h="" cpython="" backend.="" constitutes="" majority="" logic="" overridden="" build_ext="" some="" special="" before="" extensions="" themselves="" actually="" tools.cwrap="" tools.cwrap.plugins.thpplugin="" thpplugin="" tools.cwrap.plugins.argcountsortplugin="" argcountsortplugin="" tools.cwrap.plugins.autogpu="" autogpu="" tools.cwrap.plugins.booloption="" booloption="" tools.cwrap.plugins.kwargsplugin="" kwargsplugin="" tools.cwrap.plugins.nullablearguments="" nullablearguments="" tools.cwrap.plugins.cudnnplugin="" cudnnplugin="" tools.cwrap.plugins.wrapdim="" wrapdim="" tools.cwrap.plugins.assertndim="" assertndim="" tools.cwrap.plugins.broadcast="" broadcast="" tools.cwrap.plugins.processorspecificplugin="" processorspecificplugin="" thp_plugin="THPPlugin()" cwrap('torch="" tensormethods.cwrap',="" processorspecificplugin(),="" booloption(),="" thp_plugin,="" autogpu(condition="IS_CUDA" ),="" argcountsortplugin(),="" kwargsplugin(),="" assertndim(),="" wrapdim(),="" broadcast()="" ])="" cudnn="" cudnn.cwrap',="" cudnnplugin(),="" nullablearguments()="" recall="" above="" documented="" auto-generated="" calling="" cudnn.="" tensormethods.cwrap,="" use="" implementations="" work="" within="" ecosystem.="" simple="" declaration="" zero_:="" zero_="" zero="" self="" thtensor*="" thptensor_(zero_)(pyobject="" *self,="" *args,="" *kwargs)="" thtensor_(zero)(library_state="" arg_self);="" post="" tied="" types,="" won’t="" expand="" there.="" enough="" know="" prior="" being="" built,="" compilation.="" specifying="" unlike="" go="" out="" right="" files;="" file(s),="" any="" link="" requirements="" (include="" directories,="" with,="" etc.).="" bulk="" (200~="" loc="" writing)="" goes="" extensions.="" here,="" choices="" begin="" sense.="" specified="" reference="" adding="" include:="" tmp_install_path="" include_dirs="" cwd,="" os.path.join(cwd,="" "torch",="" "csrc"),="" "="" include",="" th",="" thpp",="" thnn",="" similarly,="" object="" script.="" directly="" identifying="" may="" against:="" lib_path="" th_lib="os.path.join(lib_path," 'libth.so.1')="" ths_lib="os.path.join(lib_path," 'libths.so.1')="" thc_lib="os.path.join(lib_path," 'libthc.so.1')="" thcs_lib="os.path.join(lib_path," 'libthcs.so.1')="" thnn_lib="os.path.join(lib_path," 'libthnn.so.1')="" module:="" c="Extension(&quot;torch._C&quot;," sources="main_sources," extra_compile_args="main_compile_args" extra_compile_args,="" library_dirs="library_dirs," extra_link_args="extra_link_args" main_link_args="" [make_relative_rpath('lib')],="" against.="" includes="" shm,="" memory="" management="" cudart="" listed="" up="" args="" flags="" might="" want="" add="" debug="" compiling="" mode="" dirs="" another="" example="" important="" search="" time.="" .so="" build_all.sh,="" linking="" together="" extension.="" normal="" options="" decided="" libstdc++="" statically.="" key="" component:="" explicit="" ths_lib,="" thpp_lib,="" thnn_lib]="" wondering="" opposed="" argument.="" all,="" issue="" lua="" often="" set="" ld_library_path="" variable,="" mistakenly="" against="" torch,="" instead="" locally.="" problematic="" date,="" torch’s="" play="" nicely="" such,="" linker.="" other="" power="" similar="" way.="" invokes="" compiler="" linker="" succeed,="" successfully="" finished,="" quite="" simple.="" result,="" install_lib="" creating="" _thnn.cpython-36m-x86_64-linux-gnu.so="" _thcunn.cpython-36m-x86_64-linux-gnu.so="" finally="" lets="" interpreter.="" executes="" statement,="" searches="" along="" path.="" value="" path="" configured="" built.="" killeent@devgpu047:~$="" 3.6.1="" |continuum="" analytics,="" inc.|="" (default,="" mar="" 22="" 2017,="" 19:54:23)="" [gcc="" 4.4.7="" 20120313="" (red="" hat="" 4.4.7-1)]="" linux="" "help",="" "copyright",="" "credits"="" "license"="" information.="" &gt;&gt;&gt;="" sys="" sys.path="" ['',="" '="" python36.zip',="" python3.6',="" lib-dynload',="" .local="" site-packages',="" pytorch',="" setuptools-27.2.0-py3.6.egg']="" load="" location:="" inspect="" inspect.getfile(torch)="" __init__.py'="" loaded="" expected="" successful!="" note:="" prepends="" empty="" string="" represent="" current="" working="" place="" module.="" accidentally="" rather="" than="" version.="" something="" watch="" for.="" addendum="" developer="" efficiency,="" 3rd="" didn’t="" cover="" entire="" loop="" time-consuming.="" devserver,="" around="" 5="" minutes="" source.="" times,="" developing="" subset="" project,="" re-build="" test="" changes.="" fortunately,="" enables="" this.="" develop="" supports="" command.="" documentation="" states="" that:="" allows="" deploy="" project’s="" “staging="" areas”="" available="" importing.="" deployment="" done="" such="" changes="" immediately="" staging="" area(s),="" without="" needing="" change.="" work?="" suppose="" run,="" dependencies="" (th,="" thpp,="" etc.)="" inside="" -la="" torch*="" -rw-r--r--.="" 1="" users="" 31="" jun="" 27="" 08:02="" torch.egg-link="" looking="" file,="" references="" cat="" navigate="" back="" new="" torch.egg-info:="" torch.egg-info="" total="" 28="" drwxr-xr-x.="" 2="" 4096="" 08:09="" 10="" 08:01="" ..="" dependency_links.txt="" 255="" pkg-info="" 7="" requires.txt="" 16080="" sources.txt="" 12="" top_level.txt="" file="" requirements.txt="" lists="" setting="" pytorch:="" going="" too="" much="" us="" treat="" repo="" itself="" were="" site-packages,="" works:="" torch.__file__="" following="" consequences="" hold:="" change="" automatically="" picked="" up,="" let="" re-run="" command,="" codebases="" seamlessly,="" easy="" dependency="" quickly="" directly.="" appropriately.="" mode,="" up:="" torch._c.__file__="" _c.cpython-36m-x86_64-linux-gnu.so'="" re-built="" (0x00007f543d0e2000)="" having="" full="" rebuild.="" usual="" mechanism="" via="" anaconda,="" them.="" mkl="" doing:="" libmkl_intel_lp64.so="" conda="" long="" $cmake_prefix_path,="" compiling:="" dir="" (0x00007f3450bba000)="" covered,="" relevant="" ccache="" speed="" times="" handles="" initial="" pulling="" system,="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch Internals Part II - The Build System">
+<meta property="og:description" content="In the first post I explained how we generate a torch.Tensor object that you can use in your Python interpreter. Next, I will explore the build system for PyTorch. The PyTorch codebase has a variety of components:
+
+
+  The core Torch libraries: TH, THC, THNN, THCUNN
+  Vendor libraries: CuDNN, NCCL
+  Python Extension libraries
+  Additional third-party libraries: NumPy, MKL, LAPACK
+
+
+How does a simple invocation of python setup.py install do the work that allows you to call import torch and use the PyTorch library in your code?
+
+The first part of this document will explain the build process from and end-user point of view. This will explain how we take the components above to build the library. The second part of the document will be important for PyTorch developers. It will document ways to improve your iteration speed by building only a subset of the code that you are working on.
+
+Setuptools and PyTorch’s setup( ) function
+
+Python uses Setuptools to build the library. Setuptools is an extension to the original distutils system from the core Python library. The core component of Setuptools is the setup.py file which contains all the information needed to build the project. The most important function is the setup() function which serves as the main entry point. Let’s take a look at the one in PyTorch:
+
+setup(name=" torch",="" version="version," description="Tensors and Dynamic neural networks in Python with strong GPU acceleration" ,="" ext_modules="extensions," cmdclass="{" 'build':="" build,="" 'build_py':="" build_py,="" 'build_ext':="" build_ext,="" 'build_deps':="" build_deps,="" 'build_module':="" build_module,="" 'develop':="" develop,="" 'install':="" install,="" 'clean':="" clean,="" },="" packages="packages," package_data="{'torch':" [="" 'lib="" *.so*',="" *.dylib*',="" torch_shm_manager',="" *.h',="" include="" th="" generic="" thc="" *.h']},="" install_requires="['pyyaml']," )="" the="" function="" is="" composed="" entirely="" of="" keyword="" arguments,="" which="" serve="" two="" purposes:="" metadata="" (e.g.="" name,="" description,="" version)="" contents="" package="" we="" are="" concerned="" with="" #2.="" let’s="" break="" down="" individual="" components:="" ext_modules:="" python="" modules="" either="" “pure”="" modules,="" containing="" only="" code,="" or="" “extension”="" written="" in="" low-level="" language="" implementation.="" here="" listing="" extension="" including="" main="" torch._c="" library="" that="" contains="" our="" tensor="" cmdclass:="" when="" using="" setup.py="" script="" from="" command="" line,="" user="" must="" specify="" one="" more="" “commands”,="" code="" snippets="" perform="" a="" specific="" action.="" for="" example,="" “install”="" builds="" and="" installs="" package.="" this="" mapping="" routes="" commands="" to="" functions="" implement="" them="" packages:="" list="" project.="" these="" -="" i.e.="" they="" contain="" code.="" defined="" elsewhere="" package_data:="" additional="" files="" need="" be="" installed="" into="" package:="" case="" header="" shared="" libraries="" build="" will="" generate="" included="" installation="" install_requires:="" order="" pytorch,="" pyyaml.="" setuptools="" handle="" making="" sure="" pyyaml="" available,="" downloading="" installing="" it="" if="" necessary="" consider="" components="" detail,="" but="" now="" instructive="" look="" at="" end="" product="" an="" –="" what="" does="" after="" building="" site_packages="" third="" party="" by="" default="" lib="" &lt;version&gt;="" directory="" associated="" your="" binary.="" because="" i="" am="" miniconda="" environment,="" my="" binary="" found="" at:="" (p3)="" killeent@devgpu047:pytorch="" (master)$="" ~="" local="" miniconda2="" envs="" p3="" bin="" thus="" into:="" home="" killeent="" python3.6="" site-packages="" take="" torch="" folder="" site-packages:="" killeent@devgpu047:site-packages$="" cd="" killeent@devgpu047:torch$="" ls="" autograd="" backends="" _c.cpython-36m-x86_64-linux-gnu.so="" cuda="" distributed="" _dl.cpython-36m-x86_64-linux-gnu.so="" functional.py="" __init__.py="" legacy="" multiprocessing="" nn="" optim="" __pycache__="" serialization.py="" _six.py="" sparse="" storage.py="" _tensor_docs.py="" tensor.py="" _tensor_str.py="" _thnn="" _torch_docs.py="" utils="" _utils.py="" version.py="" note="" everything="" would="" expect="" here:="" all="" [todo="" print="" explain]="" ._c*="" ._dl*="" match="" exactly="" described="" setup="" function:="" libnccl.so.1="" libthc.so.1="" libthcunn.so.1="" libthnn.so.1="" libth.so.1="" thcunn.h="" torch_shm_manager="" libnccl.so="" libshm.so="" libthcs.so.1="" libthd.so.1="" libthpp.so.1="" libths.so.1="" thnn.h="" interpreter="" looks="" during="" import.="" call="" import="" find="" module="" initialize="" it.="" you="" can="" read="" about="" system="" here.="" parts="" next,="" various="" start="" finish.="" illustrate="" how="" combine="" mentioned="" introduction.="" backend="" vendor="" install="" cmd="" override="" pytorch’s="" setup.py:="" class="" install(setuptools.command.install.install):="" def="" run(self):="" not="" self.skip_build:="" self.run_command('build_deps')="" setuptools.command.install.install.run(self)="" first="" thing="" run="" called="" “build_deps”="" it’s="" run()="" method:="" tools.nnwrap="" generate_wrappers="" as="" generate_nn_wrappers="" build_all_cmd="['bash'," 'torch="" build_all.sh']="" with_cuda:="" +="['--with-cuda']" with_nccl="" system_nccl:="" with_distributed:="" subprocess.call(build_all_cmd)="" !="0:" sys.exit(1)="" generate_nn_wrappers()="" have="" shell="" build_all.sh="" directory.="" configurable="" whether="" on="" enabled,="" nccl="" enabled.="" lib:="" killeent@devgpu047:lib="" libshm="" readme.md="" thcs="" thcunn="" thd="" thnn="" thpp="" ths="" see="" directories="" libraries.="" th,="" thc,="" thnn,="" thcunn,="" git="" subtrees="" sync="" e.g.="" github.com="" torch.="" ths,="" thcs,="" thd,="" pytorch.="" cmakelists.txt="" indicating="" built="" cmake.="" essentially="" runs="" cmake="" configure="" step="" libraries,="" then="" make="" install.="" .="" left="" with:="" --with-cuda="" --with-nccl="" --with-distributed="" [various="" output="" logs]="" tmp_install="" there="" number="" extra="" things="" directory:="" each="" headers="" executable="" explore="" further.="" script,="" create="" subdir="" build:="" #="" library,="" output.="" $1="" mkdir="" -p="" configuration="" makefile="" also="" result="" running="" tmp_install:="" share="" like="" standard="" binaries,="" files.="" headers,="" file.="" so="" why="" directory?="" used="" compile="" depend="" other.="" depends="" its="" headers.="" referenced="" arguments="" command:="" install_dir="" ...="" -dth_include_path="$INSTALL_DIR/include" \="" -dth_lib_path="$INSTALL_DIR/lib" indeed="" built:="" ldd="" github="" pytorch="" (0x00007f84478b7000)="" way="" specifies="" paths="" little="" messy="" representative="" overall="" idea.="" finally,="" script:="" succeed="" copy="" binaries="" cp="" $install_dir="" *="" -r="" see,="" end,="" top-level="" explaining="" saw="" above.="" we’ll="" do="" next:="" wrappers="" briefly,="" touch="" last="" part="" build_deps="" generate_nn_wrappers().="" bind="" custom="" cwrap="" tooling,="" touched="" upon="" previous="" post.="" binding="" manually="" write="" yaml="" declarations="" function.="" however,="" due="" relative="" simplicity="" auto-generate="" both="" resulting="" c++="" reason="" where="" expects="" located.="" few="" things:="" parses="" files,="" generating="" writing="" .cwrap="" calls="" appropriate="" plugins="" source="" second="" time="" thnn_generic.h="" takes="" tensors,="" “generic”="" based="" dynamic="" type="" csrc="" output:="" killeent@devgpu047:nn="" thcunn.cpp="" thcunn.cwrap="" thnn.cpp="" thnn.cwrap="" thnn_generic.cpp="" thnn_generic.cwrap="" thnn_generic.inc.h="" generates="" like:="" [[="" name:="" floatbatchnormalization_updateoutput="" return:="" void="" cname:="" thnn_floatbatchnormalization_updateoutput="" arguments:="" void*="" state="" thfloattensor*="" input="" type:="" weight="" nullable:="" true="" bias="" running_mean="" running_var="" save_mean="" save_std="" bool="" train="" double="" momentum="" eps="" ]]="" corresponding="" .cpp:="" extern="" "c"="" thnn_floatbatchnormalization_updateoutput(void*,="" thfloattensor*,="" bool,="" double,="" double);="" pyobject="" floatbatchnormalization_updateoutput(pyobject="" *_unused,="" *args)="" {="" argument="" checking,="" unpacking="" pythreadstate="" *_save="NULL;" try="" py_unblock_threads;="" thnn_floatbatchnormalization_updateoutput(arg_state,="" arg_input,="" arg_output,="" arg_weight,="" arg_bias,="" arg_running_mean,="" arg_running_var,="" arg_save_mean,="" arg_save_std,="" arg_train,="" arg_momentum,="" arg_eps);="" py_block_threads;="" py_return_none;="" }="" catch="" (...)="" (_save)="" throw;="" generated="" this:="" batchnormalization_updateoutput(thpp::tensor*="" input,="" thpp::tensor*="" output,="" weight,="" bias,="" running_mean,="" running_var,="" save_mean,="" save_std,="" train,="" momentum,="" eps)="" type,="" cuda,="" etc.="" later.="" “building”="" pure="" (the="" “dependencies”)="" move="" forward="" actual="" next="" library.="" “packages”="" passed="" setup.py.="" setuptools’="" utility="" find_packages():="" ['torch',="" 'torch._thnn',="" 'torch.autograd',="" 'torch.backends',="" 'torch.cuda',="" 'torch.distributed',="" 'torch.legacy',="" 'torch.multiprocessing',="" 'torch.nn',="" 'torch.optim',="" 'torch.sparse',="" 'torch.utils',="" 'torch.autograd._functions',="" 'torch.backends.cudnn',="" 'torch.legacy.nn',="" 'torch.legacy.optim',="" 'torch.nn._functions',="" 'torch.nn.backends',="" 'torch.nn.modules',="" 'torch.nn.parallel',="" 'torch.nn.utils',="" 'torch.nn._functions.thnn',="" 'torch.utils.data',="" 'torch.utils.ffi',="" 'torch.utils.serialization',="" 'torch.utils.trainer',="" 'torch.utils.backcompat',="" 'torch.utils.trainer.plugins']="" find_package="" has="" recursively="" traversed="" directory,="" finding="" setuptools,="" tool="" creates="" distribution="" root,="" same="" location="" preserve="" information="" operating="" performing="" build.="" see:="" lib.linux-x86_64-3.6="" temp.linux-x86_64-3.6="" indicates="" i’ve="" project="" linux-x86-64="" 3.6.="" while="" temp="" aren’t="" needed="" final="" installation.="" just="" don’t="" “compiled”,="" build_py="" process="" simply="" copies="" their="" locations="" find_packages="" equivalent="" littered="" lines="" copying="" _functions="" blas.py="" -&gt;="" noted="" earlier="" could="" pass="" setup()="" function,="" those="" location.="" copied="" thctensor.h="" cpython="" backend.="" constitutes="" majority="" logic="" overridden="" build_ext="" some="" special="" before="" extensions="" themselves="" actually="" tools.cwrap="" tools.cwrap.plugins.thpplugin="" thpplugin="" tools.cwrap.plugins.argcountsortplugin="" argcountsortplugin="" tools.cwrap.plugins.autogpu="" autogpu="" tools.cwrap.plugins.booloption="" booloption="" tools.cwrap.plugins.kwargsplugin="" kwargsplugin="" tools.cwrap.plugins.nullablearguments="" nullablearguments="" tools.cwrap.plugins.cudnnplugin="" cudnnplugin="" tools.cwrap.plugins.wrapdim="" wrapdim="" tools.cwrap.plugins.assertndim="" assertndim="" tools.cwrap.plugins.broadcast="" broadcast="" tools.cwrap.plugins.processorspecificplugin="" processorspecificplugin="" thp_plugin="THPPlugin()" cwrap('torch="" tensormethods.cwrap',="" processorspecificplugin(),="" booloption(),="" thp_plugin,="" autogpu(condition="IS_CUDA" ),="" argcountsortplugin(),="" kwargsplugin(),="" assertndim(),="" wrapdim(),="" broadcast()="" ])="" cudnn="" cudnn.cwrap',="" cudnnplugin(),="" nullablearguments()="" recall="" above="" documented="" auto-generated="" calling="" cudnn.="" tensormethods.cwrap,="" use="" implementations="" work="" within="" ecosystem.="" simple="" declaration="" zero_:="" zero_="" zero="" self="" thtensor*="" thptensor_(zero_)(pyobject="" *self,="" *args,="" *kwargs)="" thtensor_(zero)(library_state="" arg_self);="" post="" tied="" types,="" won’t="" expand="" there.="" enough="" know="" prior="" being="" built,="" compilation.="" specifying="" unlike="" go="" out="" right="" files;="" file(s),="" any="" link="" requirements="" (include="" directories,="" with,="" etc.).="" bulk="" (200~="" loc="" writing)="" goes="" extensions.="" here,="" choices="" begin="" sense.="" specified="" reference="" adding="" include:="" tmp_install_path="" include_dirs="" cwd,="" os.path.join(cwd,="" "torch",="" "csrc"),="" "="" include",="" th",="" thpp",="" thnn",="" similarly,="" object="" script.="" directly="" identifying="" may="" against:="" lib_path="" th_lib="os.path.join(lib_path," 'libth.so.1')="" ths_lib="os.path.join(lib_path," 'libths.so.1')="" thc_lib="os.path.join(lib_path," 'libthc.so.1')="" thcs_lib="os.path.join(lib_path," 'libthcs.so.1')="" thnn_lib="os.path.join(lib_path," 'libthnn.so.1')="" module:="" c="Extension(&quot;torch._C&quot;," sources="main_sources," extra_compile_args="main_compile_args" extra_compile_args,="" library_dirs="library_dirs," extra_link_args="extra_link_args" main_link_args="" [make_relative_rpath('lib')],="" against.="" includes="" shm,="" memory="" management="" cudart="" listed="" up="" args="" flags="" might="" want="" add="" debug="" compiling="" mode="" dirs="" another="" example="" important="" search="" time.="" .so="" build_all.sh,="" linking="" together="" extension.="" normal="" options="" decided="" libstdc++="" statically.="" key="" component:="" explicit="" ths_lib,="" thpp_lib,="" thnn_lib]="" wondering="" opposed="" argument.="" all,="" issue="" lua="" often="" set="" ld_library_path="" variable,="" mistakenly="" against="" torch,="" instead="" locally.="" problematic="" date,="" torch’s="" play="" nicely="" such,="" linker.="" other="" power="" similar="" way.="" invokes="" compiler="" linker="" succeed,="" successfully="" finished,="" quite="" simple.="" result,="" install_lib="" creating="" _thnn.cpython-36m-x86_64-linux-gnu.so="" _thcunn.cpython-36m-x86_64-linux-gnu.so="" finally="" lets="" interpreter.="" executes="" statement,="" searches="" along="" path.="" value="" path="" configured="" built.="" killeent@devgpu047:~$="" 3.6.1="" |continuum="" analytics,="" inc.|="" (default,="" mar="" 22="" 2017,="" 19:54:23)="" [gcc="" 4.4.7="" 20120313="" (red="" hat="" 4.4.7-1)]="" linux="" "help",="" "copyright",="" "credits"="" "license"="" information.="" &gt;&gt;&gt;="" sys="" sys.path="" ['',="" '="" python36.zip',="" python3.6',="" lib-dynload',="" .local="" site-packages',="" pytorch',="" setuptools-27.2.0-py3.6.egg']="" load="" location:="" inspect="" inspect.getfile(torch)="" __init__.py'="" loaded="" expected="" successful!="" note:="" prepends="" empty="" string="" represent="" current="" working="" place="" module.="" accidentally="" rather="" than="" version.="" something="" watch="" for.="" addendum="" developer="" efficiency,="" 3rd="" didn’t="" cover="" entire="" loop="" time-consuming.="" devserver,="" around="" 5="" minutes="" source.="" times,="" developing="" subset="" project,="" re-build="" test="" changes.="" fortunately,="" enables="" this.="" develop="" supports="" command.="" documentation="" states="" that:="" allows="" deploy="" project’s="" “staging="" areas”="" available="" importing.="" deployment="" done="" such="" changes="" immediately="" staging="" area(s),="" without="" needing="" change.="" work?="" suppose="" run,="" dependencies="" (th,="" thpp,="" etc.)="" inside="" -la="" torch*="" -rw-r--r--.="" 1="" users="" 31="" jun="" 27="" 08:02="" torch.egg-link="" looking="" file,="" references="" cat="" navigate="" back="" new="" torch.egg-info:="" torch.egg-info="" total="" 28="" drwxr-xr-x.="" 2="" 4096="" 08:09="" 10="" 08:01="" ..="" dependency_links.txt="" 255="" pkg-info="" 7="" requires.txt="" 16080="" sources.txt="" 12="" top_level.txt="" file="" requirements.txt="" lists="" setting="" pytorch:="" going="" too="" much="" us="" treat="" repo="" itself="" were="" site-packages,="" works:="" torch.__file__="" following="" consequences="" hold:="" change="" automatically="" picked="" up,="" let="" re-run="" command,="" codebases="" seamlessly,="" easy="" dependency="" quickly="" directly.="" appropriately.="" mode,="" up:="" torch._c.__file__="" _c.cpython-36m-x86_64-linux-gnu.so'="" re-built="" (0x00007f543d0e2000)="" having="" full="" rebuild.="" usual="" mechanism="" via="" anaconda,="" them.="" mkl="" doing:="" libmkl_intel_lp64.so="" conda="" long="" $cmake_prefix_path,="" compiling:="" dir="" (0x00007f3450bba000)="" covered,="" relevant="" ccache="" speed="" times="" handles="" initial="" pulling="" system,="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch Internals Part II - The Build System">
+<meta name="twitter:description" content="In the first post I explained how we generate a torch.Tensor object that you can use in your Python interpreter. Next, I will explore the build system for PyTorch. The PyTorch codebase has a variety of components:
+
+
+  The core Torch libraries: TH, THC, THNN, THCUNN
+  Vendor libraries: CuDNN, NCCL
+  Python Extension libraries
+  Additional third-party libraries: NumPy, MKL, LAPACK
+
+
+How does a simple invocation of python setup.py install do the work that allows you to call import torch and use the PyTorch library in your code?
+
+The first part of this document will explain the build process from and end-user point of view. This will explain how we take the components above to build the library. The second part of the document will be important for PyTorch developers. It will document ways to improve your iteration speed by building only a subset of the code that you are working on.
+
+Setuptools and PyTorch’s setup( ) function
+
+Python uses Setuptools to build the library. Setuptools is an extension to the original distutils system from the core Python library. The core component of Setuptools is the setup.py file which contains all the information needed to build the project. The most important function is the setup() function which serves as the main entry point. Let’s take a look at the one in PyTorch:
+
+setup(name=" torch",="" version="version," description="Tensors and Dynamic neural networks in Python with strong GPU acceleration" ,="" ext_modules="extensions," cmdclass="{" 'build':="" build,="" 'build_py':="" build_py,="" 'build_ext':="" build_ext,="" 'build_deps':="" build_deps,="" 'build_module':="" build_module,="" 'develop':="" develop,="" 'install':="" install,="" 'clean':="" clean,="" },="" packages="packages," package_data="{'torch':" [="" 'lib="" *.so*',="" *.dylib*',="" torch_shm_manager',="" *.h',="" include="" th="" generic="" thc="" *.h']},="" install_requires="['pyyaml']," )="" the="" function="" is="" composed="" entirely="" of="" keyword="" arguments,="" which="" serve="" two="" purposes:="" metadata="" (e.g.="" name,="" description,="" version)="" contents="" package="" we="" are="" concerned="" with="" #2.="" let’s="" break="" down="" individual="" components:="" ext_modules:="" python="" modules="" either="" “pure”="" modules,="" containing="" only="" code,="" or="" “extension”="" written="" in="" low-level="" language="" implementation.="" here="" listing="" extension="" including="" main="" torch._c="" library="" that="" contains="" our="" tensor="" cmdclass:="" when="" using="" setup.py="" script="" from="" command="" line,="" user="" must="" specify="" one="" more="" “commands”,="" code="" snippets="" perform="" a="" specific="" action.="" for="" example,="" “install”="" builds="" and="" installs="" package.="" this="" mapping="" routes="" commands="" to="" functions="" implement="" them="" packages:="" list="" project.="" these="" -="" i.e.="" they="" contain="" code.="" defined="" elsewhere="" package_data:="" additional="" files="" need="" be="" installed="" into="" package:="" case="" header="" shared="" libraries="" build="" will="" generate="" included="" installation="" install_requires:="" order="" pytorch,="" pyyaml.="" setuptools="" handle="" making="" sure="" pyyaml="" available,="" downloading="" installing="" it="" if="" necessary="" consider="" components="" detail,="" but="" now="" instructive="" look="" at="" end="" product="" an="" –="" what="" does="" after="" building="" site_packages="" third="" party="" by="" default="" lib="" &lt;version&gt;="" directory="" associated="" your="" binary.="" because="" i="" am="" miniconda="" environment,="" my="" binary="" found="" at:="" (p3)="" killeent@devgpu047:pytorch="" (master)$="" ~="" local="" miniconda2="" envs="" p3="" bin="" thus="" into:="" home="" killeent="" python3.6="" site-packages="" take="" torch="" folder="" site-packages:="" killeent@devgpu047:site-packages$="" cd="" killeent@devgpu047:torch$="" ls="" autograd="" backends="" _c.cpython-36m-x86_64-linux-gnu.so="" cuda="" distributed="" _dl.cpython-36m-x86_64-linux-gnu.so="" functional.py="" __init__.py="" legacy="" multiprocessing="" nn="" optim="" __pycache__="" serialization.py="" _six.py="" sparse="" storage.py="" _tensor_docs.py="" tensor.py="" _tensor_str.py="" _thnn="" _torch_docs.py="" utils="" _utils.py="" version.py="" note="" everything="" would="" expect="" here:="" all="" [todo="" print="" explain]="" ._c*="" ._dl*="" match="" exactly="" described="" setup="" function:="" libnccl.so.1="" libthc.so.1="" libthcunn.so.1="" libthnn.so.1="" libth.so.1="" thcunn.h="" torch_shm_manager="" libnccl.so="" libshm.so="" libthcs.so.1="" libthd.so.1="" libthpp.so.1="" libths.so.1="" thnn.h="" interpreter="" looks="" during="" import.="" call="" import="" find="" module="" initialize="" it.="" you="" can="" read="" about="" system="" here.="" parts="" next,="" various="" start="" finish.="" illustrate="" how="" combine="" mentioned="" introduction.="" backend="" vendor="" install="" cmd="" override="" pytorch’s="" setup.py:="" class="" install(setuptools.command.install.install):="" def="" run(self):="" not="" self.skip_build:="" self.run_command('build_deps')="" setuptools.command.install.install.run(self)="" first="" thing="" run="" called="" “build_deps”="" it’s="" run()="" method:="" tools.nnwrap="" generate_wrappers="" as="" generate_nn_wrappers="" build_all_cmd="['bash'," 'torch="" build_all.sh']="" with_cuda:="" +="['--with-cuda']" with_nccl="" system_nccl:="" with_distributed:="" subprocess.call(build_all_cmd)="" !="0:" sys.exit(1)="" generate_nn_wrappers()="" have="" shell="" build_all.sh="" directory.="" configurable="" whether="" on="" enabled,="" nccl="" enabled.="" lib:="" killeent@devgpu047:lib="" libshm="" readme.md="" thcs="" thcunn="" thd="" thnn="" thpp="" ths="" see="" directories="" libraries.="" th,="" thc,="" thnn,="" thcunn,="" git="" subtrees="" sync="" e.g.="" github.com="" torch.="" ths,="" thcs,="" thd,="" pytorch.="" cmakelists.txt="" indicating="" built="" cmake.="" essentially="" runs="" cmake="" configure="" step="" libraries,="" then="" make="" install.="" .="" left="" with:="" --with-cuda="" --with-nccl="" --with-distributed="" [various="" output="" logs]="" tmp_install="" there="" number="" extra="" things="" directory:="" each="" headers="" executable="" explore="" further.="" script,="" create="" subdir="" build:="" #="" library,="" output.="" $1="" mkdir="" -p="" configuration="" makefile="" also="" result="" running="" tmp_install:="" share="" like="" standard="" binaries,="" files.="" headers,="" file.="" so="" why="" directory?="" used="" compile="" depend="" other.="" depends="" its="" headers.="" referenced="" arguments="" command:="" install_dir="" ...="" -dth_include_path="$INSTALL_DIR/include" \="" -dth_lib_path="$INSTALL_DIR/lib" indeed="" built:="" ldd="" github="" pytorch="" (0x00007f84478b7000)="" way="" specifies="" paths="" little="" messy="" representative="" overall="" idea.="" finally,="" script:="" succeed="" copy="" binaries="" cp="" $install_dir="" *="" -r="" see,="" end,="" top-level="" explaining="" saw="" above.="" we’ll="" do="" next:="" wrappers="" briefly,="" touch="" last="" part="" build_deps="" generate_nn_wrappers().="" bind="" custom="" cwrap="" tooling,="" touched="" upon="" previous="" post.="" binding="" manually="" write="" yaml="" declarations="" function.="" however,="" due="" relative="" simplicity="" auto-generate="" both="" resulting="" c++="" reason="" where="" expects="" located.="" few="" things:="" parses="" files,="" generating="" writing="" .cwrap="" calls="" appropriate="" plugins="" source="" second="" time="" thnn_generic.h="" takes="" tensors,="" “generic”="" based="" dynamic="" type="" csrc="" output:="" killeent@devgpu047:nn="" thcunn.cpp="" thcunn.cwrap="" thnn.cpp="" thnn.cwrap="" thnn_generic.cpp="" thnn_generic.cwrap="" thnn_generic.inc.h="" generates="" like:="" [[="" name:="" floatbatchnormalization_updateoutput="" return:="" void="" cname:="" thnn_floatbatchnormalization_updateoutput="" arguments:="" void*="" state="" thfloattensor*="" input="" type:="" weight="" nullable:="" true="" bias="" running_mean="" running_var="" save_mean="" save_std="" bool="" train="" double="" momentum="" eps="" ]]="" corresponding="" .cpp:="" extern="" "c"="" thnn_floatbatchnormalization_updateoutput(void*,="" thfloattensor*,="" bool,="" double,="" double);="" pyobject="" floatbatchnormalization_updateoutput(pyobject="" *_unused,="" *args)="" {="" argument="" checking,="" unpacking="" pythreadstate="" *_save="NULL;" try="" py_unblock_threads;="" thnn_floatbatchnormalization_updateoutput(arg_state,="" arg_input,="" arg_output,="" arg_weight,="" arg_bias,="" arg_running_mean,="" arg_running_var,="" arg_save_mean,="" arg_save_std,="" arg_train,="" arg_momentum,="" arg_eps);="" py_block_threads;="" py_return_none;="" }="" catch="" (...)="" (_save)="" throw;="" generated="" this:="" batchnormalization_updateoutput(thpp::tensor*="" input,="" thpp::tensor*="" output,="" weight,="" bias,="" running_mean,="" running_var,="" save_mean,="" save_std,="" train,="" momentum,="" eps)="" type,="" cuda,="" etc.="" later.="" “building”="" pure="" (the="" “dependencies”)="" move="" forward="" actual="" next="" library.="" “packages”="" passed="" setup.py.="" setuptools’="" utility="" find_packages():="" ['torch',="" 'torch._thnn',="" 'torch.autograd',="" 'torch.backends',="" 'torch.cuda',="" 'torch.distributed',="" 'torch.legacy',="" 'torch.multiprocessing',="" 'torch.nn',="" 'torch.optim',="" 'torch.sparse',="" 'torch.utils',="" 'torch.autograd._functions',="" 'torch.backends.cudnn',="" 'torch.legacy.nn',="" 'torch.legacy.optim',="" 'torch.nn._functions',="" 'torch.nn.backends',="" 'torch.nn.modules',="" 'torch.nn.parallel',="" 'torch.nn.utils',="" 'torch.nn._functions.thnn',="" 'torch.utils.data',="" 'torch.utils.ffi',="" 'torch.utils.serialization',="" 'torch.utils.trainer',="" 'torch.utils.backcompat',="" 'torch.utils.trainer.plugins']="" find_package="" has="" recursively="" traversed="" directory,="" finding="" setuptools,="" tool="" creates="" distribution="" root,="" same="" location="" preserve="" information="" operating="" performing="" build.="" see:="" lib.linux-x86_64-3.6="" temp.linux-x86_64-3.6="" indicates="" i’ve="" project="" linux-x86-64="" 3.6.="" while="" temp="" aren’t="" needed="" final="" installation.="" just="" don’t="" “compiled”,="" build_py="" process="" simply="" copies="" their="" locations="" find_packages="" equivalent="" littered="" lines="" copying="" _functions="" blas.py="" -&gt;="" noted="" earlier="" could="" pass="" setup()="" function,="" those="" location.="" copied="" thctensor.h="" cpython="" backend.="" constitutes="" majority="" logic="" overridden="" build_ext="" some="" special="" before="" extensions="" themselves="" actually="" tools.cwrap="" tools.cwrap.plugins.thpplugin="" thpplugin="" tools.cwrap.plugins.argcountsortplugin="" argcountsortplugin="" tools.cwrap.plugins.autogpu="" autogpu="" tools.cwrap.plugins.booloption="" booloption="" tools.cwrap.plugins.kwargsplugin="" kwargsplugin="" tools.cwrap.plugins.nullablearguments="" nullablearguments="" tools.cwrap.plugins.cudnnplugin="" cudnnplugin="" tools.cwrap.plugins.wrapdim="" wrapdim="" tools.cwrap.plugins.assertndim="" assertndim="" tools.cwrap.plugins.broadcast="" broadcast="" tools.cwrap.plugins.processorspecificplugin="" processorspecificplugin="" thp_plugin="THPPlugin()" cwrap('torch="" tensormethods.cwrap',="" processorspecificplugin(),="" booloption(),="" thp_plugin,="" autogpu(condition="IS_CUDA" ),="" argcountsortplugin(),="" kwargsplugin(),="" assertndim(),="" wrapdim(),="" broadcast()="" ])="" cudnn="" cudnn.cwrap',="" cudnnplugin(),="" nullablearguments()="" recall="" above="" documented="" auto-generated="" calling="" cudnn.="" tensormethods.cwrap,="" use="" implementations="" work="" within="" ecosystem.="" simple="" declaration="" zero_:="" zero_="" zero="" self="" thtensor*="" thptensor_(zero_)(pyobject="" *self,="" *args,="" *kwargs)="" thtensor_(zero)(library_state="" arg_self);="" post="" tied="" types,="" won’t="" expand="" there.="" enough="" know="" prior="" being="" built,="" compilation.="" specifying="" unlike="" go="" out="" right="" files;="" file(s),="" any="" link="" requirements="" (include="" directories,="" with,="" etc.).="" bulk="" (200~="" loc="" writing)="" goes="" extensions.="" here,="" choices="" begin="" sense.="" specified="" reference="" adding="" include:="" tmp_install_path="" include_dirs="" cwd,="" os.path.join(cwd,="" "torch",="" "csrc"),="" "="" include",="" th",="" thpp",="" thnn",="" similarly,="" object="" script.="" directly="" identifying="" may="" against:="" lib_path="" th_lib="os.path.join(lib_path," 'libth.so.1')="" ths_lib="os.path.join(lib_path," 'libths.so.1')="" thc_lib="os.path.join(lib_path," 'libthc.so.1')="" thcs_lib="os.path.join(lib_path," 'libthcs.so.1')="" thnn_lib="os.path.join(lib_path," 'libthnn.so.1')="" module:="" c="Extension(&quot;torch._C&quot;," sources="main_sources," extra_compile_args="main_compile_args" extra_compile_args,="" library_dirs="library_dirs," extra_link_args="extra_link_args" main_link_args="" [make_relative_rpath('lib')],="" against.="" includes="" shm,="" memory="" management="" cudart="" listed="" up="" args="" flags="" might="" want="" add="" debug="" compiling="" mode="" dirs="" another="" example="" important="" search="" time.="" .so="" build_all.sh,="" linking="" together="" extension.="" normal="" options="" decided="" libstdc++="" statically.="" key="" component:="" explicit="" ths_lib,="" thpp_lib,="" thnn_lib]="" wondering="" opposed="" argument.="" all,="" issue="" lua="" often="" set="" ld_library_path="" variable,="" mistakenly="" against="" torch,="" instead="" locally.="" problematic="" date,="" torch’s="" play="" nicely="" such,="" linker.="" other="" power="" similar="" way.="" invokes="" compiler="" linker="" succeed,="" successfully="" finished,="" quite="" simple.="" result,="" install_lib="" creating="" _thnn.cpython-36m-x86_64-linux-gnu.so="" _thcunn.cpython-36m-x86_64-linux-gnu.so="" finally="" lets="" interpreter.="" executes="" statement,="" searches="" along="" path.="" value="" path="" configured="" built.="" killeent@devgpu047:~$="" 3.6.1="" |continuum="" analytics,="" inc.|="" (default,="" mar="" 22="" 2017,="" 19:54:23)="" [gcc="" 4.4.7="" 20120313="" (red="" hat="" 4.4.7-1)]="" linux="" "help",="" "copyright",="" "credits"="" "license"="" information.="" &gt;&gt;&gt;="" sys="" sys.path="" ['',="" '="" python36.zip',="" python3.6',="" lib-dynload',="" .local="" site-packages',="" pytorch',="" setuptools-27.2.0-py3.6.egg']="" load="" location:="" inspect="" inspect.getfile(torch)="" __init__.py'="" loaded="" expected="" successful!="" note:="" prepends="" empty="" string="" represent="" current="" working="" place="" module.="" accidentally="" rather="" than="" version.="" something="" watch="" for.="" addendum="" developer="" efficiency,="" 3rd="" didn’t="" cover="" entire="" loop="" time-consuming.="" devserver,="" around="" 5="" minutes="" source.="" times,="" developing="" subset="" project,="" re-build="" test="" changes.="" fortunately,="" enables="" this.="" develop="" supports="" command.="" documentation="" states="" that:="" allows="" deploy="" project’s="" “staging="" areas”="" available="" importing.="" deployment="" done="" such="" changes="" immediately="" staging="" area(s),="" without="" needing="" change.="" work?="" suppose="" run,="" dependencies="" (th,="" thpp,="" etc.)="" inside="" -la="" torch*="" -rw-r--r--.="" 1="" users="" 31="" jun="" 27="" 08:02="" torch.egg-link="" looking="" file,="" references="" cat="" navigate="" back="" new="" torch.egg-info:="" torch.egg-info="" total="" 28="" drwxr-xr-x.="" 2="" 4096="" 08:09="" 10="" 08:01="" ..="" dependency_links.txt="" 255="" pkg-info="" 7="" requires.txt="" 16080="" sources.txt="" 12="" top_level.txt="" file="" requirements.txt="" lists="" setting="" pytorch:="" going="" too="" much="" us="" treat="" repo="" itself="" were="" site-packages,="" works:="" torch.__file__="" following="" consequences="" hold:="" change="" automatically="" picked="" up,="" let="" re-run="" command,="" codebases="" seamlessly,="" easy="" dependency="" quickly="" directly.="" appropriately.="" mode,="" up:="" torch._c.__file__="" _c.cpython-36m-x86_64-linux-gnu.so'="" re-built="" (0x00007f543d0e2000)="" having="" full="" rebuild.="" usual="" mechanism="" via="" anaconda,="" them.="" mkl="" doing:="" libmkl_intel_lp64.so="" conda="" long="" $cmake_prefix_path,="" compiling:="" dir="" (0x00007f3450bba000)="" covered,="" relevant="" ccache="" speed="" times="" handles="" initial="" pulling="" system,="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2017年6月27日</p>
+            <h1>
+                <a class="blog-title">PyTorch 内部机制第二部分 - 构建系统</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">作者：Trevor Killeen</p>
+                    <p>在第一篇<a href="/blog/a-tour-of-pytorch-internals-1/">文章</a>中，我解释了如何生成一个可以在 Python 解释器中使用的 <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 对象。接下来，我将探讨 PyTorch 的构建系统。PyTorch 代码库包含各种组件：</p>
+
+<ul>
+  <li>核心 Torch 库：TH、THC、THNN、THCUNN</li>
+  <li>商业库：CuDNN、NCCL</li>
+  <li>Python 扩展库</li>
+  <li>额外的第三方库：NumPy、MKL、LAPACK</li>
+</ul>
+
+<p>简单地执行 <code class="language-plaintext highlighter-rouge">python setup.py install</code> 命令是如何工作的，它允许你在代码中调用 <code class="language-plaintext highlighter-rouge">import torch</code> 并使用 PyTorch 库？</p>
+
+<p>本文的第一部分将从最终用户的角度解释构建过程。这将解释我们如何使用上述组件来构建库。本文的第二部分对 PyTorch 开发者来说非常重要。它将记录通过仅构建你正在工作的代码子集来提高迭代速度的方法。</p>
+
+<h3 id="setuptools-and-pytorchs-setup--function">Setuptools 和 PyTorch 的 setup() 函数</h3>
+
+<p>Python 使用 <a href="https://setuptools.readthedocs.io/en/latest/index.html">Setuptools</a> 来构建库。Setuptools 是 Python 核心库中原始 distutils 系统的扩展。Setuptools 的核心组件是 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件，它包含了构建项目所需的所有信息。最重要的函数是 <code class="language-plaintext highlighter-rouge">setup()</code> 函数，它作为主入口点。让我们看看 PyTorch 中的例子：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">setup</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s">"torch"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">,</span>
+      <span class="n">description</span><span class="o">=</span><span class="s">"Tensors and Dynamic neural networks in Python with strong GPU acceleration"</span><span class="p">,</span>
+      <span class="n">ext_modules</span><span class="o">=</span><span class="n">extensions</span><span class="p">,</span>
+      <span class="n">cmdclass</span><span class="o">=</span><span class="p">{</span>
+          <span class="s">'build'</span><span class="p">:</span> <span class="n">build</span><span class="p">,</span>
+          <span class="s">'build_py'</span><span class="p">:</span> <span class="n">build_py</span><span class="p">,</span>
+          <span class="s">'build_ext'</span><span class="p">:</span> <span class="n">build_ext</span><span class="p">,</span>
+          <span class="s">'build_deps'</span><span class="p">:</span> <span class="n">build_deps</span><span class="p">,</span>
+          <span class="s">'build_module'</span><span class="p">:</span> <span class="n">build_module</span><span class="p">,</span>
+          <span class="s">'develop'</span><span class="p">:</span> <span class="n">develop</span><span class="p">,</span>
+          <span class="s">'install'</span><span class="p">:</span> <span class="n">install</span><span class="p">,</span>
+          <span class="s">'clean'</span><span class="p">:</span> <span class="n">clean</span><span class="p">,</span>
+      <span class="p">},</span>
+      <span class="n">packages</span><span class="o">=</span><span class="n">packages</span><span class="p">,</span>
+      <span class="n">package_data</span><span class="o">=</span><span class="p">{</span><span class="s">'torch'</span><span class="p">:</span> <span class="p">[</span>
+          <span class="s">'lib/*.so*'</span><span class="p">,</span> <span class="s">'lib/*.dylib*'</span><span class="p">,</span>
+          <span class="s">'lib/torch_shm_manager'</span><span class="p">,</span>
+          <span class="s">'lib/*.h'</span><span class="p">,</span>
+          <span class="s">'lib/include/TH/*.h'</span><span class="p">,</span> <span class="s">'lib/include/TH/generic/*.h'</span><span class="p">,</span>
+          <span class="s">'lib/include/THC/*.h'</span><span class="p">,</span> <span class="s">'lib/include/THC/generic/*.h'</span><span class="p">]},</span>
+      <span class="n">install_requires</span><span class="o">=</span><span class="p">[</span><span class="s">'pyyaml'</span><span class="p">],</span>
+      <span class="p">)</span>
+</code></pre></div></div>
+
+<p>函数完全由关键字参数组成，它有两个作用：</p>
+
+<ul>
+  <li>元数据（例如名称、描述、版本）</li>
+  <li>包的内容</li>
+</ul>
+
+<p>我们关注于 #2。让我们分解各个组成部分：</p>
+
+<ul>
+  <li><strong>ext_modules</strong>：Python 模块可以是“纯”模块，只包含 Python 代码，或者是用 Python 实现底层语言编写的“扩展”模块。在这里，我们列出了构建中的扩展模块，包括包含我们的 Python Tensor 的 <code class="language-plaintext highlighter-rouge">torch._C</code> 主库</li>
+  <li><strong>cmdclass</strong>：当使用命令行中的 <code class="language-plaintext highlighter-rouge">setup.py</code> 脚本时，用户必须指定一个或多个“命令”，这些是执行特定操作的代码片段。例如，“安装”命令构建并安装软件包。此映射将特定命令路由到实现它们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的函数</li>
+  <li><strong>packages</strong>：项目中的软件包列表。这些是“纯”的，即它们只包含 Python 代码。这些在其他地方的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中定义</li>
+  <li><strong>package_data</strong>：需要安装到包中的附加文件：在这种情况下，必须包括构建过程中生成的头文件和共享库，它们将包含在我们的安装中</li>
+  <li><strong>install_requires</strong>：为了构建 PyTorch，我们需要 pyyaml。Setuptools 将负责确保 pyyaml 可用，并在必要时下载和安装它</li>
+</ul>
+
+<p>我们将更详细地考虑这些组件，但到目前为止，查看安装的最终产品是有教育意义的——即 Setuptools 在构建代码后所做的工作</p>
+
+<h3 id="site_packages">site_packages</h3>
+
+<p>第三方包默认安装到与您的 Python 二进制文件关联的 <code class="language-plaintext highlighter-rouge">lib/&lt;version&gt;/site_packages</code> 目录中。例如，因为我使用的是 <a href="https://conda.io/miniconda.html">Miniconda</a> 环境，所以我的 Python 二进制文件位于：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span>which python
+~/local/miniconda2/envs/p3/bin/python
+</code></pre></div></div>
+<p>因此，包会被安装到：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages
+</code></pre></div></div>
+<p>我安装了 PyTorch，让我们看看 site-packages 中的 torch 文件夹：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:site-packages<span class="nv">$ </span><span class="nb">cd </span>torch
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:torch<span class="nv">$ </span><span class="nb">ls
+</span>autograd  backends  _C.cpython-36m-x86_64-linux-gnu.so  cuda  distributed  _dl.cpython-36m-x86_64-linux-gnu.so  functional.py  __init__.py  legacy  lib  multiprocessing  nn  optim  __pycache__  serialization.py  _six.py  sparse  storage.py  _tensor_docs.py  tensor.py  _tensor_str.py  _thnn  _torch_docs.py  utils  _utils.py  version.py
+</code></pre></div></div>
+
+<p>注意，这里应该有的东西都在这里：</p>
+
+<ul>
+  <li>所有“纯净”的包都在这里 [待办：从 setup.py 打印包以解释]</li>
+  <li>扩展库在这里 - . _C * 和 . _dl * 共享库</li>
+  <li>package_data 在这里：lib/ 的内容与我们 setup 函数中描述的完全一致：</li>
+</ul>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:torch<span class="nv">$ </span><span class="nb">ls </span>lib/
+include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1   THCUNN.h  torch_shm_manager libnccl.so  libshm.so     libTHCS.so.1  libTHD.so.1     libTHPP.so.1  libTHS.so.1  THNN.h
+</code></pre></div></div>
+
+<p>Python 解释器在导入时查看 <code class="language-plaintext highlighter-rouge">site_packages</code>。如果我们 Python 代码中调用 <code class="language-plaintext highlighter-rouge">import torch</code>，它将在这里找到模块并初始化和导入。您可以在此处了解更多关于导入系统的信息 <a href="https://docs.python.org/3/tutorial/modules.html"> 这里 </a>。</p>
+
+<h3 id="building-individual-parts">建立个体部分</h3>
+
+<p>接下来，我们将从始至终查看构建的各种个体组件。这将说明我们如何结合介绍中提到的所有代码。</p>
+
+<h3 id="backend-torch-and-vendor-libraries">后端火炬和供应商库</h3>
+
+<p>让我们看看 PyTorch 的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的 <code class="language-plaintext highlighter-rouge">install</code> cmd 覆盖：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">install</span><span class="p">(</span><span class="n">setuptools</span><span class="p">.</span><span class="n">command</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">install</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="p">.</span><span class="n">skip_build</span><span class="p">:</span>
+            <span class="bp">self</span><span class="p">.</span><span class="n">run_command</span><span class="p">(</span><span class="s">'build_deps'</span><span class="p">)</span>
+        <span class="n">setuptools</span><span class="p">.</span><span class="n">command</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>我们注意到它首先执行一个名为“build_deps”的命令——让我们看看它的 <code class="language-plaintext highlighter-rouge">run()</code> 方法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="kn">from</span> <span class="nn">tools.nnwrap</span> <span class="kn">import</span> <span class="n">generate_wrappers</span> <span class="k">as</span> <span class="n">generate_nn_wrappers</span>
+        <span class="n">build_all_cmd</span> <span class="o">=</span> <span class="p">[</span><span class="s">'bash'</span><span class="p">,</span> <span class="s">'torch/lib/build_all.sh'</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">WITH_CUDA</span><span class="p">:</span>
+            <span class="n">build_all_cmd</span> <span class="o">+=</span> <span class="p">[</span><span class="s">'--with-cuda'</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">WITH_NCCL</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">SYSTEM_NCCL</span><span class="p">:</span>
+            <span class="n">build_all_cmd</span> <span class="o">+=</span> <span class="p">[</span><span class="s">'--with-nccl'</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">WITH_DISTRIBUTED</span><span class="p">:</span>
+            <span class="n">build_all_cmd</span> <span class="o">+=</span> <span class="p">[</span><span class="s">'--with-distributed'</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">subprocess</span><span class="p">.</span><span class="n">call</span><span class="p">(</span><span class="n">build_all_cmd</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">sys</span><span class="p">.</span><span class="nb">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">generate_nn_wrappers</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>在这里，我们注意到在 <code class="language-plaintext highlighter-rouge">torch/lib/</code> 目录中有一个名为 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 的 shell 脚本。此脚本可以通过是否在启用 CUDA 的系统上、启用 NCCL 库以及启用 PyTorch 分布式库来配置。</p>
+
+<p>让我们看看 <code class="language-plaintext highlighter-rouge">torch/lib</code> 目录：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls
+</span>build_all.sh  libshm  nccl  README.md  TH  THC  THCS  THCUNN  THD  THNN  THPP  THS
+</code></pre></div></div>
+
+<p>在这里，我们可以看到所有后端库的目录。 <code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THC</code>、<code class="language-plaintext highlighter-rouge">THNN</code>、<code class="language-plaintext highlighter-rouge">THCUNN</code> 和 <code class="language-plaintext highlighter-rouge">nccl</code> 是与例如 <a href="https://github.com/torch/torch7/tree/master/lib/TH">github.com/torch</a> 中的库同步的 <a href="https://developer.atlassian.com/blog/2015/05/the-power-of-git-subtree/">git 子树 </a>。 <code class="language-plaintext highlighter-rouge">THS</code>、<code class="language-plaintext highlighter-rouge">THCS</code>、<code class="language-plaintext highlighter-rouge">THD</code>、<code class="language-plaintext highlighter-rouge">THPP</code> 和 <code class="language-plaintext highlighter-rouge">libshm</code> 是特定于 PyTorch 的库。所有库都包含 <code class="language-plaintext highlighter-rouge">CMakeLists.txt</code> 文件——表明它们是用 CMake 构建的。</p>
+
+<p>《build_all.sh》脚本本质上是一个在所有这些库上运行 CMake 配置步骤的脚本，然后执行 <code class="language-plaintext highlighter-rouge">make install</code>。让我们运行 <code class="language-plaintext highlighter-rouge">./build_all.sh</code> 看看我们留下了什么：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span>./build_all.sh <span class="nt">--with-cuda</span> <span class="nt">--with-nccl</span> <span class="nt">--with-distributed</span>
+<span class="o">[</span>various CMake output logs]
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls
+</span>build  build_all.sh  include  libnccl.so  libnccl.so.1  libshm  libshm.so  libTHC.so.1  libTHCS.so.1  libTHCUNN.so.1  libTHD.so.1  libTHNN.so.1  libTHPP.so.1  libTH.so.1  libTHS.so.1  nccl  README.md  TH  THC  THCS  THCUNN  THCUNN.h  THD  THNN  THNN.h  THPP  THS  tmp_install  torch_shm_manager
+</code></pre></div></div>
+
+<p>现在目录中多了很多东西：</p>
+
+<ul>
+  <li>每个库的共享库文件</li>
+  <li><code class="language-plaintext highlighter-rouge">THNN</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN</code> 的头文件</li>
+  <li><code class="language-plaintext highlighter-rouge">build</code> 和 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录</li>
+  <li><code class="language-plaintext highlighter-rouge">torch_shm_manager</code> 可执行文件</li>
+</ul>
+
+<p>让我们进一步探索。在 shell 脚本中，我们创建 <code class="language-plaintext highlighter-rouge">build</code> 目录并为每个库创建一个构建子目录：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># We create a build directory for the library, which will</span>
+<span class="c"># contain the cmake output. $1 is the library to be built</span>
+  <span class="nb">mkdir</span> <span class="nt">-p</span> build/<span class="nv">$1</span>
+  <span class="nb">cd </span>build/<span class="nv">$1</span>
+</code></pre></div></div>
+
+<p>因此例如 <code class="language-plaintext highlighter-rouge">build/TH</code> 包含 TH 的 CMake 配置输出，包括构建 TH 的 <code class="language-plaintext highlighter-rouge">Makefile</code>，以及在此目录中运行 make install 的结果。</p>
+
+<p>让我们也看看 <code class="language-plaintext highlighter-rouge">tmp_install</code>:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls </span>tmp_install/
+bin  include  lib  share
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">tmp_install</code> 看起来是一个标准的安装目录，包含二进制文件、头文件和库文件。例如，<code class="language-plaintext highlighter-rouge">tmp_install/include/TH</code> 包含所有的 <code class="language-plaintext highlighter-rouge">TH</code> 头文件，而 <code class="language-plaintext highlighter-rouge">tmp_install/lib/</code> 包含 <code class="language-plaintext highlighter-rouge">libTH.so.1</code> 文件。</p>
+
+<p>那么为什么有这个目录呢？它是用来编译相互依赖的库的。例如，<code class="language-plaintext highlighter-rouge">THC</code> 库依赖于 <code class="language-plaintext highlighter-rouge">TH</code> 库及其头文件。这在构建 shell 脚本中作为 <code class="language-plaintext highlighter-rouge">cmake</code> 命令的参数被引用：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># install_dir is tmp_install</span>
+cmake ...
+	<span class="nt">-DTH_INCLUDE_PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$INSTALL_DIR</span><span class="s2">/include"</span> <span class="se">\</span>
+	<span class="nt">-DTH_LIB_PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$INSTALL_DIR</span><span class="s2">/lib"</span> <span class="se">\</span>
+</code></pre></div></div>
+
+<p>确实，如果我们看看我们构建的 <code class="language-plaintext highlighter-rouge">THC</code> 库：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span>ldd libTHC.so.1
+	...
+	libTH.so.1 <span class="o">=&gt;</span> /home/killeent/github/pytorch/torch/lib/tmp_install/lib/./libTH.so.1 <span class="o">(</span>0x00007f84478b7000<span class="o">)</span>
+</code></pre></div></div>
+
+<p>build_all.sh 脚本指定包含和库路径的方式有点杂乱，但这代表了整体思路。最后，在脚本末尾：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># If all the builds succeed we copy the libraries, headers,</span>
+<span class="c"># binaries to torch/lib</span>
+<span class="nb">cp</span> <span class="nv">$INSTALL_DIR</span>/lib/<span class="k">*</span> <span class="nb">.</span>
+<span class="nb">cp </span>THNN/generic/THNN.h <span class="nb">.</span>
+<span class="nb">cp </span>THCUNN/generic/THCUNN.h <span class="nb">.</span>
+<span class="nb">cp</span> <span class="nt">-r</span> <span class="nv">$INSTALL_DIR</span>/include <span class="nb">.</span>
+<span class="nb">cp</span> <span class="nv">$INSTALL_DIR</span>/bin/<span class="k">*</span> <span class="nb">.</span>
+</code></pre></div></div>
+
+<p>如我们所见，在末尾，我们将所有内容复制到顶级目录 torch/lib - 解释了我们上面看到的内容。我们将在下一部分看到这样做的原因：</p>
+
+<h3 id="nn-wrappers">神经网络包装器</h3>
+
+<p>简单来说，让我们简要介绍一下 build_deps 命令的最后部分：generate_nn_wrappers()。我们使用 PyTorch 的自定义 cwrap 工具绑定到后端库，这在之前的文章中已经提到过。对于绑定 TH 和 THC，我们手动为每个函数编写 YAML 声明。然而，由于 THNN 和 THCUNN 库的相对简单性，我们自动生成 cwrap 声明和生成的 C++ 代码。</p>
+
+<p>我们将 <code class="language-plaintext highlighter-rouge">THNN.h</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN.h</code> 头文件复制到 <code class="language-plaintext highlighter-rouge">torch/lib</code> 的原因是因为这是 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 代码期望这些文件所在的位置。 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 做了几件事情：</p>
+
+<ol>
+  <li>解析头文件，生成 cwrap YAML 声明，并将它们写入输出 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件</li>
+  <li>使用适当的插件调用 <code class="language-plaintext highlighter-rouge">cwrap</code>，针对这些 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件生成每个的源代码</li>
+  <li>再次解析头文件 <em> 第二次 </em> 以生成 <code class="language-plaintext highlighter-rouge">THNN_generic.h</code> - 这是一个库，它接受 <code class="language-plaintext highlighter-rouge">THPP</code> Tensors，PyTorch 的“通用”C++ Tensor 库，并根据 Tensor 的动态类型调用适当的 <code class="language-plaintext highlighter-rouge">THNN</code>/<code class="language-plaintext highlighter-rouge">THCUNN</code> 库函数</li>
+</ol>
+
+<p>在运行 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 后，如果我们查看 <code class="language-plaintext highlighter-rouge">torch/csrc/nn</code>，我们可以看到输出：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:nn <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls
+</span>THCUNN.cpp  THCUNN.cwrap  THNN.cpp  THNN.cwrap  THNN_generic.cpp  THNN_generic.cwrap  THNN_generic.h  THNN_generic.inc.h
+</code></pre></div></div>
+
+<p>例如，代码生成类似 cwrap 的代码：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[[
+  name: FloatBatchNormalization_updateOutput
+  return: void
+  cname: THNN_FloatBatchNormalization_updateOutput
+  arguments:
+    - void* state
+    - THFloatTensor* input
+    - THFloatTensor* output
+    - type: THFloatTensor*
+      name: weight
+      nullable: True
+    - type: THFloatTensor*
+      name: bias
+      nullable: True
+    - THFloatTensor* running_mean
+    - THFloatTensor* running_var
+    - THFloatTensor* save_mean
+    - THFloatTensor* save_std
+    - bool train
+    - double momentum
+    - double eps
+]]
+</code></pre></div></div>
+
+<p>对应的 <code class="language-plaintext highlighter-rouge">.cpp</code> 如下：</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">extern</span> <span class="s">"C"</span> <span class="kt">void</span> <span class="nf">THNN_FloatBatchNormalization_updateOutput</span><span class="p">(</span><span class="kt">void</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="n">THFloatTensor</span><span class="o">*</span><span class="p">,</span> <span class="kt">bool</span><span class="p">,</span> <span class="kt">double</span><span class="p">,</span> <span class="kt">double</span><span class="p">);</span>
+
+<span class="n">PyObject</span> <span class="o">*</span> <span class="nf">FloatBatchNormalization_updateOutput</span><span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">_unused</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// argument checking, unpacking</span>
+	 <span class="n">PyThreadState</span> <span class="o">*</span><span class="n">_save</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+      <span class="k">try</span> <span class="p">{</span>
+        <span class="n">Py_UNBLOCK_THREADS</span><span class="p">;</span>
+        <span class="n">THNN_FloatBatchNormalization_updateOutput</span><span class="p">(</span><span class="n">arg_state</span><span class="p">,</span> <span class="n">arg_input</span><span class="p">,</span> <span class="n">arg_output</span><span class="p">,</span> <span class="n">arg_weight</span><span class="p">,</span> <span class="n">arg_bias</span><span class="p">,</span> <span class="n">arg_running_mean</span><span class="p">,</span> <span class="n">arg_running_var</span><span class="p">,</span> <span class="n">arg_save_mean</span><span class="p">,</span> <span class="n">arg_save_std</span><span class="p">,</span> <span class="n">arg_train</span><span class="p">,</span> <span class="n">arg_momentum</span><span class="p">,</span> <span class="n">arg_eps</span><span class="p">);</span>
+        <span class="n">Py_BLOCK_THREADS</span><span class="p">;</span>
+        <span class="n">Py_RETURN_NONE</span><span class="p">;</span>
+      <span class="p">}</span> <span class="k">catch</span> <span class="p">(...)</span> <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">_save</span><span class="p">)</span> <span class="p">{</span>
+          <span class="n">Py_BLOCK_THREADS</span><span class="p">;</span>
+        <span class="p">}</span>
+        <span class="k">throw</span><span class="p">;</span>
+      <span class="p">}</span>
+
+    <span class="p">...</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>在生成的 <code class="language-plaintext highlighter-rouge">THPP</code> 代码中，函数看起来是这样的：</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">BatchNormalization_updateOutput</span><span class="p">(</span><span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">input</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">output</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">weight</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">bias</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">running_mean</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">running_var</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">save_mean</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">save_std</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">train</span><span class="p">,</span> <span class="kt">double</span> <span class="n">momentum</span><span class="p">,</span> <span class="kt">double</span> <span class="n">eps</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// Call appropriate THNN function based on tensor type, whether its on CUDA, etc.</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>我们稍后会详细看看这些源文件是如何被使用的。</p>
+
+<h3 id="building-the-pure-python-modules">“构建”纯 Python 模块</h3>
+
+<p>现在我们已经构建了后端库（即“依赖项”），我们可以继续构建实际的 PyTorch 代码。接下来运行的 Setuptools 命令是 <code class="language-plaintext highlighter-rouge">build_py</code>，它用于构建我们库中的所有“纯”Python 模块。这些是传递给 <code class="language-plaintext highlighter-rouge">setup.py</code> 的“包”。</p>
+
+<p>使用 Setuptools 的实用函数 <code class="language-plaintext highlighter-rouge">find_packages()</code> 查找这些包：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">packages</span> <span class="o">=</span> <span class="n">find_packages</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s">'tools.*'</span><span class="p">,))</span>
+<span class="p">[</span><span class="s">'torch'</span><span class="p">,</span> <span class="s">'torch._thnn'</span><span class="p">,</span> <span class="s">'torch.autograd'</span><span class="p">,</span> <span class="s">'torch.backends'</span><span class="p">,</span> <span class="s">'torch.cuda'</span><span class="p">,</span> <span class="s">'torch.distributed'</span><span class="p">,</span> <span class="s">'torch.legacy'</span><span class="p">,</span> <span class="s">'torch.multiprocessing'</span><span class="p">,</span> <span class="s">'torch.nn'</span><span class="p">,</span> <span class="s">'torch.optim'</span><span class="p">,</span> <span class="s">'torch.sparse'</span><span class="p">,</span> <span class="s">'torch.utils'</span><span class="p">,</span> <span class="s">'torch.autograd._functions'</span><span class="p">,</span> <span class="s">'torch.backends.cudnn'</span><span class="p">,</span> <span class="s">'torch.legacy.nn'</span><span class="p">,</span> <span class="s">'torch.legacy.optim'</span><span class="p">,</span> <span class="s">'torch.nn._functions'</span><span class="p">,</span> <span class="s">'torch.nn.backends'</span><span class="p">,</span> <span class="s">'torch.nn.modules'</span><span class="p">,</span> <span class="s">'torch.nn.parallel'</span><span class="p">,</span> <span class="s">'torch.nn.utils'</span><span class="p">,</span> <span class="s">'torch.nn._functions.thnn'</span><span class="p">,</span> <span class="s">'torch.utils.data'</span><span class="p">,</span> <span class="s">'torch.utils.ffi'</span><span class="p">,</span> <span class="s">'torch.utils.serialization'</span><span class="p">,</span> <span class="s">'torch.utils.trainer'</span><span class="p">,</span> <span class="s">'torch.utils.backcompat'</span><span class="p">,</span> <span class="s">'torch.utils.trainer.plugins'</span><span class="p">]</span>
+</code></pre></div></div>
+
+<p>如我们所见，<code class="language-plaintext highlighter-rouge">find_package</code> 已递归遍历了 <code class="language-plaintext highlighter-rouge">torch</code> 目录，找到了所有包含 <code class="language-plaintext highlighter-rouge">__init__.py</code> 文件的目录路径。</p>
+
+<p>当使用 Setuptools 构建时，该工具会在发行根目录中创建一个 <code class="language-plaintext highlighter-rouge">build</code> 目录，即与 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件相同的目录。由于 PyTorch 由“纯”Python 模块和扩展模块组成，我们需要保留构建时使用的操作系统和 Python 版本信息。因此，如果我们查看我的 <code class="language-plaintext highlighter-rouge">build</code> 目录，我们会看到：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls </span>build
+lib.linux-x86_64-3.6  temp.linux-x86_64-3.6
+</code></pre></div></div>
+
+<p>这表明我使用 Python 3.6 在 <code class="language-plaintext highlighter-rouge">linux-x86-64</code> 上构建了项目。lib 目录包含库文件，而 temp 目录包含在构建过程中生成的文件，这些文件在最终安装中不需要。</p>
+
+<p>由于“纯”Python 模块只是 Python 代码，不需要“编译”，所以 <code class="language-plaintext highlighter-rouge">build_py</code> 过程只是将 <code class="language-plaintext highlighter-rouge">find_packages</code> 找到的文件从其位置复制到 <code class="language-plaintext highlighter-rouge">build/</code> 中的等效位置。因此，我们的构建输出中充满了类似以下行：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>copying torch/autograd/_functions/blas.py -&gt; build/lib.linux-x86_64-3.6/torch/autograd/_functions
+</code></pre></div></div>
+
+<p>我们之前也提到过，可以将文件和目录传递给主 <code class="language-plaintext highlighter-rouge">setup()</code> 函数的 <code class="language-plaintext highlighter-rouge">package_data</code> 关键字参数，并且 Setuptools 会处理将这些文件复制到安装位置。在 <code class="language-plaintext highlighter-rouge">build_py</code> 过程中，这些文件会被复制到 <code class="language-plaintext highlighter-rouge">build/</code> 目录，所以我们也会看到类似以下这样的行：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>copying torch/lib/libTH.so.1 -&gt; build/lib.linux-x86_64-3.6/torch/lib
+...
+copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3.6/torch/lib/include/THC/generic
+</code></pre></div></div>
+
+<h3 id="building-the-extension-modules">构建扩展模块</h3>
+
+<p>最后，我们需要构建扩展模块，即使用 CPython 后端编写的 PyTorch 模块。这也构成了 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的大部分代码逻辑。我们重写的 <code class="language-plaintext highlighter-rouge">build_ext</code> 命令在扩展模块实际构建之前有一些特殊的逻辑：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">tools.cwrap</span> <span class="kn">import</span> <span class="n">cwrap</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.THPPlugin</span> <span class="kn">import</span> <span class="n">THPPlugin</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.ArgcountSortPlugin</span> <span class="kn">import</span> <span class="n">ArgcountSortPlugin</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.AutoGPU</span> <span class="kn">import</span> <span class="n">AutoGPU</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.BoolOption</span> <span class="kn">import</span> <span class="n">BoolOption</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.KwargsPlugin</span> <span class="kn">import</span> <span class="n">KwargsPlugin</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.NullableArguments</span> <span class="kn">import</span> <span class="n">NullableArguments</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.CuDNNPlugin</span> <span class="kn">import</span> <span class="n">CuDNNPlugin</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.WrapDim</span> <span class="kn">import</span> <span class="n">WrapDim</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.AssertNDim</span> <span class="kn">import</span> <span class="n">AssertNDim</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.Broadcast</span> <span class="kn">import</span> <span class="n">Broadcast</span>
+<span class="kn">from</span> <span class="nn">tools.cwrap.plugins.ProcessorSpecificPlugin</span> <span class="kn">import</span> <span class="n">ProcessorSpecificPlugin</span>
+        <span class="n">thp_plugin</span> <span class="o">=</span> <span class="n">THPPlugin</span><span class="p">()</span>
+        <span class="n">cwrap</span><span class="p">(</span><span class="s">'torch/csrc/generic/TensorMethods.cwrap'</span><span class="p">,</span> <span class="n">plugins</span><span class="o">=</span><span class="p">[</span>
+            <span class="n">ProcessorSpecificPlugin</span><span class="p">(),</span> <span class="n">BoolOption</span><span class="p">(),</span> <span class="n">thp_plugin</span><span class="p">,</span>
+            <span class="n">AutoGPU</span><span class="p">(</span><span class="n">condition</span><span class="o">=</span><span class="s">'IS_CUDA'</span><span class="p">),</span> <span class="n">ArgcountSortPlugin</span><span class="p">(),</span> <span class="n">KwargsPlugin</span><span class="p">(),</span>
+            <span class="n">AssertNDim</span><span class="p">(),</span> <span class="n">WrapDim</span><span class="p">(),</span> <span class="n">Broadcast</span><span class="p">()</span>
+        <span class="p">])</span>
+        <span class="n">cwrap</span><span class="p">(</span><span class="s">'torch/csrc/cudnn/cuDNN.cwrap'</span><span class="p">,</span> <span class="n">plugins</span><span class="o">=</span><span class="p">[</span>
+            <span class="n">CuDNNPlugin</span><span class="p">(),</span> <span class="n">NullableArguments</span><span class="p">()</span>
+        <span class="p">])</span>
+</code></pre></div></div>
+
+<p>回想一下，我之前记录了我们自动生成用于调用 <code class="language-plaintext highlighter-rouge">THNN</code> 等库的 C++ 代码。这里我们绑定了 <code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THC</code> 和 <code class="language-plaintext highlighter-rouge">CuDNN</code>。我们使用 <code class="language-plaintext highlighter-rouge">TensorMethods.cwrap</code> 中的 YAML 声明，并使用它们生成包含在 PyTorch C++ 生态系统内运行的实现输出的 C++ 源文件。例如，一个简单的声明如下：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[[
+  name: zero_
+  cname: zero
+  return: self
+  arguments:
+    - THTensor* self
+]]
+</code></pre></div></div>
+
+<p>生成如下代码：</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">PyObject</span> <span class="o">*</span> <span class="nf">THPTensor_</span><span class="p">(</span><span class="n">zero_</span><span class="p">)(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">self</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">kwargs</span><span class="p">)</span> <span class="p">{</span>
+	<span class="p">...</span>
+	<span class="n">THTensor_</span><span class="p">(</span><span class="n">zero</span><span class="p">)(</span><span class="n">LIBRARY_STATE</span> <span class="n">arg_self</span><span class="p">);</span>
+	<span class="p">...</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>在上一篇文章中，我们记录了这些函数与特定 Tensor 类型的关联，因此在此不再赘述。对于构建过程来说，只需知道这些 C++文件是在扩展构建之前生成的即可，因为这些源文件在扩展编译过程中会被使用。</p>
+
+<h3 id="specifying-the-extensions">指定扩展</h3>
+
+<p>与纯模块不同，仅仅列出模块或包并期望 Setuptools 能够找到正确的文件是不够的；您必须指定扩展名称、源文件以及任何编译/链接要求（包含目录、要链接的库等）。</p>
+
+<p>大部分（截至本文写作时约 200~LOC）的 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码用于指定如何构建这些扩展。在这里，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本中做出的某些选择开始变得有意义。例如，我们看到了我们的构建脚本指定了一个 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录，我们将后端库安装在这个目录中。在我们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中，我们在添加包含头文件的目录列表时引用了这个目录：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># tmp_install_path is torch/lib/tmp_install
+</span><span class="n">include_dirs</span> <span class="o">+=</span> <span class="p">[</span>
+    <span class="n">cwd</span><span class="p">,</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">cwd</span><span class="p">,</span> <span class="s">"torch"</span><span class="p">,</span> <span class="s">"csrc"</span><span class="p">),</span>
+    <span class="n">tmp_install_path</span> <span class="o">+</span> <span class="s">"/include"</span><span class="p">,</span>
+    <span class="n">tmp_install_path</span> <span class="o">+</span> <span class="s">"/include/TH"</span><span class="p">,</span>
+    <span class="n">tmp_install_path</span> <span class="o">+</span> <span class="s">"/include/THPP"</span><span class="p">,</span>
+    <span class="n">tmp_install_path</span> <span class="o">+</span> <span class="s">"/include/THNN"</span><span class="p">,</span>
+</code></pre></div></div>
+
+<p>同样，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本的末尾将共享对象库复制到了 <code class="language-plaintext highlighter-rouge">torch/csrc</code>。我们在 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中直接引用这些位置来标识我们可能链接的库：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># lib_path is torch/lib
+</span><span class="n">TH_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTH.so.1'</span><span class="p">)</span>
+<span class="n">THS_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTHS.so.1'</span><span class="p">)</span>
+<span class="n">THC_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTHC.so.1'</span><span class="p">)</span>
+<span class="n">THCS_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTHCS.so.1'</span><span class="p">)</span>
+<span class="n">THNN_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTHNN.so.1'</span><span class="p">)</span>
+<span class="c1"># ...
+</span></code></pre></div></div>
+
+<p>让我们考虑如何构建主要的 <code class="language-plaintext highlighter-rouge">torch._C</code> 扩展模块：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">C</span> <span class="o">=</span> <span class="n">Extension</span><span class="p">(</span><span class="s">"torch._C"</span><span class="p">,</span>
+              <span class="n">libraries</span><span class="o">=</span><span class="n">main_libraries</span><span class="p">,</span>
+              <span class="n">sources</span><span class="o">=</span><span class="n">main_sources</span><span class="p">,</span>
+              <span class="n">language</span><span class="o">=</span><span class="s">'c++'</span><span class="p">,</span>
+              <span class="n">extra_compile_args</span><span class="o">=</span><span class="n">main_compile_args</span> <span class="o">+</span> <span class="n">extra_compile_args</span><span class="p">,</span>
+              <span class="n">include_dirs</span><span class="o">=</span><span class="n">include_dirs</span><span class="p">,</span>
+              <span class="n">library_dirs</span><span class="o">=</span><span class="n">library_dirs</span><span class="p">,</span>
+              <span class="n">extra_link_args</span><span class="o">=</span><span class="n">extra_link_args</span> <span class="o">+</span> <span class="n">main_link_args</span> <span class="o">+</span> <span class="p">[</span><span class="n">make_relative_rpath</span><span class="p">(</span><span class="s">'lib'</span><span class="p">)],</span>
+              <span class="p">)</span>
+</code></pre></div></div>
+
+<ul>
+  <li>主要库是我们链接的所有库。这包括像 <code class="language-plaintext highlighter-rouge">shm</code> 这样的 PyTorch 共享内存管理库，以及像 <code class="language-plaintext highlighter-rouge">cudart</code> 和 <code class="language-plaintext highlighter-rouge">cudnn</code> 这样的系统库。请注意，<em> 不</em>在此列出 <code class="language-plaintext highlighter-rouge">TH</code> 库</li>
+  <li>PyTorch 后端的主要来源是构成其 C++后端的 C++文件</li>
+  <li>编译参数是配置编译的各种标志。例如，在调试模式下编译时，我们可能需要添加调试标志</li>
+  <li>包含头文件的目录路径称为包含目录。这也是另一个`build_all.sh`脚本很重要的例子——例如，我们会在指定的 CMake 配置的安装位置中查找`TH`头文件，即 <code class="language-plaintext highlighter-rouge">torch/lib/tmp_install/include/TH</code>  - 这是我们使用 CMake 配置指定的安装位置</li>
+  <li>链接时间搜索共享库的目录称为库目录。例如，我们包括`torch/lib` - 我们在`build_all.sh`脚本结束时将`.so`文件复制到的位置，但也包括 CUDA 和 CuDNN 目录的路径</li>
+  <li>链接参数用于将对象文件链接在一起以创建扩展。在 PyTorch 中，这包括更多<em>常规</em>选项，例如决定将 <code class="language-plaintext highlighter-rouge">libstdc++</code> 静态链接。然而，有一个关键组件：<strong> 这就是我们链接后端 TH 库的地方 </strong>。请注意，我们有如下行：</li>
+</ul>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># The explicit paths to .so files we described above
+</span><span class="n">main_link_args</span> <span class="o">=</span> <span class="p">[</span><span class="n">TH_LIB</span><span class="p">,</span> <span class="n">THS_LIB</span><span class="p">,</span> <span class="n">THPP_LIB</span><span class="p">,</span> <span class="n">THNN_LIB</span><span class="p">]</span>
+</code></pre></div></div>
+
+<p>你可能想知道为什么我们这样做，而不是将这些库添加到传递给 <code class="language-plaintext highlighter-rouge">libraries</code> 关键字参数的列表中。毕竟，那是一个要链接的库列表。问题是 Lua Torch 的安装通常设置 <code class="language-plaintext highlighter-rouge">LD_LIBRARY_PATH</code> 变量，因此我们可能会错误地链接到为 Lua Torch 构建的 <code class="language-plaintext highlighter-rouge">TH</code> 库，而不是我们本地构建的库。这将是一个问题，因为代码可能已经过时，而且 Lua Torch 的 <code class="language-plaintext highlighter-rouge">TH</code> 有各种配置选项，这些选项与 PyTorch 不太兼容。</p>
+
+<p>因此，我们手动指定我们直接生成的共享库的路径，并将其传递给链接器。</p>
+
+<p>需要其他扩展来支持 PyTorch，它们以类似的方式构建。Setuptools 库调用 C++ 编译器和链接器来构建所有这些扩展。如果构建成功，我们就成功构建了 PyTorch 库，可以继续进行安装。</p>
+
+<h3 id="installation">安装</h3>
+
+<p>构建完成后，安装非常简单。我们只需将我们的 <code class="language-plaintext highlighter-rouge">build/lib.linux-x86_64-3.6</code> 目录中的所有内容复制到相应的安装目录。回想一下，我们上面提到这个目录是与我们的 Python 二进制文件关联的 <code class="language-plaintext highlighter-rouge">site_packages</code> 目录。因此，我们看到类似以下行：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>running install_lib
+creating /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch
+copying build/lib.linux-x86_64-3.6/torch/_C.cpython-36m-x86_64-linux-gnu.so -&gt; /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch
+copying build/lib.linux-x86_64-3.6/torch/_dl.cpython-36m-x86_64-linux-gnu.so -&gt; /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch
+creating /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/_thnn
+copying build/lib.linux-x86_64-3.6/torch/_thnn/_THNN.cpython-36m-x86_64-linux-gnu.so -&gt; /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/_thnn
+copying build/lib.linux-x86_64-3.6/torch/_thnn/_THCUNN.cpython-36m-x86_64-linux-gnu.so -&gt; /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/_thnn
+</code></pre></div></div>
+
+<p>最后让我们激活 Python 解释器。当 Python 解释器执行导入语句时，它会沿着搜索路径搜索 Python 代码和扩展模块。路径的默认值是在解释器构建时配置到 Python 二进制文件中的。</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># note we are now in my home directory</span>
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
+Python 3.6.1 |Continuum Analytics, Inc.| <span class="o">(</span>default, Mar 22 2017, 19:54:23<span class="o">)</span>
+<span class="o">[</span>GCC 4.4.7 20120313 <span class="o">(</span>Red Hat 4.4.7-1<span class="o">)]</span> on linux
+Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span class="s2">"credits"</span> or <span class="s2">"license"</span> <span class="k">for </span>more information.
+<span class="o">&gt;&gt;&gt;</span> import sys
+<span class="o">&gt;&gt;&gt;</span> sys.path
+<span class="o">[</span><span class="s1">''</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python36.zip'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/lib-dynload'</span>, <span class="s1">'/home/killeent/.local/lib/python3.6/site-packages'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages'</span>, <span class="s1">'/home/killeent/github/pytorch'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/setuptools-27.2.0-py3.6.egg'</span><span class="o">]</span>
+</code></pre></div></div>
+
+<p>如我们所见，我们复制 PyTorch 安装到其中的 <code class="language-plaintext highlighter-rouge">site-packages</code> 目录是搜索路径的一部分。现在让我们加载 <code class="language-plaintext highlighter-rouge">torch</code> 模块并查看其位置：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">torch</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">inspect</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">inspect</span><span class="p">.</span><span class="n">getfile</span><span class="p">(</span><span class="n">torch</span><span class="p">)</span>
+<span class="s">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/__init__.py'</span>
+</code></pre></div></div>
+
+<p>如我们所见，我们已按预期从 <code class="language-plaintext highlighter-rouge">site_packages</code> 加载了模块——我们的构建和安装成功！</p>
+
+<p><strong>注意：</strong>Python 将空字符串添加到 <code class="language-plaintext highlighter-rouge">sys.path</code> 中，以表示当前工作目录——这使得它成为我们首先搜索模块的地方。因此，如果我们从 pytorch 目录运行 Python，我们可能会意外地加载本地版本的 PyTorch 而不是我们安装的版本。这是需要注意的一点。</p>
+
+<h3 id="addendum---developer-efficiency-3rd-party-libraries-things-i-didnt-cover">补充说明 - 开发者效率，第三方库，我没有涉及的内容</h3>
+
+<p>PyTorch 的整个安装循环可能相当耗时。在我的开发服务器上，从源代码安装大约需要 5 分钟。在开发 PyTorch 时，我们通常只想对整个项目的一部分进行工作，并仅重新构建该部分以测试更改。幸运的是，我们的构建系统支持这样做。</p>
+
+<h3 id="setuptools-develop-mode">Setuptools 开发模式</h3>
+
+<p>支持此功能的主要工具是 Setuptools 的 <code class="language-plaintext highlighter-rouge">develop</code> 命令。文档中说明：</p>
+
+<blockquote>
+  <p>此命令允许您将项目的源代码部署到一个或多个“预发布区域”，在那里它将可供导入。这种部署方式使得项目源代码的更改可以立即在预发布区域中可用，无需在每次更改后运行构建或安装步骤。</p>
+</blockquote>
+
+<p>但它是如何工作的呢？假设我们在 PyTorch 目录下运行 <code class="language-plaintext highlighter-rouge">python setup.py build develop</code>。<code class="language-plaintext highlighter-rouge">build</code> 命令会被执行，构建我们的依赖项（<code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THPP</code> 等）和扩展库。然而，如果我们查看 <code class="language-plaintext highlighter-rouge">site-packages</code> 目录：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:site-packages<span class="nv">$ </span><span class="nb">ls</span> <span class="nt">-la</span> torch<span class="k">*</span>
+<span class="nt">-rw-r--r--</span><span class="nb">.</span> 1 killeent <span class="nb">users </span>31 Jun 27 08:02 torch.egg-link
+</code></pre></div></div>
+
+<p>查看文件 <code class="language-plaintext highlighter-rouge">torch.egg-link</code> 的内容，它仅仅引用了 PyTorch 目录：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:site-packages<span class="nv">$ </span><span class="nb">cat </span>torch.egg-link
+/home/killeent/github/pytorch
+</code></pre></div></div>
+
+<p>如果我们回到 PyTorch 目录，我们会看到一个新目录 <code class="language-plaintext highlighter-rouge">torch.egg-info</code>：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls</span> <span class="nt">-la</span> torch.egg-info/
+total 28
+drwxr-xr-x.  2 killeent <span class="nb">users  </span>4096 Jun 27 08:09 <span class="nb">.</span>
+drwxr-xr-x. 10 killeent <span class="nb">users  </span>4096 Jun 27 08:01 ..
+<span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users     </span>1 Jun 27 08:01 dependency_links.txt
+<span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users   </span>255 Jun 27 08:01 PKG-INFO
+<span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users     </span>7 Jun 27 08:01 requires.txt
+<span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users </span>16080 Jun 27 08:01 SOURCES.txt
+<span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users    </span>12 Jun 27 08:01 top_level.txt
+</code></pre></div></div>
+
+<p>该文件包含 PyTorch 项目的元数据。例如，<code class="language-plaintext highlighter-rouge">requirements.txt</code> 列出了设置 PyTorch 所需的所有依赖项：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">cat </span>torch.egg-info/requires.txt
+pyyaml
+</code></pre></div></div>
+
+<p>不深入细节，<code class="language-plaintext highlighter-rouge">develop</code> 允许我们将 PyTorch 仓库本身基本上当作 <code class="language-plaintext highlighter-rouge">site-packages</code> 来处理，这样我们就可以导入模块，它就会自动工作：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
+Python 3.6.1 |Continuum Analytics, Inc.| <span class="o">(</span>default, Mar 22 2017, 19:54:23<span class="o">)</span>
+<span class="o">[</span>GCC 4.4.7 20120313 <span class="o">(</span>Red Hat 4.4.7-1<span class="o">)]</span> on linux
+Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span class="s2">"credits"</span> or <span class="s2">"license"</span> <span class="k">for </span>more information.
+<span class="o">&gt;&gt;&gt;</span> import torch
+<span class="o">&gt;&gt;&gt;</span> torch.__file__
+<span class="s1">'/home/killeent/github/pytorch/torch/__init__.py'</span>
+</code></pre></div></div>
+
+<p>因此，以下后果成立：</p>
+
+<ul>
+  <li>如果我们更改 Python 源文件，更改将自动被选中，我们不需要运行任何命令来让 Python 解释器 <em> 看到 </em> 这个更改</li>
+  <li>如果我们在扩展库中的一个 C++ 源文件中进行更改，我们可以重新运行 <code class="language-plaintext highlighter-rouge">develop</code> 命令，它将重新构建扩展</li>
+</ul>
+
+<p>因此我们可以无缝地开发 PyTorch 代码库，并以简单的方式测试我们的更改。</p>
+
+<h4 id="working-on-the-dependency-libraries">在依赖库上工作</h4>
+
+<p>如果我们在处理依赖项（例如 <code class="language-plaintext highlighter-rouge">TH</code>，<code class="language-plaintext highlighter-rouge">THPP</code> 等），我们可以通过直接运行 <code class="language-plaintext highlighter-rouge">build_deps</code> 命令来更快地重新构建我们的更改。这将自动调用 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 来重新构建我们的库，并适当地复制生成的库。如果我们使用 Setuptools <code class="language-plaintext highlighter-rouge">develop</code> 模式，我们将使用 PyTorch 目录中构建的本地扩展库。因为我们已经指定了编译扩展库时的共享库路径，所以更改将被自动拾取：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># we are using the local extension</span>
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
+Python 3.6.1 |Continuum Analytics, Inc.| <span class="o">(</span>default, Mar 22 2017, 19:54:23<span class="o">)</span>
+<span class="o">[</span>GCC 4.4.7 20120313 <span class="o">(</span>Red Hat 4.4.7-1<span class="o">)]</span> on linux
+Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span class="s2">"credits"</span> or <span class="s2">"license"</span> <span class="k">for </span>more information.
+<span class="o">&gt;&gt;&gt;</span> import torch
+<span class="o">&gt;&gt;&gt;</span> torch._C.__file__
+<span class="s1">'/home/killeent/github/pytorch/torch/_C.cpython-36m-x86_64-linux-gnu.so'</span>
+
+<span class="c"># it references the local shared object library we just re-built</span>
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>ldd /home/killeent/github/pytorch/torch/_C.cpython-36m-x86_64-linux-gnu.so
+<span class="c"># ...</span>
+libTH.so.1 <span class="o">=&gt;</span> /home/killeent/github/pytorch/torch/lib/libTH.so.1 <span class="o">(</span>0x00007f543d0e2000<span class="o">)</span>
+<span class="c"># ...</span>
+</code></pre></div></div>
+
+<p>因此，我们可以在这里测试任何更改，而无需进行完整的重新构建。</p>
+
+<h4 id="3rd-party-libraries">第三方库</h4>
+
+<p>PyTorch 依赖于一些第三方库。通常使用这些库的机制是通过 Anaconda 安装，然后链接它们。例如，我们可以通过以下方式使用 <code class="language-plaintext highlighter-rouge">mkl</code> 库与 PyTorch 链接：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># installed to miniconda2/envs/p3/lib/libmkl_intel_lp64.so</span>
+conda <span class="nb">install </span>mkl
+</code></pre></div></div>
+
+<p>然后，只要我们在我们的 <code class="language-plaintext highlighter-rouge">lib</code> 目录路径上，就可以在编译时成功找到这个库：</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># in the site-packages dir</span>
+<span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:torch<span class="nv">$ </span>ldd _C.cpython-36m-x86_64-linux-gnu.so
+<span class="c"># ...</span>
+libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda2/envs/p3/lib/libmkl_intel_lp64.so <span class="o">(</span>0x00007f3450bba000<span class="o">)</span>
+<span class="c"># ...</span>
+</code></pre></div></div>
+
+<h3 id="not-covered-but-also-relevant">未涵盖，但也很相关</h3>
+
+<ul>
+  <li>如何使用 <code class="language-plaintext highlighter-rouge">ccache</code> 加速构建时间</li>
+  <li>PyTorch 的顶级 <code class="language-plaintext highlighter-rouge">__init__.py</code> 文件如何处理初始模块导入以及整合所有各种模块和扩展库</li>
+  <li>CMake 构建系统，如何使用 CMake 配置和构建后端库</li>
+</ul>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

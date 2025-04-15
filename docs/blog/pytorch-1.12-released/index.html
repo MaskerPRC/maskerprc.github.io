@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch 1.12: TorchArrow, Functional API for Modules and nvFuser, are now available | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are excited to announce the release of PyTorch 1.12 (release note)! This release is composed of over 3124 commits, 433 contributors. Along with 1.12, we are releasing beta versions of AWS S3 Integration, PyTorch Vision Models on Channels Last on CPU, Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16 and FSDP API. We want to sincerely thank our dedicated community for your contributions.
+
+Summary:
+
+  Functional APIs to functionally apply module computation with a given set of parameters
+  Complex32 and Complex Convolutions in PyTorch
+  DataPipes from TorchData fully backward compatible with DataLoader
+  functorch with improved coverage for APIs
+  nvFuser a deep learning compiler for PyTorch
+  Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+  TorchArrow, a new beta library for machine learning preprocessing over batch data
+
+
+Frontend APIs
+
+Introducing TorchArrow
+
+We’ve got a new Beta release ready for you to try and use: TorchArrow. This is a library for machine learning preprocessing over batch data. It features a performant and Pandas-style, easy-to-use API in order to speed up your preprocessing workflows and development.
+
+Currently, it provides a Python DataFrame interface with the following features:
+
+  High-performance CPU backend, vectorized and extensible User-Defined Functions (UDFs) with Velox
+  Seamless handoff with PyTorch or other model authoring, such as Tensor collation and easily plugging into PyTorch DataLoader and DataPipes
+  Zero copy for external readers via Arrow in-memory columnar format
+
+
+For more details, please find our 10-min tutorial, installation instructions, API documentation, and a prototype for data preprocessing in TorchRec.
+
+(Beta) Functional API for Modules
+
+PyTorch 1.12 introduces a new beta feature to functionally apply Module computation with a given set of parameters. Sometimes, the traditional PyTorch Module usage pattern that maintains a static set of parameters internally is too restrictive. This is often the case when implementing algorithms for meta-learning, where multiple sets of parameters may need to be maintained across optimizer steps.
+
+The new torch.nn.utils.stateless.functional_call() API allows for:
+
+  Module computation with full flexibility over the set of parameters used
+  No need to reimplement your module in a functional way
+  Any parameter or buffer present in the module can be swapped with an externally-defined value for use in the call. Naming for referencing parameters / buffers follows the fully-qualified form in the module’s state_dict()
+
+
+Example:
+import torch
+from torch import nn
+from torch.nn.utils.stateless import functional_call
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(3, 3)
+        self.bn = nn.BatchNorm1d(3)
+        self.fc2 = nn.Linear(3, 3)
+
+    def forward(self, x):
+        return self.fc2(self.bn(self.fc1(x)))
+
+m = MyModule()
+
+# Define parameter / buffer values to use during module computation.
+my_weight = torch.randn(3, 3, requires_grad=True)
+my_bias = torch.tensor([1., 2., 3.], requires_grad=True)
+params_and_buffers = {
+    'fc1.weight': my_weight,
+    'fc1.bias': my_bias,
+    # Custom buffer values can be used too.
+    'bn.running_mean': torch.randn(3),
+}
+
+# Apply module computation to the input with the specified parameters / buffers.
+inp = torch.randn(5, 3)
+output = functional_call(m, params_and_buffers, inp)
+
+
+(Beta) Complex32 and Complex Convolutions in PyTorch
+
+PyTorch today natively supports complex numbers, complex autograd, complex modules, and numerous complex operations, including linear algebra and Fast Fourier Transform (FFT) operators. Many libraries, including torchaudio and ESPNet, already make use of complex numbers in PyTorch, and PyTorch 1.12 further extends complex functionality with complex convolutions and the experimental complex32 (“complex half”) data type that enables half precision FFT operations. Due to the bugs in CUDA 11.3 package, we recommend using CUDA 11.6 package from wheels if you are using complex numbers.
+
+(Beta) Forward-mode Automatic Differentiation
+
+Forward-mode AD allows the computation of directional derivatives (or equivalently, Jacobian-vector products) eagerly in the forward pass. PyTorch 1.12 significantly improves the operator coverage for forward-mode AD. See our tutorial for more information.
+
+TorchData
+
+BC DataLoader + DataPipe
+
+`DataPipe` from TorchData becomes fully backward compatible with the existing `DataLoader` regarding shuffle determinism and dynamic sharding in both multiprocessing and distributed environments.
+
+(Beta) AWS S3 Integration
+
+DataPipes based on AWSSDK have been integrated into TorchData. It provides the following features backed by native AWSSDK:
+
+  Retrieve list of urls from each S3 bucket based on prefix
+    
+      Support timeout to prevent hanging indefinitely
+      Support to specify S3 bucket region
+    
+  
+  Load data from S3 urls
+    
+      Support buffered and multi-part download
+      Support to specify S3 bucket region
+    
+  
+
+
+AWS native DataPipes are still in the beta phase. And, we will keep tuning them to improve their performance.
+
+(Prototype) DataLoader2
+
+DataLoader2 became available in prototype mode. We are introducing new ways to interact between DataPipes, DataLoading API, and backends (aka ReadingServices). Feature is stable in terms of API, but functionally not complete yet. We welcome early adopters and feedback, as well as potential contributors.
+
+For more details, please checkout the link.
+
+functorch
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples of these include:
+
+  running ensembles of models on a single machine
+  efficiently computing Jacobians and Hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce functorch 0.2.0 with a number of improvements and new experimental features.
+
+Significantly improved coverage
+
+We significantly improved coverage for functorch.jvp (our forward-mode autodiff API) and other APIs that rely on it (functorch.{jacfwd, hessian}).
+
+(Prototype) functorch.experimental.functionalize
+
+Given a function f, functionalize(f) returns a new function without mutations (with caveats). This is useful for constructing traces of PyTorch functions without in-place operations. For example, you can use make_fx(functionalize(f)) to construct a mutation-free trace of a pytorch function. To learn more, please see the documentation.
+
+For more details, please see our installation instructions, documentation, tutorials, and release notes.
+
+Performance Improvements
+
+Introducing nvFuser, a deep learning compiler for PyTorch
+
+In PyTorch 1.12, Torchscript is updating its default fuser  (for Volta and later CUDA accelerators) to nvFuser, which supports a wider range of operations and is faster than NNC, the previous fuser for CUDA devices. A soon to be published blog post will elaborate on nvFuser and show how it speeds up training on a variety of networks.
+
+See the nvFuser documentation for more details on usage and debugging.
+
+Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+
+PyTorch supports a variety of “mixed precision” techniques, like the torch.amp (Automated Mixed Precision) module and performing float32 matrix multiplications using the TensorFloat32 datatype on Ampere and later CUDA hardware for faster internal computations. In PyTorch 1.12 we’re changing the default behavior of float32 matrix multiplications to always use full IEEE fp32 precision, which is more precise but slower than using the TensorFloat32 datatype for internal computation. For devices with a particularly high ratio of TensorFloat32 to float32 throughput such as A100, this change in defaults can result in a large slowdown.
+
+If you’ve been using TensorFloat32 matrix multiplications then you can continue to do so by setting torch.backends.cuda.matmul.allow_tf32 = True
+
+which is supported since PyTorch 1.7. Starting in PyTorch 1.12 the new matmul precision API can be used, too: torch.set_float32_matmul_precision(“highest”|”high”|”medium”)
+
+To reiterate, PyTorch’s new default is “highest” precision for all device types. We think this provides better consistency across device types for matrix multiplications. Documentation for the new precision API can be found here. Setting the “high” or “medium” precision types will enable TensorFloat32 on Ampere and later CUDA devices. If you’re updating to PyTorch 1.12 then to preserve the current behavior and faster performance of matrix multiplications on Ampere devices, set precision to “high”.
+
+Using mixed precision techniques is essential for training many modern deep learning networks efficiently, and if you’re already using torch.amp this change is unlikely to affect you. If you’re not familiar with mixed precision training then see our soon to be published “What Every User Should Know About Mixed Precision Training in PyTorch” blogpost.
+
+(Beta) Accelerating PyTorch Vision Models with Channels Last on CPU
+
+Memory formats have a significant impact on performance when running vision models, generally Channels Last is more favorable from a performance perspective due to better data locality. 1.12 includes fundamental concepts of memory formats and demonstrates performance benefits using Channels Last on popular PyTorch vision models on Intel® Xeon® Scalable processors.
+
+  Enables Channels Last memory format support for the commonly used operators in CV domain on CPU, applicable for both inference and training
+  Provides native level optimization on Channels Last kernels from ATen, applicable for both AVX2 and AVX512
+  Delivers 1.3x to 1.8x inference performance gain over Channels First for TorchVision models on Intel® Xeon® Ice Lake (or newer) CPUs
+
+
+(Beta) Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16
+
+Reduced precision numeric formats like bfloat16 improves PyTorch performance across multiple deep learning training workloads. PyTorch 1.12 includes the latest software enhancements on bfloat16 which applies to a broader scope of user scenarios and showcases even higher performance gains. The main improvements include:
+
+  2x hardware compute throughput vs. float32 with the new bfloat16 native instruction VDPBF16PS, introduced on Intel® Xeon® Cooper Lake CPUs
+  1/2 memory footprint of float32, faster speed for memory bandwidth intensive operators
+  1.4x to 2.2x inference performance gain over float32 for TorchVision models on Intel® Xeon® Cooper Lake (or newer) CPUs
+
+
+(Prototype) Introducing Accelerated PyTorch Training on Mac
+
+With the PyTorch 1.12 release, developers and researchers can now take advantage of Apple silicon GPUs for significantly faster model training. This unlocks the ability to perform machine learning workflows like prototyping and fine-tuning locally, right on Mac. Accelerated GPU training is enabled using Apple’s Metal Performance Shaders (MPS) as a backend. The benefits include performance speedup from accelerated GPU training and the ability to train larger networks or batch sizes locally. Learn more here.
+
+
+  
+
+
+
+ Accelerated GPU training and evaluation speedups over CPU-only (times faster)
+
+
+Alongside the new MPS device support, the M1 binaries for Core and Domain libraries that have been available for the last few releases are now an official prototype feature. These binaries can be used to run PyTorch natively on Apple Silicon.
+
+(Prototype) BetterTransformer: Fastpath execution for Transformer Encoder Inference
+
+PyTorch now supports CPU and GPU fastpath implementations (“BetterTransformer”) for several Transformer Encoder modules including TransformerEncoder, TransformerEncoderLayer, and MultiHeadAttention (MHA). The BetterTransformer fastpath architecture Better Transformer is consistently faster –  2x for many common execution scenarios, depending on model and input characteristics. The new BetterTransformer-enabled modules are API compatible with previous releases of the PyTorch Transformer API and will accelerate existing models if they meet fastpath execution requirements, as well as read models trained with previous versions of PyTorch. PyTorch 1.12 includes:
+
+  BetterTransformer integration for Torchtext’s pretrained RoBERTa and XLM-R models
+  Torchtext which builds on the PyTorch Transformer API
+  Fastpath execution for improved performance by reducing execution overheads with fused kernels which combines multiple operators into a single kernel
+  Option to achieve additional speedups by taking advantage of data sparsity during the processing of padding tokens in natural-language processing (by setting enable_nested_tensor=True when creating a TransformerEncoder)
+  Diagnostics to help users understand why fastpath execution did not occur
+
+
+
+  
+
+
+Distributed
+
+(Beta) Fully Sharded Data Parallel (FSDP) API
+
+FSDP API helps easily scale large model training by sharding a model’s parameters, gradients and optimizer states across data parallel workers while maintaining the simplicity of data parallelism. The prototype version was released in PyTorch 1.11 with a minimum set of features that helped scaling tests of models with up to 1T parameters.
+
+In this beta release, FSDP API added the following features to support various production workloads. Highlights of the the newly added features in this beta release include:
+
+  Universal sharding strategy API - Users can easily change between sharding strategies with a single line change, and thus compare and use DDP (only data sharding), FSDP (full model and data sharding), or Zero2 (only sharding of optimizer and gradients) to optimize memory and performance for their specific training needs
+  Fine grained mixed precision policies - Users can specify a mix of half and full data types (bfloat16, fp16 or fp32) for model parameters, gradient communication, and buffers via mixed precision policies.  Models are automatically saved in fp32 to allow for maximum portability
+  Transformer auto wrapping policy - allows for optimal wrapping of Transformer based models by registering the models layer class, and thus accelerated training performance
+  Faster model initialization using device_id init - initialization is performed in a streaming fashion to avoid OOM issues and optimize init performance vs CPU init
+  Rank0 streaming for full model saving of larger models - Fully sharded models can be saved by all GPU’s streaming their shards to the rank 0 GPU, and the model is built in full state on the rank 0 CPU for saving
+
+
+For more details and example code, please checkout the documentation and the tutorial.
+
+Thanks for reading, If you’re interested in these updates and want to join the PyTorch community, we encourage you to join the discussion forums and open GitHub issues. To get the latest news from PyTorch, follow us on Twitter, Medium, YouTube, and LinkedIn.
+
+Cheers!
+
+Team PyTorch
+">
+
+  <meta property="og:image" content="http://localhost:4000/">
+  <meta name="twitter:image" content="http://localhost:4000/">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch 1.12: TorchArrow, Functional API for Modules and nvFuser, are now available">
+<meta property="og:description" content="We are excited to announce the release of PyTorch 1.12 (release note)! This release is composed of over 3124 commits, 433 contributors. Along with 1.12, we are releasing beta versions of AWS S3 Integration, PyTorch Vision Models on Channels Last on CPU, Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16 and FSDP API. We want to sincerely thank our dedicated community for your contributions.
+
+Summary:
+
+  Functional APIs to functionally apply module computation with a given set of parameters
+  Complex32 and Complex Convolutions in PyTorch
+  DataPipes from TorchData fully backward compatible with DataLoader
+  functorch with improved coverage for APIs
+  nvFuser a deep learning compiler for PyTorch
+  Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+  TorchArrow, a new beta library for machine learning preprocessing over batch data
+
+
+Frontend APIs
+
+Introducing TorchArrow
+
+We’ve got a new Beta release ready for you to try and use: TorchArrow. This is a library for machine learning preprocessing over batch data. It features a performant and Pandas-style, easy-to-use API in order to speed up your preprocessing workflows and development.
+
+Currently, it provides a Python DataFrame interface with the following features:
+
+  High-performance CPU backend, vectorized and extensible User-Defined Functions (UDFs) with Velox
+  Seamless handoff with PyTorch or other model authoring, such as Tensor collation and easily plugging into PyTorch DataLoader and DataPipes
+  Zero copy for external readers via Arrow in-memory columnar format
+
+
+For more details, please find our 10-min tutorial, installation instructions, API documentation, and a prototype for data preprocessing in TorchRec.
+
+(Beta) Functional API for Modules
+
+PyTorch 1.12 introduces a new beta feature to functionally apply Module computation with a given set of parameters. Sometimes, the traditional PyTorch Module usage pattern that maintains a static set of parameters internally is too restrictive. This is often the case when implementing algorithms for meta-learning, where multiple sets of parameters may need to be maintained across optimizer steps.
+
+The new torch.nn.utils.stateless.functional_call() API allows for:
+
+  Module computation with full flexibility over the set of parameters used
+  No need to reimplement your module in a functional way
+  Any parameter or buffer present in the module can be swapped with an externally-defined value for use in the call. Naming for referencing parameters / buffers follows the fully-qualified form in the module’s state_dict()
+
+
+Example:
+import torch
+from torch import nn
+from torch.nn.utils.stateless import functional_call
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(3, 3)
+        self.bn = nn.BatchNorm1d(3)
+        self.fc2 = nn.Linear(3, 3)
+
+    def forward(self, x):
+        return self.fc2(self.bn(self.fc1(x)))
+
+m = MyModule()
+
+# Define parameter / buffer values to use during module computation.
+my_weight = torch.randn(3, 3, requires_grad=True)
+my_bias = torch.tensor([1., 2., 3.], requires_grad=True)
+params_and_buffers = {
+    'fc1.weight': my_weight,
+    'fc1.bias': my_bias,
+    # Custom buffer values can be used too.
+    'bn.running_mean': torch.randn(3),
+}
+
+# Apply module computation to the input with the specified parameters / buffers.
+inp = torch.randn(5, 3)
+output = functional_call(m, params_and_buffers, inp)
+
+
+(Beta) Complex32 and Complex Convolutions in PyTorch
+
+PyTorch today natively supports complex numbers, complex autograd, complex modules, and numerous complex operations, including linear algebra and Fast Fourier Transform (FFT) operators. Many libraries, including torchaudio and ESPNet, already make use of complex numbers in PyTorch, and PyTorch 1.12 further extends complex functionality with complex convolutions and the experimental complex32 (“complex half”) data type that enables half precision FFT operations. Due to the bugs in CUDA 11.3 package, we recommend using CUDA 11.6 package from wheels if you are using complex numbers.
+
+(Beta) Forward-mode Automatic Differentiation
+
+Forward-mode AD allows the computation of directional derivatives (or equivalently, Jacobian-vector products) eagerly in the forward pass. PyTorch 1.12 significantly improves the operator coverage for forward-mode AD. See our tutorial for more information.
+
+TorchData
+
+BC DataLoader + DataPipe
+
+`DataPipe` from TorchData becomes fully backward compatible with the existing `DataLoader` regarding shuffle determinism and dynamic sharding in both multiprocessing and distributed environments.
+
+(Beta) AWS S3 Integration
+
+DataPipes based on AWSSDK have been integrated into TorchData. It provides the following features backed by native AWSSDK:
+
+  Retrieve list of urls from each S3 bucket based on prefix
+    
+      Support timeout to prevent hanging indefinitely
+      Support to specify S3 bucket region
+    
+  
+  Load data from S3 urls
+    
+      Support buffered and multi-part download
+      Support to specify S3 bucket region
+    
+  
+
+
+AWS native DataPipes are still in the beta phase. And, we will keep tuning them to improve their performance.
+
+(Prototype) DataLoader2
+
+DataLoader2 became available in prototype mode. We are introducing new ways to interact between DataPipes, DataLoading API, and backends (aka ReadingServices). Feature is stable in terms of API, but functionally not complete yet. We welcome early adopters and feedback, as well as potential contributors.
+
+For more details, please checkout the link.
+
+functorch
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples of these include:
+
+  running ensembles of models on a single machine
+  efficiently computing Jacobians and Hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce functorch 0.2.0 with a number of improvements and new experimental features.
+
+Significantly improved coverage
+
+We significantly improved coverage for functorch.jvp (our forward-mode autodiff API) and other APIs that rely on it (functorch.{jacfwd, hessian}).
+
+(Prototype) functorch.experimental.functionalize
+
+Given a function f, functionalize(f) returns a new function without mutations (with caveats). This is useful for constructing traces of PyTorch functions without in-place operations. For example, you can use make_fx(functionalize(f)) to construct a mutation-free trace of a pytorch function. To learn more, please see the documentation.
+
+For more details, please see our installation instructions, documentation, tutorials, and release notes.
+
+Performance Improvements
+
+Introducing nvFuser, a deep learning compiler for PyTorch
+
+In PyTorch 1.12, Torchscript is updating its default fuser  (for Volta and later CUDA accelerators) to nvFuser, which supports a wider range of operations and is faster than NNC, the previous fuser for CUDA devices. A soon to be published blog post will elaborate on nvFuser and show how it speeds up training on a variety of networks.
+
+See the nvFuser documentation for more details on usage and debugging.
+
+Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+
+PyTorch supports a variety of “mixed precision” techniques, like the torch.amp (Automated Mixed Precision) module and performing float32 matrix multiplications using the TensorFloat32 datatype on Ampere and later CUDA hardware for faster internal computations. In PyTorch 1.12 we’re changing the default behavior of float32 matrix multiplications to always use full IEEE fp32 precision, which is more precise but slower than using the TensorFloat32 datatype for internal computation. For devices with a particularly high ratio of TensorFloat32 to float32 throughput such as A100, this change in defaults can result in a large slowdown.
+
+If you’ve been using TensorFloat32 matrix multiplications then you can continue to do so by setting torch.backends.cuda.matmul.allow_tf32 = True
+
+which is supported since PyTorch 1.7. Starting in PyTorch 1.12 the new matmul precision API can be used, too: torch.set_float32_matmul_precision(“highest”|”high”|”medium”)
+
+To reiterate, PyTorch’s new default is “highest” precision for all device types. We think this provides better consistency across device types for matrix multiplications. Documentation for the new precision API can be found here. Setting the “high” or “medium” precision types will enable TensorFloat32 on Ampere and later CUDA devices. If you’re updating to PyTorch 1.12 then to preserve the current behavior and faster performance of matrix multiplications on Ampere devices, set precision to “high”.
+
+Using mixed precision techniques is essential for training many modern deep learning networks efficiently, and if you’re already using torch.amp this change is unlikely to affect you. If you’re not familiar with mixed precision training then see our soon to be published “What Every User Should Know About Mixed Precision Training in PyTorch” blogpost.
+
+(Beta) Accelerating PyTorch Vision Models with Channels Last on CPU
+
+Memory formats have a significant impact on performance when running vision models, generally Channels Last is more favorable from a performance perspective due to better data locality. 1.12 includes fundamental concepts of memory formats and demonstrates performance benefits using Channels Last on popular PyTorch vision models on Intel® Xeon® Scalable processors.
+
+  Enables Channels Last memory format support for the commonly used operators in CV domain on CPU, applicable for both inference and training
+  Provides native level optimization on Channels Last kernels from ATen, applicable for both AVX2 and AVX512
+  Delivers 1.3x to 1.8x inference performance gain over Channels First for TorchVision models on Intel® Xeon® Ice Lake (or newer) CPUs
+
+
+(Beta) Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16
+
+Reduced precision numeric formats like bfloat16 improves PyTorch performance across multiple deep learning training workloads. PyTorch 1.12 includes the latest software enhancements on bfloat16 which applies to a broader scope of user scenarios and showcases even higher performance gains. The main improvements include:
+
+  2x hardware compute throughput vs. float32 with the new bfloat16 native instruction VDPBF16PS, introduced on Intel® Xeon® Cooper Lake CPUs
+  1/2 memory footprint of float32, faster speed for memory bandwidth intensive operators
+  1.4x to 2.2x inference performance gain over float32 for TorchVision models on Intel® Xeon® Cooper Lake (or newer) CPUs
+
+
+(Prototype) Introducing Accelerated PyTorch Training on Mac
+
+With the PyTorch 1.12 release, developers and researchers can now take advantage of Apple silicon GPUs for significantly faster model training. This unlocks the ability to perform machine learning workflows like prototyping and fine-tuning locally, right on Mac. Accelerated GPU training is enabled using Apple’s Metal Performance Shaders (MPS) as a backend. The benefits include performance speedup from accelerated GPU training and the ability to train larger networks or batch sizes locally. Learn more here.
+
+
+  
+
+
+
+ Accelerated GPU training and evaluation speedups over CPU-only (times faster)
+
+
+Alongside the new MPS device support, the M1 binaries for Core and Domain libraries that have been available for the last few releases are now an official prototype feature. These binaries can be used to run PyTorch natively on Apple Silicon.
+
+(Prototype) BetterTransformer: Fastpath execution for Transformer Encoder Inference
+
+PyTorch now supports CPU and GPU fastpath implementations (“BetterTransformer”) for several Transformer Encoder modules including TransformerEncoder, TransformerEncoderLayer, and MultiHeadAttention (MHA). The BetterTransformer fastpath architecture Better Transformer is consistently faster –  2x for many common execution scenarios, depending on model and input characteristics. The new BetterTransformer-enabled modules are API compatible with previous releases of the PyTorch Transformer API and will accelerate existing models if they meet fastpath execution requirements, as well as read models trained with previous versions of PyTorch. PyTorch 1.12 includes:
+
+  BetterTransformer integration for Torchtext’s pretrained RoBERTa and XLM-R models
+  Torchtext which builds on the PyTorch Transformer API
+  Fastpath execution for improved performance by reducing execution overheads with fused kernels which combines multiple operators into a single kernel
+  Option to achieve additional speedups by taking advantage of data sparsity during the processing of padding tokens in natural-language processing (by setting enable_nested_tensor=True when creating a TransformerEncoder)
+  Diagnostics to help users understand why fastpath execution did not occur
+
+
+
+  
+
+
+Distributed
+
+(Beta) Fully Sharded Data Parallel (FSDP) API
+
+FSDP API helps easily scale large model training by sharding a model’s parameters, gradients and optimizer states across data parallel workers while maintaining the simplicity of data parallelism. The prototype version was released in PyTorch 1.11 with a minimum set of features that helped scaling tests of models with up to 1T parameters.
+
+In this beta release, FSDP API added the following features to support various production workloads. Highlights of the the newly added features in this beta release include:
+
+  Universal sharding strategy API - Users can easily change between sharding strategies with a single line change, and thus compare and use DDP (only data sharding), FSDP (full model and data sharding), or Zero2 (only sharding of optimizer and gradients) to optimize memory and performance for their specific training needs
+  Fine grained mixed precision policies - Users can specify a mix of half and full data types (bfloat16, fp16 or fp32) for model parameters, gradient communication, and buffers via mixed precision policies.  Models are automatically saved in fp32 to allow for maximum portability
+  Transformer auto wrapping policy - allows for optimal wrapping of Transformer based models by registering the models layer class, and thus accelerated training performance
+  Faster model initialization using device_id init - initialization is performed in a streaming fashion to avoid OOM issues and optimize init performance vs CPU init
+  Rank0 streaming for full model saving of larger models - Fully sharded models can be saved by all GPU’s streaming their shards to the rank 0 GPU, and the model is built in full state on the rank 0 CPU for saving
+
+
+For more details and example code, please checkout the documentation and the tutorial.
+
+Thanks for reading, If you’re interested in these updates and want to join the PyTorch community, we encourage you to join the discussion forums and open GitHub issues. To get the latest news from PyTorch, follow us on Twitter, Medium, YouTube, and LinkedIn.
+
+Cheers!
+
+Team PyTorch
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch 1.12: TorchArrow, Functional API for Modules and nvFuser, are now available">
+<meta name="twitter:description" content="We are excited to announce the release of PyTorch 1.12 (release note)! This release is composed of over 3124 commits, 433 contributors. Along with 1.12, we are releasing beta versions of AWS S3 Integration, PyTorch Vision Models on Channels Last on CPU, Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16 and FSDP API. We want to sincerely thank our dedicated community for your contributions.
+
+Summary:
+
+  Functional APIs to functionally apply module computation with a given set of parameters
+  Complex32 and Complex Convolutions in PyTorch
+  DataPipes from TorchData fully backward compatible with DataLoader
+  functorch with improved coverage for APIs
+  nvFuser a deep learning compiler for PyTorch
+  Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+  TorchArrow, a new beta library for machine learning preprocessing over batch data
+
+
+Frontend APIs
+
+Introducing TorchArrow
+
+We’ve got a new Beta release ready for you to try and use: TorchArrow. This is a library for machine learning preprocessing over batch data. It features a performant and Pandas-style, easy-to-use API in order to speed up your preprocessing workflows and development.
+
+Currently, it provides a Python DataFrame interface with the following features:
+
+  High-performance CPU backend, vectorized and extensible User-Defined Functions (UDFs) with Velox
+  Seamless handoff with PyTorch or other model authoring, such as Tensor collation and easily plugging into PyTorch DataLoader and DataPipes
+  Zero copy for external readers via Arrow in-memory columnar format
+
+
+For more details, please find our 10-min tutorial, installation instructions, API documentation, and a prototype for data preprocessing in TorchRec.
+
+(Beta) Functional API for Modules
+
+PyTorch 1.12 introduces a new beta feature to functionally apply Module computation with a given set of parameters. Sometimes, the traditional PyTorch Module usage pattern that maintains a static set of parameters internally is too restrictive. This is often the case when implementing algorithms for meta-learning, where multiple sets of parameters may need to be maintained across optimizer steps.
+
+The new torch.nn.utils.stateless.functional_call() API allows for:
+
+  Module computation with full flexibility over the set of parameters used
+  No need to reimplement your module in a functional way
+  Any parameter or buffer present in the module can be swapped with an externally-defined value for use in the call. Naming for referencing parameters / buffers follows the fully-qualified form in the module’s state_dict()
+
+
+Example:
+import torch
+from torch import nn
+from torch.nn.utils.stateless import functional_call
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(3, 3)
+        self.bn = nn.BatchNorm1d(3)
+        self.fc2 = nn.Linear(3, 3)
+
+    def forward(self, x):
+        return self.fc2(self.bn(self.fc1(x)))
+
+m = MyModule()
+
+# Define parameter / buffer values to use during module computation.
+my_weight = torch.randn(3, 3, requires_grad=True)
+my_bias = torch.tensor([1., 2., 3.], requires_grad=True)
+params_and_buffers = {
+    'fc1.weight': my_weight,
+    'fc1.bias': my_bias,
+    # Custom buffer values can be used too.
+    'bn.running_mean': torch.randn(3),
+}
+
+# Apply module computation to the input with the specified parameters / buffers.
+inp = torch.randn(5, 3)
+output = functional_call(m, params_and_buffers, inp)
+
+
+(Beta) Complex32 and Complex Convolutions in PyTorch
+
+PyTorch today natively supports complex numbers, complex autograd, complex modules, and numerous complex operations, including linear algebra and Fast Fourier Transform (FFT) operators. Many libraries, including torchaudio and ESPNet, already make use of complex numbers in PyTorch, and PyTorch 1.12 further extends complex functionality with complex convolutions and the experimental complex32 (“complex half”) data type that enables half precision FFT operations. Due to the bugs in CUDA 11.3 package, we recommend using CUDA 11.6 package from wheels if you are using complex numbers.
+
+(Beta) Forward-mode Automatic Differentiation
+
+Forward-mode AD allows the computation of directional derivatives (or equivalently, Jacobian-vector products) eagerly in the forward pass. PyTorch 1.12 significantly improves the operator coverage for forward-mode AD. See our tutorial for more information.
+
+TorchData
+
+BC DataLoader + DataPipe
+
+`DataPipe` from TorchData becomes fully backward compatible with the existing `DataLoader` regarding shuffle determinism and dynamic sharding in both multiprocessing and distributed environments.
+
+(Beta) AWS S3 Integration
+
+DataPipes based on AWSSDK have been integrated into TorchData. It provides the following features backed by native AWSSDK:
+
+  Retrieve list of urls from each S3 bucket based on prefix
+    
+      Support timeout to prevent hanging indefinitely
+      Support to specify S3 bucket region
+    
+  
+  Load data from S3 urls
+    
+      Support buffered and multi-part download
+      Support to specify S3 bucket region
+    
+  
+
+
+AWS native DataPipes are still in the beta phase. And, we will keep tuning them to improve their performance.
+
+(Prototype) DataLoader2
+
+DataLoader2 became available in prototype mode. We are introducing new ways to interact between DataPipes, DataLoading API, and backends (aka ReadingServices). Feature is stable in terms of API, but functionally not complete yet. We welcome early adopters and feedback, as well as potential contributors.
+
+For more details, please checkout the link.
+
+functorch
+
+Inspired by Google JAX, functorch is a library that offers composable vmap (vectorization) and autodiff transforms. It enables advanced autodiff use cases that would otherwise be tricky to express in PyTorch. Examples of these include:
+
+  running ensembles of models on a single machine
+  efficiently computing Jacobians and Hessians
+  computing per-sample-gradients (or other per-sample quantities)
+
+
+We’re excited to announce functorch 0.2.0 with a number of improvements and new experimental features.
+
+Significantly improved coverage
+
+We significantly improved coverage for functorch.jvp (our forward-mode autodiff API) and other APIs that rely on it (functorch.{jacfwd, hessian}).
+
+(Prototype) functorch.experimental.functionalize
+
+Given a function f, functionalize(f) returns a new function without mutations (with caveats). This is useful for constructing traces of PyTorch functions without in-place operations. For example, you can use make_fx(functionalize(f)) to construct a mutation-free trace of a pytorch function. To learn more, please see the documentation.
+
+For more details, please see our installation instructions, documentation, tutorials, and release notes.
+
+Performance Improvements
+
+Introducing nvFuser, a deep learning compiler for PyTorch
+
+In PyTorch 1.12, Torchscript is updating its default fuser  (for Volta and later CUDA accelerators) to nvFuser, which supports a wider range of operations and is faster than NNC, the previous fuser for CUDA devices. A soon to be published blog post will elaborate on nvFuser and show how it speeds up training on a variety of networks.
+
+See the nvFuser documentation for more details on usage and debugging.
+
+Changes to float32 matrix multiplication precision on Ampere and later CUDA hardware
+
+PyTorch supports a variety of “mixed precision” techniques, like the torch.amp (Automated Mixed Precision) module and performing float32 matrix multiplications using the TensorFloat32 datatype on Ampere and later CUDA hardware for faster internal computations. In PyTorch 1.12 we’re changing the default behavior of float32 matrix multiplications to always use full IEEE fp32 precision, which is more precise but slower than using the TensorFloat32 datatype for internal computation. For devices with a particularly high ratio of TensorFloat32 to float32 throughput such as A100, this change in defaults can result in a large slowdown.
+
+If you’ve been using TensorFloat32 matrix multiplications then you can continue to do so by setting torch.backends.cuda.matmul.allow_tf32 = True
+
+which is supported since PyTorch 1.7. Starting in PyTorch 1.12 the new matmul precision API can be used, too: torch.set_float32_matmul_precision(“highest”|”high”|”medium”)
+
+To reiterate, PyTorch’s new default is “highest” precision for all device types. We think this provides better consistency across device types for matrix multiplications. Documentation for the new precision API can be found here. Setting the “high” or “medium” precision types will enable TensorFloat32 on Ampere and later CUDA devices. If you’re updating to PyTorch 1.12 then to preserve the current behavior and faster performance of matrix multiplications on Ampere devices, set precision to “high”.
+
+Using mixed precision techniques is essential for training many modern deep learning networks efficiently, and if you’re already using torch.amp this change is unlikely to affect you. If you’re not familiar with mixed precision training then see our soon to be published “What Every User Should Know About Mixed Precision Training in PyTorch” blogpost.
+
+(Beta) Accelerating PyTorch Vision Models with Channels Last on CPU
+
+Memory formats have a significant impact on performance when running vision models, generally Channels Last is more favorable from a performance perspective due to better data locality. 1.12 includes fundamental concepts of memory formats and demonstrates performance benefits using Channels Last on popular PyTorch vision models on Intel® Xeon® Scalable processors.
+
+  Enables Channels Last memory format support for the commonly used operators in CV domain on CPU, applicable for both inference and training
+  Provides native level optimization on Channels Last kernels from ATen, applicable for both AVX2 and AVX512
+  Delivers 1.3x to 1.8x inference performance gain over Channels First for TorchVision models on Intel® Xeon® Ice Lake (or newer) CPUs
+
+
+(Beta) Empowering PyTorch on Intel® Xeon® Scalable processors with Bfloat16
+
+Reduced precision numeric formats like bfloat16 improves PyTorch performance across multiple deep learning training workloads. PyTorch 1.12 includes the latest software enhancements on bfloat16 which applies to a broader scope of user scenarios and showcases even higher performance gains. The main improvements include:
+
+  2x hardware compute throughput vs. float32 with the new bfloat16 native instruction VDPBF16PS, introduced on Intel® Xeon® Cooper Lake CPUs
+  1/2 memory footprint of float32, faster speed for memory bandwidth intensive operators
+  1.4x to 2.2x inference performance gain over float32 for TorchVision models on Intel® Xeon® Cooper Lake (or newer) CPUs
+
+
+(Prototype) Introducing Accelerated PyTorch Training on Mac
+
+With the PyTorch 1.12 release, developers and researchers can now take advantage of Apple silicon GPUs for significantly faster model training. This unlocks the ability to perform machine learning workflows like prototyping and fine-tuning locally, right on Mac. Accelerated GPU training is enabled using Apple’s Metal Performance Shaders (MPS) as a backend. The benefits include performance speedup from accelerated GPU training and the ability to train larger networks or batch sizes locally. Learn more here.
+
+
+  
+
+
+
+ Accelerated GPU training and evaluation speedups over CPU-only (times faster)
+
+
+Alongside the new MPS device support, the M1 binaries for Core and Domain libraries that have been available for the last few releases are now an official prototype feature. These binaries can be used to run PyTorch natively on Apple Silicon.
+
+(Prototype) BetterTransformer: Fastpath execution for Transformer Encoder Inference
+
+PyTorch now supports CPU and GPU fastpath implementations (“BetterTransformer”) for several Transformer Encoder modules including TransformerEncoder, TransformerEncoderLayer, and MultiHeadAttention (MHA). The BetterTransformer fastpath architecture Better Transformer is consistently faster –  2x for many common execution scenarios, depending on model and input characteristics. The new BetterTransformer-enabled modules are API compatible with previous releases of the PyTorch Transformer API and will accelerate existing models if they meet fastpath execution requirements, as well as read models trained with previous versions of PyTorch. PyTorch 1.12 includes:
+
+  BetterTransformer integration for Torchtext’s pretrained RoBERTa and XLM-R models
+  Torchtext which builds on the PyTorch Transformer API
+  Fastpath execution for improved performance by reducing execution overheads with fused kernels which combines multiple operators into a single kernel
+  Option to achieve additional speedups by taking advantage of data sparsity during the processing of padding tokens in natural-language processing (by setting enable_nested_tensor=True when creating a TransformerEncoder)
+  Diagnostics to help users understand why fastpath execution did not occur
+
+
+
+  
+
+
+Distributed
+
+(Beta) Fully Sharded Data Parallel (FSDP) API
+
+FSDP API helps easily scale large model training by sharding a model’s parameters, gradients and optimizer states across data parallel workers while maintaining the simplicity of data parallelism. The prototype version was released in PyTorch 1.11 with a minimum set of features that helped scaling tests of models with up to 1T parameters.
+
+In this beta release, FSDP API added the following features to support various production workloads. Highlights of the the newly added features in this beta release include:
+
+  Universal sharding strategy API - Users can easily change between sharding strategies with a single line change, and thus compare and use DDP (only data sharding), FSDP (full model and data sharding), or Zero2 (only sharding of optimizer and gradients) to optimize memory and performance for their specific training needs
+  Fine grained mixed precision policies - Users can specify a mix of half and full data types (bfloat16, fp16 or fp32) for model parameters, gradient communication, and buffers via mixed precision policies.  Models are automatically saved in fp32 to allow for maximum portability
+  Transformer auto wrapping policy - allows for optimal wrapping of Transformer based models by registering the models layer class, and thus accelerated training performance
+  Faster model initialization using device_id init - initialization is performed in a streaming fashion to avoid OOM issues and optimize init performance vs CPU init
+  Rank0 streaming for full model saving of larger models - Fully sharded models can be saved by all GPU’s streaming their shards to the rank 0 GPU, and the model is built in full state on the rank 0 CPU for saving
+
+
+For more details and example code, please checkout the documentation and the tutorial.
+
+Thanks for reading, If you’re interested in these updates and want to join the PyTorch community, we encourage you to join the discussion forums and open GitHub issues. To get the latest news from PyTorch, follow us on Twitter, Medium, YouTube, and LinkedIn.
+
+Cheers!
+
+Team PyTorch
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年6月28日</p>
+            <h1>
+                <a class="blog-title">PyTorch 1.12：TorchArrow、模块功能 API 和 nvFuser 现已推出</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>我们非常高兴地宣布 PyTorch 1.12 版本（<a href="https://github.com/pytorch/pytorch/releases/tag/v1.12.0"> 发布说明 </a>）的发布！这个版本由超过 3124 个提交和 433 位贡献者组成。除了 1.12 版本，我们还发布了 AWS S3 集成、PyTorch 在 CPU 上使用 Channels Last 的视觉模型、通过 Bfloat16 和 FSDP API 增强 PyTorch 在 Intel® Xeon®可扩展处理器上的功能。我们衷心感谢我们忠诚的社区成员对您的贡献。</p>
+
+<p>摘要：</p>
+<ul>
+  <li>使用给定的参数以功能方式应用模块计算的函数 API</li>
+  <li>PyTorch 中的 Complex32 和复卷积</li>
+  <li>TorchData 的 DataPipes 与 DataLoader 完全向后兼容</li>
+  <li>functorch 对 API 的覆盖范围进行了改进</li>
+  <li>nvFuser：PyTorch 的深度学习编译器</li>
+  <li>在 Ampere 和后续 CUDA 硬件上对 float32 矩阵乘法的精度进行了更改。</li>
+  <li>TorchArrow，一个针对批量数据机器学习预处理的全新 beta 库</li>
+</ul>
+
+<h2 id="frontend-apis">前端 API</h2>
+
+<h3 id="introducing-torcharrow">介绍 TorchArrow</h3>
+
+<p>我们为您准备好了新版本的 Beta 版发布，供您尝试和使用：TorchArrow。这是一个针对批量数据机器学习预处理的库。它具有高效且易于使用的 Pandas 风格 API，以便加快您的预处理工作流程和开发。</p>
+
+<p>目前，它提供了一个具有以下功能的 Python DataFrame 接口：</p>
+<ul>
+  <li>高性能 CPU 后端，支持向量化和可扩展的用户自定义函数（UDFs），使用 <a href="https://github.com/facebookincubator/velox">Velox</a></li>
+  <li>与 PyTorch 或其他模型编写无缝对接，例如 Tensor 聚合，并轻松集成到 PyTorch DataLoader 和 DataPipes</li>
+  <li>通过 Arrow 内存列式格式实现外部读取的零拷贝</li>
+</ul>
+
+<p>想要了解更多详情，请查看我们的 <a href="https://github.com/pytorch/torcharrow/blob/main/tutorial/tutorial.ipynb">10 分钟教程 </a>、安装<a href="https://github.com/pytorch/torcharrow#installation">说明 </a>、API<a href="https://pytorch.org/torcharrow/beta/"> 文档</a>以及 TorchRec 中的数据预处理<a href="https://github.com/pytorch/torchrec/tree/main/examples/torcharrow">原型 </a>。</p>
+
+<h3 id="beta-functional-api-for-modules">（Beta）模块的功能 API</h3>
+
+<p>PyTorch 1.12 引入了一个新的 Beta 功能，允许使用给定的参数集以功能方式应用模块计算。有时，传统的 PyTorch 模块使用模式，即内部维护一组静态参数，可能过于限制。这在实现元学习算法时尤为常见，因为在优化器步骤中可能需要维护多组参数。</p>
+
+<p>新的 <code class="language-plaintext highlighter-rouge">torch.nn.utils.stateless.functional_call()</code> API 允许：</p>
+<ul>
+  <li>使用完全灵活的参数集进行模块计算</li>
+  <li>无需以函数式方式重新实现您的模块</li>
+  <li>模块中存在的任何参数或缓冲区都可以用外部定义的值进行交换，以用于调用。参数/缓冲区的命名遵循模块的 <code class="language-plaintext highlighter-rouge">state_dict()</code> 中的完全限定形式</li>
+</ul>
+
+<p>示例：</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">nn</span>
+<span class="kn">from</span> <span class="nn">torch.nn.utils.stateless</span> <span class="kn">import</span> <span class="n">functional_call</span>
+
+<span class="k">class</span> <span class="nc">MyModule</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">().</span><span class="n">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">fc1</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">bn</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">BatchNorm1d</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">fc2</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="p">.</span><span class="n">fc2</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">bn</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">fc1</span><span class="p">(</span><span class="n">x</span><span class="p">)))</span>
+
+<span class="n">m</span> <span class="o">=</span> <span class="n">MyModule</span><span class="p">()</span>
+
+<span class="c1"># Define parameter / buffer values to use during module computation.
+</span><span class="n">my_weight</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">my_bias</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.</span><span class="p">,</span> <span class="mf">2.</span><span class="p">,</span> <span class="mf">3.</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">params_and_buffers</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s">'fc1.weight'</span><span class="p">:</span> <span class="n">my_weight</span><span class="p">,</span>
+    <span class="s">'fc1.bias'</span><span class="p">:</span> <span class="n">my_bias</span><span class="p">,</span>
+    <span class="c1"># Custom buffer values can be used too.
+</span>    <span class="s">'bn.running_mean'</span><span class="p">:</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+<span class="p">}</span>
+
+<span class="c1"># Apply module computation to the input with the specified parameters / buffers.
+</span><span class="n">inp</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">functional_call</span><span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">params_and_buffers</span><span class="p">,</span> <span class="n">inp</span><span class="p">)</span>
+</code></pre></div></div>
+
+<h3 id="beta-complex32-and-complex-convolutions-in-pytorch">(Beta) PyTorch 中的 Complex32 和复卷积</h3>
+
+<p>PyTorch 今天原生支持复数、复数自动微分、复数模块以及众多复数运算，包括线性代数和快速傅里叶变换（FFT）算子。许多库，包括 torchaudio 和 ESPNet，已经在 PyTorch 中使用了复数，PyTorch 1.12 进一步扩展了复数功能，增加了复数卷积和实验性的复杂 32 位（complex half）数据类型，该类型支持半精度 FFT 运算。由于 CUDA 11.3 包中的 bug，如果您使用复数，我们建议使用 CUDA 11.6 包。</p>
+
+<h3 id="beta-forward-mode-automatic-differentiation">（Beta）前向模式自动微分</h3>
+
+<p>前向模式 AD 允许在正向传播中积极计算方向导数（或等价地，雅可比-向量积）。PyTorch 1.12 显著提高了前向模式 AD 的操作覆盖范围。请参阅我们的<a href="https://maskerprc.github.io/tutorials/search.html?q=forward-mode+automatic+differentiation+%28beta%29&amp;check_keywords=yes&amp;area=default#">教程</a>获取更多信息。</p>
+
+<h3 id="torchdata">Torch 数据</h3>
+
+<h4 id="bc-dataloader--datapipe">BC DataLoader + DataPipe</h4>
+
+<p>`DataPipe` 从 TorchData 完全向后兼容现有的 `DataLoader`，在多进程和分布式环境中的 shuffle 确定性以及动态分片方面。</p>
+
+<h4 id="beta-aws-s3-integration">(Beta) AWS S3 集成</h4>
+
+<p>基于 <a href="https://github.com/aws/aws-sdk-cpp">AWSSDK</a> 的 DataPipes 已集成到 TorchData 中。它提供了以下由原生 AWSSDK 支持的功能：</p>
+<ul>
+  <li>根据前缀从每个 S3 存储桶检索 URL 列表<ul>
+      <li>支持超时以防止无限期挂起</li>
+      <li>支持指定 S3 存储桶区域</li>
+    </ul>
+  </li>
+  <li>从 S3 URL 加载数据<ul>
+      <li>支持缓冲和多部分下载</li>
+      <li>支持指定 S3 存储桶区域</li>
+    </ul>
+  </li>
+</ul>
+
+<p>AWS 原生的 DataPipes 仍处于测试阶段。我们将持续优化它们以提高性能。</p>
+
+<h4 id="prototype-dataloader2">（原型）DataLoader2</h4>
+
+<p>DataLoader2 已进入原型模式。我们正在引入新的方式来交互 DataPipes、DataLoading API 和后端（即 ReadingServices）。在 API 方面，该功能是稳定的，但在功能上尚未完成。我们欢迎早期采用者、反馈以及潜在贡献者。</p>
+
+<p>更多详情，请查看<a href="https://github.com/pytorch/data/tree/main/torchdata/dataloader2">链接 </a>。</p>
+
+<h3 id="functorch">functorch</h3>
+
+<p>受 Google JAX 启发，functorch 是一个提供可组合的 vmap（向量化）和自动微分转换的库。它使得在 PyTorch 中难以表达的高级自动微分用例成为可能。这些用例的例子包括：</p>
+<ul>
+  <li><a href="https://pytorch.org/functorch/stable/notebooks/ensembling.html">在单台机器上运行模型集合</a></li>
+  <li><a href="https://pytorch.org/functorch/stable/notebooks/jacobians_hessians.html">高效计算雅可比矩阵和海森矩阵</a></li>
+  <li><a href="https://pytorch.org/functorch/stable/notebooks/per_sample_grads.html">计算每个样本的梯度（或其他每个样本的量）</a></li>
+</ul>
+
+<p>我们很高兴宣布 functorch 0.2.0 版本，该版本包含多项改进和新实验功能。</p>
+
+<h4 id="significantly-improved-coverage">显著提高覆盖率</h4>
+
+<p>我们显著提高了对 <code class="language-plaintext highlighter-rouge">functorch.jvp</code>（我们的前向模式自动微分 API）以及其他依赖它的 API（<code class="language-plaintext highlighter-rouge">functorch.{jacfwd, hessian}</code>）的覆盖率。</p>
+
+<h4 id="prototype-functorchexperimentalfunctionalize">(原型) functorch.experimental.functionalize</h4>
+
+<p>给定一个函数 f，<code class="language-plaintext highlighter-rouge">functionalize(f)</code> 返回一个无突变的新函数（存在限制）。这对于构建 PyTorch 函数的跟踪（不进行原地操作）非常有用。例如，您可以使用 <code class="language-plaintext highlighter-rouge">make_fx(functionalize(f))</code> 构建一个无突变的 PyTorch 函数跟踪。欲了解更多信息，请参阅 <a href="https://pytorch.org/functorch/stable/"> 文档 </a>。</p>
+
+<p>欲获取更多详细信息，请参阅我们的 <a href="https://pytorch.org/functorch/stable/install.html"> 安装说明 </a>、<a href="https://pytorch.org/functorch/"> 文档 </a>、<a href="https://pytorch.org/functorch"> 教程 </a> 和 <a href="https://github.com/pytorch/functorch/releases"> 发布说明 </a>。</p>
+
+<h2 id="performance-improvements">性能提升</h2>
+
+<h3 id="introducing-nvfuser-a-deep-learning-compiler-for-pytorch">介绍 nvFuser，一个 PyTorch 的深度学习编译器</h3>
+
+<p>在 PyTorch 1.12 中，Torchscript 正在更新其默认的 fuser（针对 Volta 及以后的 CUDA 加速器）为 nvFuser，它支持更广泛的操作，并且比之前的 CUDA 设备 fuser NNC 快。即将发布的博客文章将详细介绍 nvFuser 并展示它是如何加速各种网络训练的。</p>
+
+<p>查看有关使用和调试的更多详细信息，请参阅 <a href="https://github.com/pytorch/pytorch/blob/release/1.12/torch/csrc/jit/codegen/cuda/README.md">nvFuser 文档 </a>。</p>
+
+<h3 id="changes-to-float32-matrix-multiplication-precision-on-ampere-and-later-cuda-hardware">在 Ampere 和后续 CUDA 硬件上对 float32 矩阵乘法的精度进行了更改。</h3>
+
+<p>PyTorch 支持多种“混合精度”技术，例如 torch.amp（自动混合精度）模块，以及在 Ampere 和后续 CUDA 硬件上使用 TensorFloat32 数据类型执行 float32 矩阵乘法以实现更快的内部计算。在 PyTorch 1.12 中，我们将 float32 矩阵乘法的默认行为更改为始终使用完整的 IEEE fp32 精度，这比使用 TensorFloat32 数据类型进行内部计算更精确但速度较慢。对于 TensorFloat32 与 float32 吞吐量比率特别高的设备，如 A100，此默认值更改可能导致速度大幅下降。</p>
+
+<p>如果您一直在使用 TensorFloat32 矩阵乘法，则可以通过设置 <code class="language-plaintext highlighter-rouge">torch.backends.cuda.matmul.allow_tf32 = True</code> 继续这样做。</p>
+
+<p>自 PyTorch 1.7 开始支持，从 PyTorch 1.12 开始，还可以使用新的矩阵乘法精度 API： <code class="language-plaintext highlighter-rouge">torch.set_float32_matmul_precision(“highest”|”high”|”medium”)</code> </p>
+
+<p>再次强调，PyTorch 对所有设备类型的新默认精度为“最高”。我们认为这为矩阵乘法提供了更好的设备类型一致性。有关新精度 API 的文档可以在这里找到：<a href="https://pytorch.org/docs/master/generated/torch.set_float32_matmul_precision.html?highlight=precision#torch.set_float32_matmul_precision"> 这里 </a>。将精度设置为“高”或“中”类型将启用 Ampere 和后续 CUDA 设备上的 TensorFloat32。如果您正在更新到 PyTorch 1.12，为了保留 Ampere 设备上矩阵乘法的当前行为和更快性能，请将精度设置为“高”。</p>
+
+<p>使用混合精度技术对于高效训练许多现代深度学习网络至关重要，如果您已经使用 torch.amp，则此更改不太可能影响您。如果您不熟悉混合精度训练，请参阅我们即将发布的“关于 PyTorch 混合精度训练的每个用户都应该知道的内容”博客文章。</p>
+
+<h3 id="beta-accelerating-pytorch-vision-models-with-channels-last-on-cpu">（Beta）在 CPU 上使用 Channels Last 加速 PyTorch 视觉模型</h3>
+
+<p>内存格式对运行视觉模型时的性能有重大影响，通常从性能角度来看，通道最后（Channels Last）更为有利，因为其数据局部性更好。1.12 版本包括内存格式的基本概念，并展示了在 Intel® Xeon® Scalable 处理器上使用通道最后（Channels Last）对流行的 PyTorch 视觉模型进行性能提升的示例。</p>
+<ul>
+  <li>支持 CV 领域常用操作符的通道最后（Channels Last）内存格式，适用于推理和训练。</li>
+  <li>对 ATen 的通道最后（Channels Last）内核提供原生级别的优化，适用于 AVX2 和 AVX512。</li>
+  <li>在 Intel® Xeon® Ice Lake（或更高版本）CPU 上，相较于通道第一（Channels First），TorchVision 模型可提供 1.3 倍至 1.8 倍的推理性能提升。</li>
+</ul>
+
+<h3 id="beta-empowering-pytorch-on-intel-xeon-scalable-processors-with-bfloat16">(Beta) 基于英特尔® 至强® 可扩展处理器的 PyTorch 优化，支持 Bfloat16</h3>
+
+<p>降低精度的数值格式，如 bfloat16，可提升 PyTorch 在多个深度学习训练工作负载中的性能。PyTorch 1.12 版本包含了最新的 bfloat16 软件增强功能，适用于更广泛的用户场景，并展示了更高的性能提升。主要改进包括：</p>
+<ul>
+  <li>与 float32 相比，新的 bfloat16 原生指令 VDPBF16PS 在英特尔® 至强® Cooper Lake CPU 上实现了 2 倍的硬件计算吞吐量</li>
+  <li>相比 float32 内存占用减少一半，内存带宽密集型操作速度更快</li>
+  <li>在 Intel® Xeon® Cooper Lake（或更高版本）CPU 上，TorchVision 模型相较于 float32 推理性能提升 1.4 倍至 2.2 倍</li>
+</ul>
+
+<h3 id="prototype-introducing-accelerated-pytorch-training-on-mac">（原型）介绍在 Mac 上加速 PyTorch 训练</h3>
+
+<p>随着 PyTorch 1.12 版本的发布，开发者和研究人员现在可以利用 Apple 硅 GPU 显著加速模型训练。这解锁了在 Mac 上本地执行机器学习工作流程（如原型设计和微调）的能力。加速 GPU 训练通过使用 Apple 的 Metal Performance Shaders（MPS）作为后端来实现。这些好处包括加速 GPU 训练带来的性能提升以及本地训练更大网络或批次的容量。了解更多信息 <a href="https://pytorch.org/blog/introducing-accelerated-pytorch-training-on-mac/"> 请点击此处 </a>。</p>
+
+<p align="center">
+  <img src="/assets/images/apple_m1_eval.png" width="80%">
+</p>
+
+<p align="center">与仅 CPU 相比的加速 GPU 训练和评估速度提升（倍数）</p>
+
+<p>在新的 MPS 设备支持的同时，过去几个版本中可用的 M1 二进制文件（针对 Core 和 Domain 库）现在成为官方原型功能。这些二进制文件可用于在 Apple 硅上原生运行 PyTorch。</p>
+
+<h3 id="prototype-bettertransformer-fastpath-execution-for-transformer-encoder-inference">(原型) BetterTransformer：Transformer 编码器推理的快速路径执行</h3>
+
+<p>PyTorch 现在支持 CPU 和 GPU 快速路径实现（“BetterTransformer”）的多个 Transformer 编码器模块，包括 TransformerEncoder、TransformerEncoderLayer 和 MultiHeadAttention（MHA）。BetterTransformer 快速路径架构的 Better Transformer 在许多常见执行场景中始终更快——对于许多场景，速度提升 2 倍，具体取决于模型和输入特征。新的 BetterTransformer 模块与 PyTorch Transformer API 的先前版本 API 兼容，如果它们满足快速路径执行要求，将加速现有模型，以及读取使用先前版本的 PyTorch 训练的模型。PyTorch 1.12 包括：</p>
+<ul>
+  <li>BetterTransformer 集成到 Torchtext 的预训练 RoBERTa 和 XLM-R 模型</li>
+  <li>基于 PyTorch Transformer API 的 Torchtext</li>
+  <li>通过融合内核将多个算子合并为单个内核，以减少执行开销，从而实现快速路径执行以提高性能</li>
+  <li>通过在创建 TransformerEncoder 时设置 enable_nested_tensor=True，利用自然语言处理中填充标记处理过程中的数据稀疏性，实现额外的加速</li>
+  <li>诊断工具，帮助用户理解为什么没有发生快速路径执行</li>
+</ul>
+
+<p align="center">
+  <img src="/assets/images/transformer_fastpath.png" width="80%">
+</p>
+
+<h2 id="distributed">分布式</h2>
+
+<h3 id="beta-fully-sharded-data-parallel-fsdp-api">(Beta) 全分片数据并行（FSDP）API</h3>
+
+<p><a href="https://pytorch.org/blog/introducing-pytorch-fully-sharded-data-parallel-api/">FSDP API</a> 通过将模型的参数、梯度优化器状态分片到数据并行工作器，同时保持数据并行的简单性，可以轻松扩展大型模型训练。原型版本在 PyTorch 1.11 中发布，包含最小功能集，有助于进行高达 1T 参数的模型<a href="https://medium.com/pytorch/training-a-1-trillion-parameter-model-with-pytorch-fully-sharded-data-parallel-on-aws-3ac13aa96cff">扩展测试 </a>。</p>
+
+<p>在此测试版中，FSDP API 添加了以下功能以支持各种生产工作负载。本测试版中新添加的功能亮点包括：</p>
+<ol>
+  <li>通用分片策略 API - 用户可以通过单行更改轻松切换分片策略，从而比较和使用 DDP（仅数据分片）、FSDP（全模型和数据分片）或 Zero2（仅优化器和梯度分片）来优化特定训练需求下的内存和性能</li>
+  <li>精细粒度混合精度策略 - 用户可以通过混合精度策略指定模型参数、梯度通信和缓冲区的半精度（bfloat16、fp16 或 fp32）数据类型混合。模型自动以 fp32 格式保存，以实现最大程度的可移植性</li>
+  <li>Transformer 自动包装策略 - 通过注册模型的层类，允许对基于 Transformer 的模型进行最佳包装，从而加速训练性能</li>
+  <li>使用 device_id init 加速模型初始化 - 初始化以流式方式进行，以避免内存溢出问题并优化与 CPU 初始化相比的初始化性能</li>
+  <li>大型模型全模型保存的 Rank0 流式处理 - 全分片模型可以通过所有 GPU 将它们的分片流式传输到 Rank 0 GPU 进行保存，模型在 Rank 0 CPU 上以完整状态构建以保存</li>
+</ol>
+
+<p>想要了解更多详情和示例代码，请查看<a href="https://pytorch.org/docs/1.11/fsdp.html?highlight=fsdp#module-torch.distributed.fsdp">文档</a>和<a href="https://maskerprc.github.io/tutorials/intermediate/FSDP_tutorial.html">教程 </a>。</p>
+
+<p>感谢阅读，如果您对这些更新感兴趣并想加入 PyTorch 社区，我们鼓励您加入<a href="https://discuss.pytorch.org/">讨论论坛</a>和 <a href="https://github.com/pytorch/pytorch/issues">GitHub 问题 </a>。要获取 PyTorch 的最新消息，请关注我们的 <a href="https://twitter.com/PyTorch">Twitter</a>、<a href="https://medium.com/pytorch">Medium</a>、<a href="https://www.youtube.com/pytorch">YouTube</a> 和 <a href="https://www.linkedin.com/company/pytorch">LinkedIn</a>。</p>
+
+<p>干杯！</p>
+
+<p>PyTorch 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

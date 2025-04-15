@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Introducing native PyTorch automatic mixed precision for faster training on NVIDIA GPUs | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Most deep learning frameworks, including PyTorch, train with 32-bit floating point (FP32) arithmetic by default. However this is not essential to achieve full accuracy for many deep learning models. In 2017, NVIDIA researchers developed a methodology for mixed-precision training, which combined single-precision (FP32) with half-precision (e.g. FP16) format when training a network, and achieved the same accuracy as FP32 training using the same hyperparameters, with additional performance benefits on NVIDIA GPUs:
+
+
+  Shorter training time;
+  Lower memory requirements, enabling larger batch sizes, larger models, or larger inputs.
+
+
+In order to streamline the user experience of training in mixed precision for researchers and practitioners, NVIDIA developed Apex in 2018, which is a lightweight PyTorch extension with Automatic Mixed Precision (AMP) feature. This feature enables automatic conversion of certain GPU operations from FP32 precision to mixed precision, thus improving performance while maintaining accuracy.
+
+For the PyTorch 1.6 release, developers at NVIDIA and Facebook moved mixed precision functionality into PyTorch core as the AMP package, torch.cuda.amp. torch.cuda.amp is more flexible and intuitive compared to apex.amp. Some of apex.amp’s known pain points that torch.cuda.amp has been able to fix:
+
+
+  Guaranteed PyTorch version compatibility, because it’s part of PyTorch
+  No need to build extensions
+  Windows support
+  Bitwise accurate saving/restoring of checkpoints
+  DataParallel and intra-process model parallelism (although we still recommend torch.nn.DistributedDataParallel with one GPU per process as the most performant approach)
+  Gradient penalty (double backward)
+  torch.cuda.amp.autocast() has no effect outside regions where it’s enabled, so it should serve cases that formerly struggled with multiple calls to apex.amp.initialize() (including cross-validation) without difficulty. Multiple convergence runs in the same script should each use a fresh GradScaler instance, but GradScalers are lightweight and self-contained so that’s not a problem.
+  Sparse gradient support
+
+
+With AMP being added to PyTorch core, we have started the process of deprecating apex.amp. We have moved apex.amp to maintenance mode and will support customers using apex.amp. However, we highly encourage apex.amp customers to transition to using torch.cuda.amp from PyTorch Core.
+
+Example Walkthrough
+Please see official docs for usage:
+
+  https://pytorch.org/docs/stable/amp.html
+  https://pytorch.org/docs/stable/notes/amp_examples.html
+
+
+Example:
+
+import torch
+# Creates once at the beginning of training
+scaler = torch.cuda.amp.GradScaler()
+
+for data, label in data_iter:
+   optimizer.zero_grad()
+   # Casts operations to mixed precision
+   with torch.cuda.amp.autocast():
+      loss = model(data)
+
+   # Scales the loss, and calls backward()
+   # to create scaled gradients
+   scaler.scale(loss).backward()
+
+   # Unscales gradients and calls
+   # or skips optimizer.step()
+   scaler.step(optimizer)
+
+   # Updates the scale for next iteration
+   scaler.update()
+
+
+Performance Benchmarks
+In this section, we discuss the accuracy and performance of mixed precision training with AMP on the latest NVIDIA GPU A100 and also previous generation V100 GPU. The mixed precision performance is compared to FP32 performance, when running Deep Learning workloads in the NVIDIA pytorch:20.06-py3 container from NGC.
+
+Accuracy: AMP (FP16), FP32
+The advantage of using AMP for Deep Learning training is that the models converge to the similar final accuracy while providing improved training performance. To illustrate this point, for Resnet 50 v1.5 training, we see the following accuracy results where higher is better. Please note that the below accuracy numbers are sample numbers that are subject to run to run variance of up to 0.4%. Accuracy numbers for other models including BERT, Transformer, ResNeXt-101, Mask-RCNN, DLRM can be found at  NVIDIA Deep Learning Examples Github.
+
+Training accuracy: NVIDIA DGX A100 (8x A100 40GB)
+
+
+  
+    
+      &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;TF32 Top1(%)
+    
+    
+      &nbsp;90
+      &nbsp;76.93
+      &nbsp;76.85
+    
+  
+
+
+Training accuracy: NVIDIA DGX-1 (8x V100 16GB)
+
+
+  
+    
+     &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;FP32 Top1(%)
+    
+    
+      50
+      76.25
+      76.26
+    
+    
+      90
+      77.09
+      77.01
+    
+	  
+      250
+      78.42
+      78.30
+    
+  
+
+
+Speedup Performance:
+
+FP16 on NVIDIA V100 vs. FP32 on V100
+AMP with FP16 is the most performant option for DL training on the V100. In Table 1, we can observe that for various models, AMP on V100 provides a speedup of 1.5x to 5.5x over FP32 on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 2. Performance of mixed precision training on NVIDIA 8xV100 vs. FP32 training on 8xV100 GPU. Bars represent the speedup factor of V100 AMP over V100 FP32. The higher the better.
+
+FP16 on NVIDIA A100 vs. FP16 on V100
+
+AMP with FP16 remains the most performant option for DL training on the A100. In Figure 3, we can observe that for various models, AMP on A100 provides a speedup of 1.3x to 2.5x over AMP on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 3. Performance of mixed precision training on NVIDIA 8xA100 vs. 8xV100 GPU. Bars represent the speedup factor of A100 over V100. The higher the better.
+
+Call to action
+AMP provides a healthy speedup for Deep Learning training workloads on Nvidia Tensor Core GPUs, especially on the latest Ampere generation A100 GPUs.  You can start experimenting with AMP enabled models and model scripts for A100, V100, T4 and other GPUs available at NVIDIA deep learning examples. NVIDIA PyTorch with native AMP support is available from the PyTorch NGC container version 20.06. We highly encourage existing apex.amp customers to transition to using torch.cuda.amp from PyTorch Core available in the latest PyTorch 1.6 release.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Introducing native PyTorch automatic mixed precision for faster training on NVIDIA GPUs">
+<meta property="og:description" content="Most deep learning frameworks, including PyTorch, train with 32-bit floating point (FP32) arithmetic by default. However this is not essential to achieve full accuracy for many deep learning models. In 2017, NVIDIA researchers developed a methodology for mixed-precision training, which combined single-precision (FP32) with half-precision (e.g. FP16) format when training a network, and achieved the same accuracy as FP32 training using the same hyperparameters, with additional performance benefits on NVIDIA GPUs:
+
+
+  Shorter training time;
+  Lower memory requirements, enabling larger batch sizes, larger models, or larger inputs.
+
+
+In order to streamline the user experience of training in mixed precision for researchers and practitioners, NVIDIA developed Apex in 2018, which is a lightweight PyTorch extension with Automatic Mixed Precision (AMP) feature. This feature enables automatic conversion of certain GPU operations from FP32 precision to mixed precision, thus improving performance while maintaining accuracy.
+
+For the PyTorch 1.6 release, developers at NVIDIA and Facebook moved mixed precision functionality into PyTorch core as the AMP package, torch.cuda.amp. torch.cuda.amp is more flexible and intuitive compared to apex.amp. Some of apex.amp’s known pain points that torch.cuda.amp has been able to fix:
+
+
+  Guaranteed PyTorch version compatibility, because it’s part of PyTorch
+  No need to build extensions
+  Windows support
+  Bitwise accurate saving/restoring of checkpoints
+  DataParallel and intra-process model parallelism (although we still recommend torch.nn.DistributedDataParallel with one GPU per process as the most performant approach)
+  Gradient penalty (double backward)
+  torch.cuda.amp.autocast() has no effect outside regions where it’s enabled, so it should serve cases that formerly struggled with multiple calls to apex.amp.initialize() (including cross-validation) without difficulty. Multiple convergence runs in the same script should each use a fresh GradScaler instance, but GradScalers are lightweight and self-contained so that’s not a problem.
+  Sparse gradient support
+
+
+With AMP being added to PyTorch core, we have started the process of deprecating apex.amp. We have moved apex.amp to maintenance mode and will support customers using apex.amp. However, we highly encourage apex.amp customers to transition to using torch.cuda.amp from PyTorch Core.
+
+Example Walkthrough
+Please see official docs for usage:
+
+  https://pytorch.org/docs/stable/amp.html
+  https://pytorch.org/docs/stable/notes/amp_examples.html
+
+
+Example:
+
+import torch
+# Creates once at the beginning of training
+scaler = torch.cuda.amp.GradScaler()
+
+for data, label in data_iter:
+   optimizer.zero_grad()
+   # Casts operations to mixed precision
+   with torch.cuda.amp.autocast():
+      loss = model(data)
+
+   # Scales the loss, and calls backward()
+   # to create scaled gradients
+   scaler.scale(loss).backward()
+
+   # Unscales gradients and calls
+   # or skips optimizer.step()
+   scaler.step(optimizer)
+
+   # Updates the scale for next iteration
+   scaler.update()
+
+
+Performance Benchmarks
+In this section, we discuss the accuracy and performance of mixed precision training with AMP on the latest NVIDIA GPU A100 and also previous generation V100 GPU. The mixed precision performance is compared to FP32 performance, when running Deep Learning workloads in the NVIDIA pytorch:20.06-py3 container from NGC.
+
+Accuracy: AMP (FP16), FP32
+The advantage of using AMP for Deep Learning training is that the models converge to the similar final accuracy while providing improved training performance. To illustrate this point, for Resnet 50 v1.5 training, we see the following accuracy results where higher is better. Please note that the below accuracy numbers are sample numbers that are subject to run to run variance of up to 0.4%. Accuracy numbers for other models including BERT, Transformer, ResNeXt-101, Mask-RCNN, DLRM can be found at  NVIDIA Deep Learning Examples Github.
+
+Training accuracy: NVIDIA DGX A100 (8x A100 40GB)
+
+
+  
+    
+      &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;TF32 Top1(%)
+    
+    
+      &nbsp;90
+      &nbsp;76.93
+      &nbsp;76.85
+    
+  
+
+
+Training accuracy: NVIDIA DGX-1 (8x V100 16GB)
+
+
+  
+    
+     &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;FP32 Top1(%)
+    
+    
+      50
+      76.25
+      76.26
+    
+    
+      90
+      77.09
+      77.01
+    
+	  
+      250
+      78.42
+      78.30
+    
+  
+
+
+Speedup Performance:
+
+FP16 on NVIDIA V100 vs. FP32 on V100
+AMP with FP16 is the most performant option for DL training on the V100. In Table 1, we can observe that for various models, AMP on V100 provides a speedup of 1.5x to 5.5x over FP32 on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 2. Performance of mixed precision training on NVIDIA 8xV100 vs. FP32 training on 8xV100 GPU. Bars represent the speedup factor of V100 AMP over V100 FP32. The higher the better.
+
+FP16 on NVIDIA A100 vs. FP16 on V100
+
+AMP with FP16 remains the most performant option for DL training on the A100. In Figure 3, we can observe that for various models, AMP on A100 provides a speedup of 1.3x to 2.5x over AMP on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 3. Performance of mixed precision training on NVIDIA 8xA100 vs. 8xV100 GPU. Bars represent the speedup factor of A100 over V100. The higher the better.
+
+Call to action
+AMP provides a healthy speedup for Deep Learning training workloads on Nvidia Tensor Core GPUs, especially on the latest Ampere generation A100 GPUs.  You can start experimenting with AMP enabled models and model scripts for A100, V100, T4 and other GPUs available at NVIDIA deep learning examples. NVIDIA PyTorch with native AMP support is available from the PyTorch NGC container version 20.06. We highly encourage existing apex.amp customers to transition to using torch.cuda.amp from PyTorch Core available in the latest PyTorch 1.6 release.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Introducing native PyTorch automatic mixed precision for faster training on NVIDIA GPUs">
+<meta name="twitter:description" content="Most deep learning frameworks, including PyTorch, train with 32-bit floating point (FP32) arithmetic by default. However this is not essential to achieve full accuracy for many deep learning models. In 2017, NVIDIA researchers developed a methodology for mixed-precision training, which combined single-precision (FP32) with half-precision (e.g. FP16) format when training a network, and achieved the same accuracy as FP32 training using the same hyperparameters, with additional performance benefits on NVIDIA GPUs:
+
+
+  Shorter training time;
+  Lower memory requirements, enabling larger batch sizes, larger models, or larger inputs.
+
+
+In order to streamline the user experience of training in mixed precision for researchers and practitioners, NVIDIA developed Apex in 2018, which is a lightweight PyTorch extension with Automatic Mixed Precision (AMP) feature. This feature enables automatic conversion of certain GPU operations from FP32 precision to mixed precision, thus improving performance while maintaining accuracy.
+
+For the PyTorch 1.6 release, developers at NVIDIA and Facebook moved mixed precision functionality into PyTorch core as the AMP package, torch.cuda.amp. torch.cuda.amp is more flexible and intuitive compared to apex.amp. Some of apex.amp’s known pain points that torch.cuda.amp has been able to fix:
+
+
+  Guaranteed PyTorch version compatibility, because it’s part of PyTorch
+  No need to build extensions
+  Windows support
+  Bitwise accurate saving/restoring of checkpoints
+  DataParallel and intra-process model parallelism (although we still recommend torch.nn.DistributedDataParallel with one GPU per process as the most performant approach)
+  Gradient penalty (double backward)
+  torch.cuda.amp.autocast() has no effect outside regions where it’s enabled, so it should serve cases that formerly struggled with multiple calls to apex.amp.initialize() (including cross-validation) without difficulty. Multiple convergence runs in the same script should each use a fresh GradScaler instance, but GradScalers are lightweight and self-contained so that’s not a problem.
+  Sparse gradient support
+
+
+With AMP being added to PyTorch core, we have started the process of deprecating apex.amp. We have moved apex.amp to maintenance mode and will support customers using apex.amp. However, we highly encourage apex.amp customers to transition to using torch.cuda.amp from PyTorch Core.
+
+Example Walkthrough
+Please see official docs for usage:
+
+  https://pytorch.org/docs/stable/amp.html
+  https://pytorch.org/docs/stable/notes/amp_examples.html
+
+
+Example:
+
+import torch
+# Creates once at the beginning of training
+scaler = torch.cuda.amp.GradScaler()
+
+for data, label in data_iter:
+   optimizer.zero_grad()
+   # Casts operations to mixed precision
+   with torch.cuda.amp.autocast():
+      loss = model(data)
+
+   # Scales the loss, and calls backward()
+   # to create scaled gradients
+   scaler.scale(loss).backward()
+
+   # Unscales gradients and calls
+   # or skips optimizer.step()
+   scaler.step(optimizer)
+
+   # Updates the scale for next iteration
+   scaler.update()
+
+
+Performance Benchmarks
+In this section, we discuss the accuracy and performance of mixed precision training with AMP on the latest NVIDIA GPU A100 and also previous generation V100 GPU. The mixed precision performance is compared to FP32 performance, when running Deep Learning workloads in the NVIDIA pytorch:20.06-py3 container from NGC.
+
+Accuracy: AMP (FP16), FP32
+The advantage of using AMP for Deep Learning training is that the models converge to the similar final accuracy while providing improved training performance. To illustrate this point, for Resnet 50 v1.5 training, we see the following accuracy results where higher is better. Please note that the below accuracy numbers are sample numbers that are subject to run to run variance of up to 0.4%. Accuracy numbers for other models including BERT, Transformer, ResNeXt-101, Mask-RCNN, DLRM can be found at  NVIDIA Deep Learning Examples Github.
+
+Training accuracy: NVIDIA DGX A100 (8x A100 40GB)
+
+
+  
+    
+      &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;TF32 Top1(%)
+    
+    
+      &nbsp;90
+      &nbsp;76.93
+      &nbsp;76.85
+    
+  
+
+
+Training accuracy: NVIDIA DGX-1 (8x V100 16GB)
+
+
+  
+    
+     &nbsp;epochs
+      &nbsp;Mixed Precision Top 1(%)
+      &nbsp;FP32 Top1(%)
+    
+    
+      50
+      76.25
+      76.26
+    
+    
+      90
+      77.09
+      77.01
+    
+	  
+      250
+      78.42
+      78.30
+    
+  
+
+
+Speedup Performance:
+
+FP16 on NVIDIA V100 vs. FP32 on V100
+AMP with FP16 is the most performant option for DL training on the V100. In Table 1, we can observe that for various models, AMP on V100 provides a speedup of 1.5x to 5.5x over FP32 on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 2. Performance of mixed precision training on NVIDIA 8xV100 vs. FP32 training on 8xV100 GPU. Bars represent the speedup factor of V100 AMP over V100 FP32. The higher the better.
+
+FP16 on NVIDIA A100 vs. FP16 on V100
+
+AMP with FP16 remains the most performant option for DL training on the A100. In Figure 3, we can observe that for various models, AMP on A100 provides a speedup of 1.3x to 2.5x over AMP on V100 while converging to the same final accuracy.
+
+
+  
+
+Figure 3. Performance of mixed precision training on NVIDIA 8xA100 vs. 8xV100 GPU. Bars represent the speedup factor of A100 over V100. The higher the better.
+
+Call to action
+AMP provides a healthy speedup for Deep Learning training workloads on Nvidia Tensor Core GPUs, especially on the latest Ampere generation A100 GPUs.  You can start experimenting with AMP enabled models and model scripts for A100, V100, T4 and other GPUs available at NVIDIA deep learning examples. NVIDIA PyTorch with native AMP support is available from the PyTorch NGC container version 20.06. We highly encourage existing apex.amp customers to transition to using torch.cuda.amp from PyTorch Core available in the latest PyTorch 1.6 release.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2020年7月28日</p>
+            <h1>
+                <a class="blog-title">推出原生 PyTorch 自动混合精度，在 NVIDIA GPU 上实现更快训练</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">黄梦迪，切坦·特库尔，迈克尔·卡里利</p>
+                    <p>大多数深度学习框架，包括 PyTorch，默认使用 32 位浮点数（FP32）算术进行训练。然而，这并非实现许多深度学习模型完全精度的必要条件。2017 年，NVIDIA 研究人员开发了一种<a href="https://developer.nvidia.com/blog/mixed-precision-training-deep-neural-networks/">混合精度训练</a>的方法，该方法在训练网络时将<a href="https://blogs.nvidia.com/blog/2019/11/15/whats-the-difference-between-single-double-multi-and-mixed-precision-computing/">单精度 </a>（FP32）与半精度（例如 FP16）格式相结合，在相同的超参数下实现了与 FP32 训练相同的精度，并在 NVIDIA GPU 上提供了额外的性能优势：</p>
+
+<ul>
+  <li>更短的训练时间；</li>
+  <li>更低的内存需求，使得能够使用更大的批量大小、更大的模型或更大的输入。</li>
+</ul>
+
+<p>为了简化研究人员和从业者进行混合精度训练的用户体验，NVIDIA 于 2018 年开发了 <a href="https://developer.nvidia.com/blog/apex-pytorch-easy-mixed-precision-training/">Apex</a>，这是一个轻量级的 PyTorch 扩展，具有<a href="https://developer.nvidia.com/automatic-mixed-precision">自动混合精度 </a>（AMP）功能。该功能能够自动将某些 GPU 操作从 FP32 精度转换为混合精度，从而在保持准确性的同时提高性能。</p>
+
+<p>对于 PyTorch 1.6 版本，NVIDIA 和 Facebook 的开发者将混合精度功能移入 PyTorch 核心作为 AMP 包，即 <a href="https://pytorch.org/docs/stable/amp.html">torch.cuda.amp</a>。与 <code class="language-plaintext highlighter-rouge">apex.amp 相比，<code class="language-plaintext highlighter-rouge">torch.cuda.amp</code> 更加灵活直观。以下是一些 <code class="language-plaintext highlighter-rouge">apex.amp 已知的痛点，而 <code class="language-plaintext highlighter-rouge">torch.cuda.amp 已经能够解决的：</code></code></code></p>
+
+<ul>
+  <li>保证与 PyTorch 版本兼容，因为它本是 PyTorch 的一部分</li>
+  <li>无需构建扩展</li>
+  <li>Windows 支持</li>
+  <li>检查点 <a href="https://pytorch.org/docs/master/amp.html#torch.cuda.amp.GradScaler.load_state_dict"> 保存/恢复 </a> 的位精度</li>
+  <li><a href="https://pytorch.org/docs/master/notes/amp_examples.html#dataparallel-in-a-single-process">数据并行 </a> 和进程内模型并行（尽管我们仍然推荐每个进程一个 GPU 的 <a href="https://pytorch.org/docs/master/notes/amp_examples.html#distributeddataparallel-one-gpu-per-process">torch.nn.DistributedDataParallel</a> 作为最高效的方法）</li>
+  <li><a href="https://pytorch.org/docs/master/notes/amp_examples.html#gradient-penalty">梯度惩罚 </a>（双重反向）</li>
+  <li>torch.cuda.amp.autocast() 在未启用该功能的区域外没有效果，因此它应该能够轻松处理以前在多个调用 <a href="https://github.com/NVIDIA/apex/issues/439">apex.amp.initialize()</a>（包括 <a href="https://github.com/NVIDIA/apex/issues/392#issuecomment-610038073"> 交叉验证 </a>）时遇到的问题。同一脚本中的多次收敛运行应各自使用一个新的 <a href="https://github.com/NVIDIA/apex/issues/439#issuecomment-610028282">GradScaler 实例 </a>，但由于 GradScalers 轻量级且自包含，所以这不会成为问题。</li>
+  <li>稀疏梯度支持</li>
+</ul>
+
+<p>随着 AMP 被添加到 PyTorch 核心，我们已经开始弃用 <code class="language-plaintext highlighter-rouge">apex.amp.</code> 的过程。我们将 <code class="language-plaintext highlighter-rouge">apex.amp</code> 转移到维护模式，并将支持使用 <code class="language-plaintext highlighter-rouge">apex.amp</code> 的客户。然而，我们强烈建议 <code class="language-plaintext highlighter-rouge">apex.amp</code> 客户过渡到使用来自 PyTorch 核心的 <code class="language-plaintext highlighter-rouge">torch.cuda.amp</code>。</p>
+
+<h1 id="example-walkthrough">示例教程</h1>
+<p>请参阅官方文档了解使用方法：</p>
+<ul>
+  <li><a href="https://pytorch.org/docs/stable/amp.html">https://pytorch.org/docs/stable/amp.html</a></li>
+  <li><a href="https://pytorch.org/docs/stable/notes/amp_examples.html">https://pytorch.org/docs/stable/notes/amp_examples.html</a></li>
+</ul>
+
+<p>示例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="c1"># Creates once at the beginning of training
+</span><span class="n">scaler</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">amp</span><span class="p">.</span><span class="n">GradScaler</span><span class="p">()</span>
+
+<span class="k">for</span> <span class="n">data</span><span class="p">,</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">data_iter</span><span class="p">:</span>
+   <span class="n">optimizer</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">()</span>
+   <span class="c1"># Casts operations to mixed precision
+</span>   <span class="k">with</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">amp</span><span class="p">.</span><span class="n">autocast</span><span class="p">():</span>
+      <span class="n">loss</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+
+   <span class="c1"># Scales the loss, and calls backward()
+</span>   <span class="c1"># to create scaled gradients
+</span>   <span class="n">scaler</span><span class="p">.</span><span class="n">scale</span><span class="p">(</span><span class="n">loss</span><span class="p">).</span><span class="n">backward</span><span class="p">()</span>
+
+   <span class="c1"># Unscales gradients and calls
+</span>   <span class="c1"># or skips optimizer.step()
+</span>   <span class="n">scaler</span><span class="p">.</span><span class="n">step</span><span class="p">(</span><span class="n">optimizer</span><span class="p">)</span>
+
+   <span class="c1"># Updates the scale for next iteration
+</span>   <span class="n">scaler</span><span class="p">.</span><span class="n">update</span><span class="p">()</span>
+</code></pre></div></div>
+
+<h1 id="performance-benchmarks">性能基准</h1>
+<p>在本节中，我们讨论了使用 AMP 在最新 NVIDIA GPU A100 和上一代 V100 GPU 上进行的混合精度训练的准确性和性能。混合精度性能与在 NGC 的 <a href="https://ngc.nvidia.com/catalog/containers/nvidia:pytorch?ncid=partn-52193#cid=ngc01_partn_en-us">NVIDIA pytorch:20.06-py3 容器</a>中运行深度学习工作负载时的 FP32 性能进行了比较。</p>
+
+<h2 id="accuracy-amp-fp16-fp32">准确度：AMP (FP16), FP32</h2>
+<p>使用 AMP 进行深度学习训练的优势在于，模型在提供改进的训练性能的同时，收敛到相似的最终准确度。为了说明这一点，对于 <a href="https://github.com/NVIDIA/DeepLearningExamples/tree/master/PyTorch/Classification/ConvNets/resnet50v1.5#training-accuracy-nvidia-dgx-a100-8x-a100-40gb">Resnet 50 v1.5 训练 </a>，我们看到了以下准确度结果，其中数值越高越好。请注意，以下准确度数值是样本数值，受运行到运行变化的影响，变化幅度可达 0.4%。其他模型（包括 BERT、Transformer、ResNeXt-101、Mask-RCNN、DLRM）的准确度数值可以在 <a href="https://github.com/NVIDIA/DeepLearningExamples">NVIDIA 深度学习示例 Github</a> 找到。</p>
+
+<p>训练准确度：NVIDIA DGX A100（8x A100 40GB）</p>
+
+<table width="460" border="0" cellspacing="5" cellpadding="5">
+  <tbody>
+    <tr>
+      <td><strong>轮次</strong></td>
+      <td><strong>混合精度 Top 1(%)</strong></td>
+      <td>&nbsp;<strong>TF32 Top1(%)</strong></td>
+    </tr>
+    <tr>
+      <td>&nbsp;90</td>
+      <td>&nbsp;76.93</td>
+      <td>&nbsp;76.85</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>训练准确率：NVIDIA DGX-1 (8x V100 16GB)</p>
+
+<table width="460" border="0" cellspacing="5" cellpadding="5">
+  <tbody>
+    <tr>
+     <td><strong>轮次</strong></td>
+      <td><strong>混合精度 Top 1(%)</strong></td>
+      <td>&nbsp;<strong>FP32 Top1(%)</strong></td>
+    </tr>
+    <tr>
+      <td>50</td>
+      <td>76.25</td>
+      <td>76.26</td>
+    </tr>
+    <tr>
+      <td>90</td>
+      <td>77.09</td>
+      <td>77.01</td>
+    </tr>
+	  <tr>
+      <td>250</td>
+      <td>78.42</td>
+      <td>78.30</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="speedup-performance">加速性能：</h2>
+
+<h3 id="fp16-on-nvidia-v100-vs-fp32-on-v100">NVIDIA V100 上的 FP16 与 V100 上的 FP32 对比</h3>
+<p>AMP 与 FP16 是 V100 上深度学习训练中最具性能的选项。在表 1 中，我们可以观察到，对于各种模型，V100 上的 AMP 相对于 V100 上的 FP32 提供了 1.5 倍到 5.5 倍的加速，同时达到相同的最终精度。</p>
+
+<div class="text-center">
+  <img src="/assets/images/nvidiafp32onv100.jpg" width="100%">
+</div>
+<p><em>图 2.在 NVIDIA 8xV100 上混合精度训练的性能与在 8xV100 GPU 上 FP32 训练的性能对比。柱状图表示 V100 AMP 相对于 V100 FP32 的加速因子。数值越高越好。</em></p>
+
+<h2 id="fp16-on-nvidia-a100-vs-fp16-on-v100">NVIDIA A100 上的 FP16 与 V100 上的 FP16</h2>
+
+<p>AMP 与 FP16 仍然是 A100 上深度学习训练中最具性能的选项。在图 3 中，我们可以观察到，对于各种模型，A100 上的 AMP 相对于 V100 上的 AMP 提供了 1.3 倍到 2.5 倍的加速，同时达到相同的最终精度。</p>
+
+<div class="text-center">
+  <img src="/assets/images/nvidiafp16onv100.png" width="100%">
+</div>
+<p><em>图 3. 在 NVIDIA 8xA100 与 8xV100 GPU 上混合精度训练的性能。柱状图表示 A100 相对于 V100 的加速因子。数值越高越好。</em></p>
+
+<h1 id="call-to-action">呼吁行动</h1>
+<p>AMP 为 Nvidia Tensor Core GPU 上的深度学习训练工作负载提供了健康的速度提升，尤其是在最新的 Ampere 代 A100 GPU 上。您可以开始尝试使用 A100、V100、T4 以及其他 NVIDIA 深度学习<a href="https://github.com/NVIDIA/DeepLearningExamples">示例</a>中可用的 AMP 启用模型和模型脚本。从 <a href="https://ngc.nvidia.com/catalog/containers/nvidia:pytorch?ncid=partn-52193#cid=ngc01_partn_en-us">PyTorch NGC 容器</a>的 20.06 版本开始，NVIDIA PyTorch 支持原生 AMP。我们强烈建议现有的 <code class="language-plaintext highlighter-rouge">apex.amp</code> 用户过渡到使用 PyTorch Core 中的 <code class="language-plaintext highlighter-rouge">torch.cuda.amp</code>，该 Core 可在最新的 <a href="https://pytorch.org/blog/pytorch-1.6-released/">PyTorch 1.6 版本</a>中找到。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

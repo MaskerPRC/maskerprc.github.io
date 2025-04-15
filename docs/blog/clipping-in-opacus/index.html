@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Enabling Fast Gradient Clipping and Ghost Clipping in Opacus | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Introduction and Context
+
+Differentially Private Stochastic Gradient Descent (DP-SGD) is the canonical method for training machine learning models with differential privacy. It involves the following two modifications to its non-private counterpart, Stochastic Gradient Descent.
+
+
+  
+    Per-sample gradient clipping: Clip gradients with respect to every sample in the mini-batch, ensuring that its norm is at most a pre-specified value, “Clipping Norm”, C, in every iteration.
+  
+  
+    Noise addition: Add Gaussian noise of pre-specified variance, depending on the clipping norm and privacy parameters, to the average clipped gradient, in every iteration.
+  
+
+
+The first change, per-sample gradient clipping, introduces additional complexities since, in general, it requires instantiating per-sample gradients.
+
+Opacus is a PyTorch implementation of DP-SGD. Opacus addresses the above task by employing hook functions, which allows intervening on specific events, such as forward and backward passes. For more details about Opacus, we encourage readers to review the previous blog posts: DP-SGD Algorithm Explained, Efficient Per-Sample Gradient Computation in Opacus and Efficient Per-Sample Gradient Computation for More Layers in Opacus.
+
+While Opacus provides substantial efficiency gains compared to the naive approaches, the memory cost of instantiating per-sample gradients is significant. In particular, memory usage is proportional to the batch size times the number of trainable parameters. Consequently, memory limits Opacus to small batch sizes and/or small models, significantly restricting its range of applications.
+
+We introduce Fast Gradient Clipping and Ghost Clipping to Opacus, which enable developers and researchers to perform gradient clipping without instantiating the per-sample gradients. As an example, this allows for fine-tuning 7M parameters of BERT, on a single 16GB GPU, with a batch size of 1024, with memory comparable to using PyTorch (without applying DP-SGD). In contrast, the previous version of Opacus, supported a maximum batch size of roughly 256 for the same setting. We provide a tutorial on how to use Fast Gradient Clipping in Opacus with the aforementioned task as an example.
+
+Fast Gradient Clipping and Ghost Clipping
+
+The key idea behind these techniques is based on the following observation: suppose per-sample gradient norms are known, then gradient clipping can be achieved by backpropagation on a re-weighted loss function $ \bar{L} $. This loss function is defined as  $ \bar{L} = \sum_{i} R_{i} L_{i} $, where $ R_i = \min\left(\frac{C}{C_i}, 1\right) $ are the clipping coefficients computed from the per-sample gradient norms $ {C_i} $ and $ {L_i} $ are per-sample losses.
+
+The above idea may seem circular at first glance, as it appears to require instantiating per-sample gradients in order to calculate per-sample gradient norms. However, for certain widely-used components of neural network architectures, such as fully connected/linear layers, it is indeed possible to obtain per-sample gradient norms in a single backpropagation pass without the need for per-sample gradients. This suggests a workflow that involves two backpropagation passes: the first to compute per-sample gradient norms, and the second to compute the aggregated (not per-sample) clipped gradient. The second backpropagation is simply the standard batched backpropagation.
+
+
+
+
+
+Figure 1: Comparison between vanilla Opacus (top left), Fast Gradient Clipping (top right), and Ghost clipping (bottom). We marked in red gradient instantiations that become memory bottlenecks. For vanilla Opacus, it has to instantiate the per-sample gradients. Fast Gradient Clipping instantiates per-sample gradients for each layer to compute its norm, which is immediately released once the backward pass moves on to the next layer. Ghost Clipping works directly from per-sample activation gradients and per-sample activations, and avoids the need for gradient instantiation.
+
+Fast Gradient Clipping
+In Fast Gradient Clipping, the per-sample gradient norm is calculated in three steps:
+
+
+  For each layer, the per-sample gradient is instantiated and its norm is calculated.
+  The per-sample gradient is then immediately discarded.
+  The (squared) per-sample gradient norms of each layer are summed up to obtain the overall (squared) per-sample gradient norm.
+
+
+Ghost Clipping 
+Extending the approach of Fast Gradient Clipping, Ghost Clipping uses the fact that for linear layers1, per-sample gradient norms can be calculated just from activation gradients and  activations. In particular, let backprops and activations be per-sample activation gradients and activations, of dimensions batch_size ✕ output_width and batch_size ✕ input_width, respectively. The per-sample gradient is the outer product of the two, which takes O(batch_size ✕ input_width ✕ output_width) time and space.
+
+The ghost clipping trick instead calculates the (squared) norm of backprops and activations, sample-wise, and takes their product, which gives the (squared) norm of the gradient. This takes O(batch-size ✕ (input_width + output_width)) time and takes O(batch-size) space to store. Since per-sample activation and per-sample activation gradients are already stored, additional memory is needed only for storing the norms.
+
+Relationship between Fast Gradient Clipping and Ghost Clipping
+
+
+  Fast Gradient Clipping and Ghost Clipping are complementary techniques. Fast Gradient Clipping can be applied to any type of layer, while Ghost Clipping is a strictly better technique for supported layers.
+  Our implementation automatically switches to Fast Gradient Clipping when the layer is not supported by Ghost Clipping.
+
+
+How to use Fast Gradient Clipping in Opacus
+
+The training loop is identical to that of the standard PyTorch loop. As in Opacus before, we use the PrivacyEngine(), which “sanitizes” the model and optimizer. To enable Ghost Clipping, the argument grad_sample_mode=" ghost"="" is="" used.="" additionally,="" make_private()="" takes="" the="" loss="" criterion="" as="" an="" extra="" input="" and="" sanitizes="" it.="" this="" allows="" us="" to="" hide="" two="" backward="" passes="" rescaling="" in="" between="" loss.backward().="" from="" opacus="" import="" privacyengine="" #="" example="" function="" privacy_engine="PrivacyEngine()" model_gc,="" optimizer_gc,="" criterion_gc,="" train_loader,="privacy_engine.make_private(" module="model," optimizer="optimizer," data_loader="train_loader," noise_multiplier="noise_multiplier" max_grad_norm="max_grad_norm," grad_sample_mode="ghost" ,="" )="" training="" loop="" below="" identical="" that="" of="" pytorch="" for="" input_data,="" target_data="" train_loader:="" output_gc="model_gc(input_data)" forward="" pass="" optimizer_gc.zero_grad()="" target_data)="" loss.backward()="" optimizer_gc.step()="" add="" noise="" update="" model="" internally,="" before="" first="" pass,="" we="" enable="" hooks,="" which="" capture="" layer-wise="" values="" corresponding="" calls.="" they="" are="" used="" compute="" per-sample="" gradient="" norms.="" then="" clipping="" coefficients,="" rescale="" disable="" lets="" use="" standard="" pass.="" memory="" complexity="" analysis="" consider="" a="" multi-layer="" neural="" network="" with="" following="" properties:="" l:="" number="" layers="" d:="" maximum="" layer="" width="" b:="" batch="" size="" k:="" non-supported="" non-linear="" overhead="" dp-sgd="" ghost="" compared="" plain="" (pytorch)="" sgd="" additive="" o(bl),="" required="" store="" norms="" all="" layers.="" further,="" if="" there="" (if="" k≥1),="" additional="" o(bd2)="" instantiate="" layer.="" benchmarking="" provide="" results="" on="" usage="" variety="" settings.="" fine-tuning="" bert="" problem="" privately="" last="" three="" text="" classification="" task.="" base="" has="" over="" 100m="" parameters,="" fine-tune="" layers,="" bertencoder,="" bertpooler,="" classifier,="" comprising="" roughly="" 7.6m="" parameters.="" experiments="" run="" p100="" gpu="" 16="" gb="" memory.="" table="" reports="" time="" taken="" per="" iteration="" various="" methods:="" b="32" mem="" 236="" mb="" 0.15="" s="" 1.04="" 0.55="" 5.27="" 2.1="" 12.7="" 4.2="" oom="" 1,142="" 0.21="" 4.55="" 0.68="" fgc="" 908="" 3.6="" 0.75="" gc="" 362="" 1.32="" 0.67="" 2.5="" 5="" terms="" peak="" footprint,="" &gt;="" ≫="" ≈="" sgd.="" runtimes="" similar="" because="" most="" parameters="" frozen="" up="" time.="" synthetic="" setup:="" profiling="" setup="" profile="" by="" sgd,="" vanilla="" clipping,="" dp-sgd.="" 2-layer="" fully="" connected="" input:="" 5120="" hidden:="" 2560="" output:="" 1280="" total="" size,="" different="" values,="" seen="" below.="" summarizes="" max="" increase="" (in="" mb)="" broken="" down="" stages="" each="" methods.="" method="" second="" step="" 32="" 62.5="" 0.5="" n="" 0="" 0.47="" 3,663="" 162.5="" 63.13="" 50="" 125="" 217="" 1920="" 1932.5="" 2625="" industry="" case="" tested="" internal="" meta="" case,="" consisting="" 100b="" 40m="" trainable="" our="" initial="" show="" reduces="" 95%="" dp-sgd,="" achieves="" comparable="" conclusion="" post,="" describe="" implementations="" fast="" memory-efficient="" machine="" learning="" models="" differential="" privacy.="" currently,="" implementation="" only="" applies="" linear="" but,="" outlined="" part="" 3="" series,="" it="" can="" be="" extended="" “generalized”="" such="" convolutions="" multi-head="" attention.="" current="" techniques="" require="" explicit="" backpropagation="" steps,="" increases="" runtime.="" will="" explore="" developments="" top="" book-keeping="" algorithm="" mitigation.="" learn="" more="" about="" opacus,="" visit="" opacus.ai="" github.com="" opacus.="" acknowledgements="" thank="" iden="" kalemaj,="" darren="" liu,="" karthik="" prasad,="" hao="" shi,="" igor="" shilov,="" davide="" testuggine,="" eli="" uriegas,="" haicheng="" wang,="" richard="" zou="" valuable="" feedback="" suggestions.="" ways="" extend="" layers. &#8617;="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Enabling Fast Gradient Clipping and Ghost Clipping in Opacus">
+<meta property="og:description" content="Introduction and Context
+
+Differentially Private Stochastic Gradient Descent (DP-SGD) is the canonical method for training machine learning models with differential privacy. It involves the following two modifications to its non-private counterpart, Stochastic Gradient Descent.
+
+
+  
+    Per-sample gradient clipping: Clip gradients with respect to every sample in the mini-batch, ensuring that its norm is at most a pre-specified value, “Clipping Norm”, C, in every iteration.
+  
+  
+    Noise addition: Add Gaussian noise of pre-specified variance, depending on the clipping norm and privacy parameters, to the average clipped gradient, in every iteration.
+  
+
+
+The first change, per-sample gradient clipping, introduces additional complexities since, in general, it requires instantiating per-sample gradients.
+
+Opacus is a PyTorch implementation of DP-SGD. Opacus addresses the above task by employing hook functions, which allows intervening on specific events, such as forward and backward passes. For more details about Opacus, we encourage readers to review the previous blog posts: DP-SGD Algorithm Explained, Efficient Per-Sample Gradient Computation in Opacus and Efficient Per-Sample Gradient Computation for More Layers in Opacus.
+
+While Opacus provides substantial efficiency gains compared to the naive approaches, the memory cost of instantiating per-sample gradients is significant. In particular, memory usage is proportional to the batch size times the number of trainable parameters. Consequently, memory limits Opacus to small batch sizes and/or small models, significantly restricting its range of applications.
+
+We introduce Fast Gradient Clipping and Ghost Clipping to Opacus, which enable developers and researchers to perform gradient clipping without instantiating the per-sample gradients. As an example, this allows for fine-tuning 7M parameters of BERT, on a single 16GB GPU, with a batch size of 1024, with memory comparable to using PyTorch (without applying DP-SGD). In contrast, the previous version of Opacus, supported a maximum batch size of roughly 256 for the same setting. We provide a tutorial on how to use Fast Gradient Clipping in Opacus with the aforementioned task as an example.
+
+Fast Gradient Clipping and Ghost Clipping
+
+The key idea behind these techniques is based on the following observation: suppose per-sample gradient norms are known, then gradient clipping can be achieved by backpropagation on a re-weighted loss function $ \bar{L} $. This loss function is defined as  $ \bar{L} = \sum_{i} R_{i} L_{i} $, where $ R_i = \min\left(\frac{C}{C_i}, 1\right) $ are the clipping coefficients computed from the per-sample gradient norms $ {C_i} $ and $ {L_i} $ are per-sample losses.
+
+The above idea may seem circular at first glance, as it appears to require instantiating per-sample gradients in order to calculate per-sample gradient norms. However, for certain widely-used components of neural network architectures, such as fully connected/linear layers, it is indeed possible to obtain per-sample gradient norms in a single backpropagation pass without the need for per-sample gradients. This suggests a workflow that involves two backpropagation passes: the first to compute per-sample gradient norms, and the second to compute the aggregated (not per-sample) clipped gradient. The second backpropagation is simply the standard batched backpropagation.
+
+
+
+
+
+Figure 1: Comparison between vanilla Opacus (top left), Fast Gradient Clipping (top right), and Ghost clipping (bottom). We marked in red gradient instantiations that become memory bottlenecks. For vanilla Opacus, it has to instantiate the per-sample gradients. Fast Gradient Clipping instantiates per-sample gradients for each layer to compute its norm, which is immediately released once the backward pass moves on to the next layer. Ghost Clipping works directly from per-sample activation gradients and per-sample activations, and avoids the need for gradient instantiation.
+
+Fast Gradient Clipping
+In Fast Gradient Clipping, the per-sample gradient norm is calculated in three steps:
+
+
+  For each layer, the per-sample gradient is instantiated and its norm is calculated.
+  The per-sample gradient is then immediately discarded.
+  The (squared) per-sample gradient norms of each layer are summed up to obtain the overall (squared) per-sample gradient norm.
+
+
+Ghost Clipping 
+Extending the approach of Fast Gradient Clipping, Ghost Clipping uses the fact that for linear layers1, per-sample gradient norms can be calculated just from activation gradients and  activations. In particular, let backprops and activations be per-sample activation gradients and activations, of dimensions batch_size ✕ output_width and batch_size ✕ input_width, respectively. The per-sample gradient is the outer product of the two, which takes O(batch_size ✕ input_width ✕ output_width) time and space.
+
+The ghost clipping trick instead calculates the (squared) norm of backprops and activations, sample-wise, and takes their product, which gives the (squared) norm of the gradient. This takes O(batch-size ✕ (input_width + output_width)) time and takes O(batch-size) space to store. Since per-sample activation and per-sample activation gradients are already stored, additional memory is needed only for storing the norms.
+
+Relationship between Fast Gradient Clipping and Ghost Clipping
+
+
+  Fast Gradient Clipping and Ghost Clipping are complementary techniques. Fast Gradient Clipping can be applied to any type of layer, while Ghost Clipping is a strictly better technique for supported layers.
+  Our implementation automatically switches to Fast Gradient Clipping when the layer is not supported by Ghost Clipping.
+
+
+How to use Fast Gradient Clipping in Opacus
+
+The training loop is identical to that of the standard PyTorch loop. As in Opacus before, we use the PrivacyEngine(), which “sanitizes” the model and optimizer. To enable Ghost Clipping, the argument grad_sample_mode=" ghost"="" is="" used.="" additionally,="" make_private()="" takes="" the="" loss="" criterion="" as="" an="" extra="" input="" and="" sanitizes="" it.="" this="" allows="" us="" to="" hide="" two="" backward="" passes="" rescaling="" in="" between="" loss.backward().="" from="" opacus="" import="" privacyengine="" #="" example="" function="" privacy_engine="PrivacyEngine()" model_gc,="" optimizer_gc,="" criterion_gc,="" train_loader,="privacy_engine.make_private(" module="model," optimizer="optimizer," data_loader="train_loader," noise_multiplier="noise_multiplier" max_grad_norm="max_grad_norm," grad_sample_mode="ghost" ,="" )="" training="" loop="" below="" identical="" that="" of="" pytorch="" for="" input_data,="" target_data="" train_loader:="" output_gc="model_gc(input_data)" forward="" pass="" optimizer_gc.zero_grad()="" target_data)="" loss.backward()="" optimizer_gc.step()="" add="" noise="" update="" model="" internally,="" before="" first="" pass,="" we="" enable="" hooks,="" which="" capture="" layer-wise="" values="" corresponding="" calls.="" they="" are="" used="" compute="" per-sample="" gradient="" norms.="" then="" clipping="" coefficients,="" rescale="" disable="" lets="" use="" standard="" pass.="" memory="" complexity="" analysis="" consider="" a="" multi-layer="" neural="" network="" with="" following="" properties:="" l:="" number="" layers="" d:="" maximum="" layer="" width="" b:="" batch="" size="" k:="" non-supported="" non-linear="" overhead="" dp-sgd="" ghost="" compared="" plain="" (pytorch)="" sgd="" additive="" o(bl),="" required="" store="" norms="" all="" layers.="" further,="" if="" there="" (if="" k≥1),="" additional="" o(bd2)="" instantiate="" layer.="" benchmarking="" provide="" results="" on="" usage="" variety="" settings.="" fine-tuning="" bert="" problem="" privately="" last="" three="" text="" classification="" task.="" base="" has="" over="" 100m="" parameters,="" fine-tune="" layers,="" bertencoder,="" bertpooler,="" classifier,="" comprising="" roughly="" 7.6m="" parameters.="" experiments="" run="" p100="" gpu="" 16="" gb="" memory.="" table="" reports="" time="" taken="" per="" iteration="" various="" methods:="" b="32" mem="" 236="" mb="" 0.15="" s="" 1.04="" 0.55="" 5.27="" 2.1="" 12.7="" 4.2="" oom="" 1,142="" 0.21="" 4.55="" 0.68="" fgc="" 908="" 3.6="" 0.75="" gc="" 362="" 1.32="" 0.67="" 2.5="" 5="" terms="" peak="" footprint,="" &gt;="" ≫="" ≈="" sgd.="" runtimes="" similar="" because="" most="" parameters="" frozen="" up="" time.="" synthetic="" setup:="" profiling="" setup="" profile="" by="" sgd,="" vanilla="" clipping,="" dp-sgd.="" 2-layer="" fully="" connected="" input:="" 5120="" hidden:="" 2560="" output:="" 1280="" total="" size,="" different="" values,="" seen="" below.="" summarizes="" max="" increase="" (in="" mb)="" broken="" down="" stages="" each="" methods.="" method="" second="" step="" 32="" 62.5="" 0.5="" n="" 0="" 0.47="" 3,663="" 162.5="" 63.13="" 50="" 125="" 217="" 1920="" 1932.5="" 2625="" industry="" case="" tested="" internal="" meta="" case,="" consisting="" 100b="" 40m="" trainable="" our="" initial="" show="" reduces="" 95%="" dp-sgd,="" achieves="" comparable="" conclusion="" post,="" describe="" implementations="" fast="" memory-efficient="" machine="" learning="" models="" differential="" privacy.="" currently,="" implementation="" only="" applies="" linear="" but,="" outlined="" part="" 3="" series,="" it="" can="" be="" extended="" “generalized”="" such="" convolutions="" multi-head="" attention.="" current="" techniques="" require="" explicit="" backpropagation="" steps,="" increases="" runtime.="" will="" explore="" developments="" top="" book-keeping="" algorithm="" mitigation.="" learn="" more="" about="" opacus,="" visit="" opacus.ai="" github.com="" opacus.="" acknowledgements="" thank="" iden="" kalemaj,="" darren="" liu,="" karthik="" prasad,="" hao="" shi,="" igor="" shilov,="" davide="" testuggine,="" eli="" uriegas,="" haicheng="" wang,="" richard="" zou="" valuable="" feedback="" suggestions.="" ways="" extend="" layers. &#8617;="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Enabling Fast Gradient Clipping and Ghost Clipping in Opacus">
+<meta name="twitter:description" content="Introduction and Context
+
+Differentially Private Stochastic Gradient Descent (DP-SGD) is the canonical method for training machine learning models with differential privacy. It involves the following two modifications to its non-private counterpart, Stochastic Gradient Descent.
+
+
+  
+    Per-sample gradient clipping: Clip gradients with respect to every sample in the mini-batch, ensuring that its norm is at most a pre-specified value, “Clipping Norm”, C, in every iteration.
+  
+  
+    Noise addition: Add Gaussian noise of pre-specified variance, depending on the clipping norm and privacy parameters, to the average clipped gradient, in every iteration.
+  
+
+
+The first change, per-sample gradient clipping, introduces additional complexities since, in general, it requires instantiating per-sample gradients.
+
+Opacus is a PyTorch implementation of DP-SGD. Opacus addresses the above task by employing hook functions, which allows intervening on specific events, such as forward and backward passes. For more details about Opacus, we encourage readers to review the previous blog posts: DP-SGD Algorithm Explained, Efficient Per-Sample Gradient Computation in Opacus and Efficient Per-Sample Gradient Computation for More Layers in Opacus.
+
+While Opacus provides substantial efficiency gains compared to the naive approaches, the memory cost of instantiating per-sample gradients is significant. In particular, memory usage is proportional to the batch size times the number of trainable parameters. Consequently, memory limits Opacus to small batch sizes and/or small models, significantly restricting its range of applications.
+
+We introduce Fast Gradient Clipping and Ghost Clipping to Opacus, which enable developers and researchers to perform gradient clipping without instantiating the per-sample gradients. As an example, this allows for fine-tuning 7M parameters of BERT, on a single 16GB GPU, with a batch size of 1024, with memory comparable to using PyTorch (without applying DP-SGD). In contrast, the previous version of Opacus, supported a maximum batch size of roughly 256 for the same setting. We provide a tutorial on how to use Fast Gradient Clipping in Opacus with the aforementioned task as an example.
+
+Fast Gradient Clipping and Ghost Clipping
+
+The key idea behind these techniques is based on the following observation: suppose per-sample gradient norms are known, then gradient clipping can be achieved by backpropagation on a re-weighted loss function $ \bar{L} $. This loss function is defined as  $ \bar{L} = \sum_{i} R_{i} L_{i} $, where $ R_i = \min\left(\frac{C}{C_i}, 1\right) $ are the clipping coefficients computed from the per-sample gradient norms $ {C_i} $ and $ {L_i} $ are per-sample losses.
+
+The above idea may seem circular at first glance, as it appears to require instantiating per-sample gradients in order to calculate per-sample gradient norms. However, for certain widely-used components of neural network architectures, such as fully connected/linear layers, it is indeed possible to obtain per-sample gradient norms in a single backpropagation pass without the need for per-sample gradients. This suggests a workflow that involves two backpropagation passes: the first to compute per-sample gradient norms, and the second to compute the aggregated (not per-sample) clipped gradient. The second backpropagation is simply the standard batched backpropagation.
+
+
+
+
+
+Figure 1: Comparison between vanilla Opacus (top left), Fast Gradient Clipping (top right), and Ghost clipping (bottom). We marked in red gradient instantiations that become memory bottlenecks. For vanilla Opacus, it has to instantiate the per-sample gradients. Fast Gradient Clipping instantiates per-sample gradients for each layer to compute its norm, which is immediately released once the backward pass moves on to the next layer. Ghost Clipping works directly from per-sample activation gradients and per-sample activations, and avoids the need for gradient instantiation.
+
+Fast Gradient Clipping
+In Fast Gradient Clipping, the per-sample gradient norm is calculated in three steps:
+
+
+  For each layer, the per-sample gradient is instantiated and its norm is calculated.
+  The per-sample gradient is then immediately discarded.
+  The (squared) per-sample gradient norms of each layer are summed up to obtain the overall (squared) per-sample gradient norm.
+
+
+Ghost Clipping 
+Extending the approach of Fast Gradient Clipping, Ghost Clipping uses the fact that for linear layers1, per-sample gradient norms can be calculated just from activation gradients and  activations. In particular, let backprops and activations be per-sample activation gradients and activations, of dimensions batch_size ✕ output_width and batch_size ✕ input_width, respectively. The per-sample gradient is the outer product of the two, which takes O(batch_size ✕ input_width ✕ output_width) time and space.
+
+The ghost clipping trick instead calculates the (squared) norm of backprops and activations, sample-wise, and takes their product, which gives the (squared) norm of the gradient. This takes O(batch-size ✕ (input_width + output_width)) time and takes O(batch-size) space to store. Since per-sample activation and per-sample activation gradients are already stored, additional memory is needed only for storing the norms.
+
+Relationship between Fast Gradient Clipping and Ghost Clipping
+
+
+  Fast Gradient Clipping and Ghost Clipping are complementary techniques. Fast Gradient Clipping can be applied to any type of layer, while Ghost Clipping is a strictly better technique for supported layers.
+  Our implementation automatically switches to Fast Gradient Clipping when the layer is not supported by Ghost Clipping.
+
+
+How to use Fast Gradient Clipping in Opacus
+
+The training loop is identical to that of the standard PyTorch loop. As in Opacus before, we use the PrivacyEngine(), which “sanitizes” the model and optimizer. To enable Ghost Clipping, the argument grad_sample_mode=" ghost"="" is="" used.="" additionally,="" make_private()="" takes="" the="" loss="" criterion="" as="" an="" extra="" input="" and="" sanitizes="" it.="" this="" allows="" us="" to="" hide="" two="" backward="" passes="" rescaling="" in="" between="" loss.backward().="" from="" opacus="" import="" privacyengine="" #="" example="" function="" privacy_engine="PrivacyEngine()" model_gc,="" optimizer_gc,="" criterion_gc,="" train_loader,="privacy_engine.make_private(" module="model," optimizer="optimizer," data_loader="train_loader," noise_multiplier="noise_multiplier" max_grad_norm="max_grad_norm," grad_sample_mode="ghost" ,="" )="" training="" loop="" below="" identical="" that="" of="" pytorch="" for="" input_data,="" target_data="" train_loader:="" output_gc="model_gc(input_data)" forward="" pass="" optimizer_gc.zero_grad()="" target_data)="" loss.backward()="" optimizer_gc.step()="" add="" noise="" update="" model="" internally,="" before="" first="" pass,="" we="" enable="" hooks,="" which="" capture="" layer-wise="" values="" corresponding="" calls.="" they="" are="" used="" compute="" per-sample="" gradient="" norms.="" then="" clipping="" coefficients,="" rescale="" disable="" lets="" use="" standard="" pass.="" memory="" complexity="" analysis="" consider="" a="" multi-layer="" neural="" network="" with="" following="" properties:="" l:="" number="" layers="" d:="" maximum="" layer="" width="" b:="" batch="" size="" k:="" non-supported="" non-linear="" overhead="" dp-sgd="" ghost="" compared="" plain="" (pytorch)="" sgd="" additive="" o(bl),="" required="" store="" norms="" all="" layers.="" further,="" if="" there="" (if="" k≥1),="" additional="" o(bd2)="" instantiate="" layer.="" benchmarking="" provide="" results="" on="" usage="" variety="" settings.="" fine-tuning="" bert="" problem="" privately="" last="" three="" text="" classification="" task.="" base="" has="" over="" 100m="" parameters,="" fine-tune="" layers,="" bertencoder,="" bertpooler,="" classifier,="" comprising="" roughly="" 7.6m="" parameters.="" experiments="" run="" p100="" gpu="" 16="" gb="" memory.="" table="" reports="" time="" taken="" per="" iteration="" various="" methods:="" b="32" mem="" 236="" mb="" 0.15="" s="" 1.04="" 0.55="" 5.27="" 2.1="" 12.7="" 4.2="" oom="" 1,142="" 0.21="" 4.55="" 0.68="" fgc="" 908="" 3.6="" 0.75="" gc="" 362="" 1.32="" 0.67="" 2.5="" 5="" terms="" peak="" footprint,="" &gt;="" ≫="" ≈="" sgd.="" runtimes="" similar="" because="" most="" parameters="" frozen="" up="" time.="" synthetic="" setup:="" profiling="" setup="" profile="" by="" sgd,="" vanilla="" clipping,="" dp-sgd.="" 2-layer="" fully="" connected="" input:="" 5120="" hidden:="" 2560="" output:="" 1280="" total="" size,="" different="" values,="" seen="" below.="" summarizes="" max="" increase="" (in="" mb)="" broken="" down="" stages="" each="" methods.="" method="" second="" step="" 32="" 62.5="" 0.5="" n="" 0="" 0.47="" 3,663="" 162.5="" 63.13="" 50="" 125="" 217="" 1920="" 1932.5="" 2625="" industry="" case="" tested="" internal="" meta="" case,="" consisting="" 100b="" 40m="" trainable="" our="" initial="" show="" reduces="" 95%="" dp-sgd,="" achieves="" comparable="" conclusion="" post,="" describe="" implementations="" fast="" memory-efficient="" machine="" learning="" models="" differential="" privacy.="" currently,="" implementation="" only="" applies="" linear="" but,="" outlined="" part="" 3="" series,="" it="" can="" be="" extended="" “generalized”="" such="" convolutions="" multi-head="" attention.="" current="" techniques="" require="" explicit="" backpropagation="" steps,="" increases="" runtime.="" will="" explore="" developments="" top="" book-keeping="" algorithm="" mitigation.="" learn="" more="" about="" opacus,="" visit="" opacus.ai="" github.com="" opacus.="" acknowledgements="" thank="" iden="" kalemaj,="" darren="" liu,="" karthik="" prasad,="" hao="" shi,="" igor="" shilov,="" davide="" testuggine,="" eli="" uriegas,="" haicheng="" wang,="" richard="" zou="" valuable="" feedback="" suggestions.="" ways="" extend="" layers. &#8617;="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年8月20日</p>
+            <h1>
+                <a class="blog-title">在 Opacus 中启用快速梯度裁剪和幽灵裁剪</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Enayat Ullah、Huanyu Zhang、Will Bullock、Ilya Mironov 著</p>
+                    <h2 id="introduction-and-context">引言和背景</h2>
+
+<p><a href="https://arxiv.org/abs/1607.00133">差分隐私随机梯度下降（DP-SGD）</a> 是训练具有差分隐私的机器学习模型的经典方法。它对其非隐私版本，随机梯度下降（SGD），进行了以下两个修改。</p>
+
+<ol>
+  <li>
+    <p><strong>按样本梯度裁剪 </strong>：在每个迭代中，根据每个样本在迷你批处理中的梯度进行裁剪，确保其范数不超过预指定的值，“裁剪范数”，C。</p>
+  </li>
+  <li>
+    <p><strong>噪声添加 </strong>：在每次迭代中，将预指定的方差的高斯噪声添加到平均剪裁梯度中，这取决于剪裁范数和隐私参数。</p>
+  </li>
+</ol>
+
+<p>首次更改，<strong> 按样本梯度剪裁 </strong>，引入了额外的复杂性，因为通常需要实例化 <strong> 按样本</strong><strong>梯度 </strong>。</p>
+
+<p><a href="http://opacus.ai">Opacus</a> 是 DP-SGD 的 PyTorch 实现。Opacus 通过使用 <a href="https://medium.com/pytorch/differential-privacy-series-part-2-efficient-per-sample-gradient-computation-in-opacus-5bf4031d9e22"> 钩子函数 </a> 来处理特定事件，如正向和反向传播，来解决上述任务。有关 Opacus 的更多详细信息，我们鼓励读者回顾之前的博客文章：<a href="https://bit.ly/dp-sgd-algorithm-explained">DP-SGD 算法解释 </a>、<a href="https://medium.com/pytorch/differential-privacy-series-part-2-efficient-per-sample-gradient-computation-in-opacus-5bf4031d9e22">Opacus 中高效的按样本梯度计算 </a> 和 <a href="https://pytorch.medium.com/differential-privacy-series-part-3-efficient-per-sample-gradient-computation-for-more-layers-in-39bd25df237">Opacus 中更多层的按样本梯度计算效率 </a>。</p>
+
+<p>与原始方法相比，Opacus 提供了显著的效率提升，但实例化每个样本梯度的内存成本是显著的。特别是，内存使用量与批量大小乘以可训练参数的数量成正比。因此，内存限制使得 Opacus 只能使用小批量大小和/或小模型，这极大地限制了其应用范围。</p>
+
+<p>我们将<a href="https://arxiv.org/abs/2009.03106">快速梯度裁剪</a>和<a href="https://arxiv.org/abs/2110.05679">幽灵裁剪</a>引入 Opacus，这使得开发人员和研究人员可以在不实例化每个样本梯度的同时执行梯度裁剪。例如，这允许在单个 16GB GPU 上微调 BERT 的 700 万个参数，批量大小为 1024，内存使用量与使用 PyTorch（不应用 DP-SGD）相当。相比之下，Opacus 的先前版本在相同设置下支持的最大批量大小约为 256。我们提供了一个<a href="https://github.com/pytorch/opacus/blob/main/tutorials/building\_text\_classifier.ipynb">教程 </a>，介绍了如何使用快速梯度裁剪在 Opacus 中完成上述任务。</p>
+
+<h2 id="fast-gradient-clipping-and-ghost-clipping">快速梯度裁剪和幽灵裁剪</h2>
+
+<p>这些技术背后的关键思想基于以下观察：假设已知每个样本的梯度范数，那么可以通过对重新加权的损失函数 $ \bar{L} $ 进行反向传播来实现梯度裁剪。该损失函数定义为 $ \bar{L} = \sum_{i} R_{i} L_{i} $，其中 $ R_i = \min\left(\frac{C}{C_i}, 1\right) $ 是从每个样本的梯度范数 $ {C_i} $ 计算得到的裁剪系数，而 $ {L_i} $ 是每个样本的损失。</p>
+
+<p>初看上述思想可能显得有些循环，因为它似乎需要实例化每个样本的梯度来计算每个样本的梯度范数。然而，对于神经网络架构中广泛使用的某些组件，例如全连接/线性层，确实可以在单个反向传播过程中获得每个样本的梯度范数，而无需每个样本的梯度。这表明了一种涉及两个反向传播的工作流程：第一个反向传播用于计算每个样本的梯度范数，第二个反向传播用于计算聚合的（非每个样本的）裁剪梯度。第二个反向传播仅仅是标准的批量反向传播。</p>
+
+<p><img src="/assets/images/clipping-in-opacus/fg1.jpg" alt="backpropagation diagram" style="max-width:800px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
+
+<p><img src="/assets/images/clipping-in-opacus/fg2.png" alt="backpropagation diagram" style="max-width:400px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
+
+<p><em>图 1：比较了原版 <strong>Opacus</strong>（左上角）、<strong> 快速梯度裁剪 </strong>（右上角）和<strong>幽灵裁剪 </strong>（下）。我们用红色标记了成为内存瓶颈的梯度实例化。对于原版 Opacus，它必须实例化<strong>每个样本的梯度 </strong>。<strong> 快速梯度裁剪</strong>为每个层实例化每个样本的梯度以计算其范数，一旦反向传播移动到下一层，该范数就会被立即释放。幽灵裁剪直接从<strong>每个样本的激活梯度</strong>和<strong>每个样本的激活</strong>工作，避免了梯度实例化的需求。</em></p>
+
+<p><a href="https://arxiv.org/abs/2009.03106"><strong>快速梯度裁剪</font></font></font></strong></a><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在快速梯度裁剪中，每个样本的梯度范数计算分为三个步骤：</p>
+
+<ol>
+  <li>对于每一层，实例化每个样本的梯度并计算其范数。</li>
+  <li>每个样本的梯度随后立即被丢弃。</li>
+  <li>将每一层的（平方）每个样本梯度范数相加，以获得整体（平方）每个样本梯度范数。</li>
+</ol>
+
+<p><a href="https://arxiv.org/abs/2110.05679"><strong>幽灵剪裁</font></font></font></strong></a> <br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">扩展快速梯度剪裁的方法，幽灵剪裁利用了 <a href="https://arxiv.org/abs/1510.01799"> 事实 </a>，对于 <strong> 线性层 <sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote" rel="footnote">1</a></sup>，</strong> 每个样本的梯度范数可以仅从 <strong> 激活梯度 </strong> 和 <strong> 激活 </strong> 中计算得出。特别是，设 <code class="language-plaintext highlighter-rouge">backprops</code> 和 <code class="language-plaintext highlighter-rouge">activations</code> 为每个样本的激活梯度和激活，其维度分别为 <code class="language-plaintext highlighter-rouge">batch_size ✕ output_width</code> 和 <code class="language-plaintext highlighter-rouge">batch_size ✕ input_width</code>，每个样本的梯度是这两个向量的外积，这需要 <code class="language-plaintext highlighter-rouge">O(batch_size ✕ input_width ✕ output_width)</code> 时间和空间。</p>
+
+<p>“幽灵剪裁技巧”实际上计算的是<code class="language-plaintext highlighter-rouge">反向传播</code>和<code class="language-plaintext highlighter-rouge">激活</code>的（平方）范数，按样本计算，并取它们的乘积，从而得到梯度的（平方）范数。这需要 <code class="language-plaintext highlighter-rouge">O(batch-size ✕ (input_width + output_width))</code> 的时间，并且需要 <code class="language-plaintext highlighter-rouge">O(批大小)</code> 的空间来存储。由于<strong>每个样本的激活</strong>和<strong>每个样本的激活梯度</strong>已经存储，因此只需要额外的内存来存储范数。</p>
+
+<p><strong>快速梯度剪裁与幽灵剪裁之间的关系</strong></p>
+
+<ol>
+  <li>快速梯度剪裁和幽灵剪裁是互补的技术。快速梯度剪裁可以应用于任何类型的层，而幽灵剪裁是针对支持层的一种严格更好的技术。</li>
+  <li>我们的实现会自动在层不支持幽灵剪裁时切换到快速梯度剪裁。</li>
+</ol>
+
+<h3 id="how-to-use-fast-gradient-clipping-in-opacus">如何在 Opacus 中使用快速梯度裁剪</h3>
+
+<p>训练循环与标准 PyTorch 循环相同。与 Opacus 之前一样，我们使用 <code class="language-plaintext highlighter-rouge">PrivacyEngine()</code>，它“净化”模型和优化器。要启用幽灵裁剪，使用 <code class="language-plaintext highlighter-rouge">grad_sample_mode="ghost"</code> 参数。此外，<code class="language-plaintext highlighter-rouge">make_private()</code> 函数还接受损失准则作为额外输入并对其进行净化。这使得我们能够在 <code class="language-plaintext highlighter-rouge">loss.backward()</code> 中隐藏两次反向传递和损失缩放。</p>
+
+<div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">opacus</span> <span class="kn">import</span> <span class="n">PrivacyEngine</span>
+<span class="n">criterion</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">CrossEntropyLoss</span><span class="p">()</span> <span class="c1"># example loss function
+</span>
+<span class="n">privacy_engine</span> <span class="o">=</span> <span class="n">PrivacyEngine</span><span class="p">()</span>
+<span class="n">model_gc</span><span class="p">,</span> <span class="n">optimizer_gc</span><span class="p">,</span> <span class="n">criterion_gc</span><span class="p">,</span> <span class="n">train_loader</span><span class="p">,</span> <span class="o">=</span> <span class="n">privacy_engine</span><span class="p">.</span><span class="n">make_private</span><span class="p">(</span>
+        <span class="n">module</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+        <span class="n">optimizer</span><span class="o">=</span><span class="n">optimizer</span><span class="p">,</span>
+        <span class="n">data_loader</span><span class="o">=</span><span class="n">train_loader</span><span class="p">,</span>
+        <span class="n">noise_multiplier</span><span class="o">=</span><span class="n">noise_multiplier</span>
+        <span class="n">max_grad_norm</span><span class="o">=</span><span class="n">max_grad_norm</span><span class="p">,</span>
+	 <span class="n">criterion</span><span class="o">=</span><span class="n">criterion</span><span class="p">,</span>
+        <span class="n">grad_sample_mode</span><span class="o">=</span><span class="s">"ghost"</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># The training loop below is identical to that of PyTorch
+</span>
+<span class="k">for</span> <span class="n">input_data</span><span class="p">,</span> <span class="n">target_data</span> <span class="ow">in</span> <span class="n">train_loader</span><span class="p">:</span>
+    <span class="n">output_gc</span> <span class="o">=</span> <span class="n">model_gc</span><span class="p">(</span><span class="n">input_data</span><span class="p">)</span> <span class="c1"># Forward pass
+</span>    <span class="n">optimizer_gc</span><span class="p">.</span><span class="n">zero_grad</span><span class="p">()</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion_gc</span><span class="p">(</span><span class="n">output_gc</span><span class="p">,</span> <span class="n">target_data</span><span class="p">)</span>
+    <span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+    <span class="n">optimizer_gc</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>  <span class="c1"># Add noise and update the model
+</span></code></pre></div></div>
+
+<p>在内部，在第一次传递之前，我们启用<em>钩子 </em>，这允许我们捕获与正向和反向调用对应的层值。它们用于计算每个样本的梯度范数。然后我们计算裁剪系数，缩放损失函数并禁用钩子，这使我们能够使用标准的 PyTorch 反向传递。</p>
+
+<h3 id="memory-complexity-analysis">内存复杂度分析</h3>
+
+<p>考虑具有以下特性的多层神经网络：</p>
+
+<p><strong>L</strong>：层数<br>
+<strong>d</strong>：最大层宽度<br>
+<strong>B</strong>：批量大小<br>
+<strong>Κ</strong>：不支持/非线性层的数量</p>
+
+<p>与普通的（PyTorch）SGD 相比，DP-SGD 与 Ghost Clipping 的内存开销是可加的 O(BL)，需要存储所有层的样本梯度范数。此外，如果存在不支持层（如果 K≥1），则需要额外的 O(Bd<sup>2</sup>）内存来实例化该层的梯度。</p>
+
+<h3 id="memory-benchmarking">内存基准测试</h3>
+
+<p>我们提供了各种设置下的内存使用结果。</p>
+
+<h4 id="fine-tuning-bert">微调 BERT</h4>
+
+<p>我们考虑了<a href="https://github.com/pytorch/opacus/blob/main/tutorials/building\_text\_classifier.ipynb">私有微调 </a> BERT 最后三层的问题，用于文本分类任务。基础模型有超过 1000 万个参数，我们微调了最后三层，包括 <code class="language-plaintext highlighter-rouge">BertEncoder</code>、<code class="language-plaintext highlighter-rouge">BertPooler</code> 和 <code class="language-plaintext highlighter-rouge">Classifier</code>，大约有 760 万个参数。实验在一个 P100 GPU 上运行，内存为 16GB。</p>
+
+<p>下表报告了各种方法每迭代的最大内存和时间：</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td rowspan="3"> 
+   </td>
+   <td colspan="9" style="text-align:center"><strong>批处理大小</strong>
+   </td>
+  </tr>
+  <tr>
+   <td colspan="2" style="text-align:center"><strong>B = 32</strong>
+   </td>
+   <td colspan="2" style="text-align:center"><strong>B = 128</strong>
+   </td>
+   <td colspan="2" style="text-align:center"><strong>B = 512</strong>
+   </td>
+   <td colspan="2" style="text-align:center"><strong>B = 1024</strong>
+   </td>
+   <td><strong>B = 2048</strong>
+   </td>
+  </tr>
+  <tr>
+   <td><strong>内存</strong>
+   </td>
+   <td><strong>时间</strong>
+   </td>
+   <td><strong>内存</strong>
+   </td>
+   <td><strong>时间</strong>
+   </td>
+   <td><strong>内存</strong>
+   </td>
+   <td><strong>时间</strong>
+   </td>
+   <td><strong>内存</strong>
+   </td>
+   <td><strong>时间</strong>
+   </td>
+   <td>
+   </td>
+  </tr>
+  <tr>
+   <td><strong>PyTorch SGD</strong>
+   </td>
+   <td>236 兆字节</td>
+   <td>0.15 秒</td>
+   <td>1.04 GB
+   </td>
+   <td>0.55 秒</td>
+   <td>5.27 GB
+   </td>
+   <td>2.1 秒</td>
+   <td>12.7 GB
+   </td>
+   <td>4.2 秒</td>
+   <td>OOM
+   </td>
+  </tr>
+  <tr>
+   <td><strong>DP-SGD</strong>
+   </td>
+   <td>1,142 MB
+   </td>
+   <td>0.21 秒</td>
+   <td>4.55 GB
+   </td>
+   <td>0.68 秒</td>
+   <td colspan="2" style="text-align:center">OOM
+   </td>
+   <td colspan="2" style="text-align:center">OOM
+   </td>
+   <td>OOM
+   </td>
+  </tr>
+  <tr>
+   <td><strong>FGC DP-SGD</strong>
+   </td>
+   <td>908 MB
+   </td>
+   <td>0.21 秒</td>
+   <td>3.6GB</td>
+   <td>0.75秒</td>
+   <td colspan="2" style="text-align:center">OOM
+   </td>
+   <td colspan="2" style="text-align:center">OOM
+   </td>
+   <td>OOM
+   </td>
+  </tr>
+  <tr>
+   <td><strong>GCDP-SGD</strong>
+   </td>
+   <td>362 兆字节</td>
+   <td>0.21 秒</td>
+   <td>1.32 吉字节</td>
+   <td>0.67 秒</td>
+   <td>5.27 GB
+   </td>
+   <td>2.5 秒</td>
+   <td>12.7 GB
+   </td>
+   <td>5 秒</td>
+   <td>OOM
+   </td>
+  </tr>
+</tbody></table>
+
+<p>在峰值内存占用方面，DP-SGD &gt; FGC DP-SGD &gt;&gt; GC DP-SGD ≈ PyTorch SGD。此外，运行时间相似，因为大多数参数被冻结，正向传播占据了大部分时间。</p>
+
+<h4 id="synthetic-setup-memory-profiling">合成设置：内存分析</h4>
+
+<p>我们考虑以下设置来分析 PyTorch SGD、Vanilla DP-SGD 和 Ghost Clipping，GC DP-SGD 使用的内存。</p>
+
+<ul>
+  <li>2层全连接神经网络<ul>
+      <li>输入：5120</li>
+      <li>隐藏：2560</li>
+      <li>输出：1280</li>
+      <li>模型参数总数 = 15.6M</li>
+      <li>模型大小 = 62.5 MB</li>
+    </ul>
+  </li>
+  <li>批处理大小，如下表所示的不同值。</li>
+</ul>
+
+<p>下表总结了每种方法在训练循环各个阶段的内存最大增加（以 MB 为单位）。</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td><strong>批处理大小</strong>
+   </td>
+   <td><strong>方法</strong>
+   </td>
+   <td><strong>模型到 GPU</strong>
+   </td>
+   <td><strong>前向</strong>
+   </td>
+   <td><strong>第一次反向</strong>
+   </td>
+   <td><strong>第二次反向</strong>
+   </td>
+   <td><strong>优化步</strong>
+   </td>
+  </tr>
+  <tr>
+   <td rowspan="3">32
+   </td>
+   <td><strong>PyTorch SGD</strong>
+   </td>
+   <td>62.5
+   </td>
+   <td>0.5
+   </td>
+   <td>62.5
+   </td>
+   <td>无效</td>
+   <td>0
+   </td>
+  </tr>
+  <tr>
+   <td><strong>香草 DP-SGD</strong>
+   </td>
+   <td>62.5
+   </td>
+   <td>0.47
+   </td>
+   <td>3,663
+   </td>
+   <td>无效</td>
+   <td>162.5
+   </td>
+  </tr>
+  <tr>
+   <td><strong>GCDP-SGD</strong>
+   </td>
+   <td>62.5
+   </td>
+   <td>0.47
+   </td>
+   <td>63.13
+   </td>
+   <td>50
+   </td>
+   <td>125
+   </td>
+  </tr>
+  <tr>
+   <td rowspan="3">2<sup>17</sup>
+   </td>
+   <td><strong>PyTorch SGD</strong>
+   </td>
+   <td>62.5
+   </td>
+   <td>1920
+   </td>
+   <td>1932.5
+   </td>
+   <td>无效</td>
+   <td>0
+   </td>
+  </tr>
+  <tr>
+   <td><strong>香草 DP-SGD</strong>
+   </td>
+   <td colspan="5" style="text-align:center">OOM
+   </td>
+  </tr>
+  <tr>
+   <td><strong>GCDP-SGD</strong>
+   </td>
+   <td>62.5
+   </td>
+   <td>1920
+   </td>
+   <td>2625
+   </td>
+   <td>1932.5
+   </td>
+   <td>125
+   </td>
+  </tr>
+</tbody></table>
+
+<h4 id="industry-use-case">行业应用案例</h4>
+
+<p>我们在 Meta 内部的一个用例上测试了 Ghost Clipping DP-SGD，该用例包含一个大约 100B 大小的模型，具有 4000 万个可训练参数。我们的初步结果表明，Ghost Clipping SGD 将 vanilla DP-SGD 的内存减少了 95%，并且与 PyTorch SGD 具有可比的内存使用量。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>在本文中，我们描述了 Opacus 中 Fast Gradient Clipping 和 Ghost Clipping 的实现，这些实现使得机器学习模型在差分隐私下具有内存高效的训练。目前，Ghost Clipping 实现仅适用于线性层，但正如系列的第 3 部分所述，它可以扩展到“广义”线性层，如卷积和多头注意力。当前的这些技术需要两个显式的反向传播步骤，这会增加运行时间。我们将探索 Ghost Clipping 之上的发展，例如用于缓解的 <a href="https://arxiv.org/abs/2210.00038">Book-Keeping 算法 </a>。</p>
+
+<p>想了解更多关于 Opacus 的信息，请访问 <a href="https://opacus.ai/">opacus.ai</a> 和 <a href="https://github.com/pytorch/opacus">github.com/pytorch/opacus</a>。</p>
+
+<h2 id="acknowledgements">致谢</h2>
+
+<p>我们感谢 Iden Kalemaj、Darren Liu、Karthik Prasad、Hao Shi、Igor Shilov、Davide Testuggine、Eli Uriegas、Haicheng Wang 和 Richard Zou 提供的宝贵反馈和建议。</p>
+
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:1" role="doc-endnote">
+      <p>有<a href="https://proceedings.neurips.cc/paper\_files/paper/2023/file/a45d344b28179c8da7646bc38ff50ad8-Paper-Conference.pdf">方法</a>可以将 Ghost Clipping 扩展到非线性层。<a href="#fnref:1" class="reversefootnote" role="doc-backlink">↩</a></p>
+    </li>
+  </ol>
+</div>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

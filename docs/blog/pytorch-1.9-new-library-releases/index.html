@@ -1,0 +1,1125 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      New PyTorch Library Releases in PyTorch 1.9, including TorchVision, TorchAudio, and more | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.9 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio. These releases, along with the PyTorch 1.9 release, include a number of new features and improvements that will provide a broad set of updates for the PyTorch community.
+
+Some highlights include:
+
+
+  TorchVision - Added new SSD and SSDLite models, quantized kernels for object detection, GPU Jpeg decoding, and iOS support. See release notes here.
+  TorchAudio - Added wav2vec 2.0 model deployable in non-Python environments (including C++, Android, and iOS). Many performance improvements in lfilter, spectral operations, resampling. Added options for quality control in sampling (i.e. Kaiser window support). Initiated the migration of complex tensors operations. Improved autograd support. See release notes here.
+  TorchText - Added a new high-performance Vocab module that provides common functional APIs for NLP workflows. See release notes here.
+
+
+We’d like to thank the community for their support and work on this latest release.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+TorchVision 0.10
+
+(Stable) Quantized kernels for object detection
+The forward pass of the nms and roi_align operators now support tensors with a quantized dtype, which can help lower the memory footprint of object detection models, particularly on mobile environments. For more details, refer to the documentation.
+
+(Stable) Speed optimizations for Tensor transforms
+The resize and flip transforms have been optimized and its runtime improved by up to 5x on the CPU.
+
+(Stable) Documentation improvements
+Significant improvements were made to the documentation. In particular, a new gallery of examples is available. These examples visually illustrate how each transform acts on an image, and also properly documents and illustrates the output of the segmentation models.
+
+The example gallery will be extended in the future to provide more comprehensive examples and serve as a reference for common torchvision tasks. For more details, refer to the documentation.
+
+(Beta) New models for detection
+SSD and SSDlite are two popular object detection architectures that are efficient in terms of speed and provide good results for low resolution pictures. In this release, we provide implementations for the original SSD model with VGG16 backbone and for its mobile-friendly variant SSDlite with MobileNetV3-Large backbone.
+
+The models were pre-trained on COCO train2017 and can be used as follows:
+
+import torch
+import torchvision
+
+# Original SSD variant
+x = [torch.rand(3, 300, 300), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Mobile-friendly SSDlite variant
+x = [torch.rand(3, 320, 320), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+
+The following accuracies can be obtained on COCO val2017 (full results available in #3403 and #3757):
+
+
+  
+    
+      Model
+      mAP
+      mAP@50
+      mAP@75
+    
+  
+  
+    
+      SSD300 VGG16
+      25.1
+      41.5
+      26.2
+    
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      34.3
+      22.1
+    
+  
+
+
+For more details, refer to the documentation.
+
+(Beta) JPEG decoding on the GPU
+Decoding jpegs is now possible on GPUs with the use of nvjpeg, which should be readily available in your CUDA setup. The decoding time of a single image should be about 2 to 3 times faster than with libjpeg on CPU. While the resulting tensor will be stored on the GPU device, the input raw tensor still needs to reside on the host (CPU), because the first stages of the decoding process take place on the host:
+from torchvision.io.image import read_file, decode_jpeg
+
+data = read_file('path_to_image.jpg')  # raw data is on CPU
+img = decode_jpeg(data, device='cuda')  # decoded image in on GPU
+
+For more details, see the documentation.
+
+(Beta) iOS support
+TorchVision 0.10 now provides pre-compiled iOS binaries for its C++ operators, which means you can run Faster R-CNN and Mask R-CNN on iOS. An example app on how to build a program leveraging those ops can be found here.
+
+TorchAudio 0.9.0
+
+(Stable) Complex Tensor Migration
+TorchAudio has functions that handle complex-valued tensors. These functions follow a convention to use an extra dimension to represent real and imaginary parts. In PyTorch 1.6, the native complex type was introduced. As its API is getting stable, torchaudio has started to migrate to the native complex type.
+
+In this release, we added support for native complex tensors, and you can opt-in to use them. Using the native complex types, we have verified that affected functions continue to support autograd and TorchScript, moreover, switching to native complex types improves their performance. For more details, refer to pytorch/audio#1337.
+
+(Stable) Filtering Improvement
+In release 0.8, we added the C++ implementation of the core part of lfilter for CPU, which improved the performance. In this release, we optimized some internal operations of the CPU implementation for further performance improvement. We also added autograd support to both CPU and GPU. Now lfilter and all the biquad filters (biquad, band_biquad, bass_biquad, treble_biquad, allpass_biquad, lowpass_biquad, highpass_biquad, bandpass_biquad, equalizer_biquad and bandrefect_biquad) benefit from the performance improvement and support autograd. We also moved the implementation of overdrive to C++ for performance improvement. For more details, refer to the documentation.
+
+(Stable) Improved Autograd Support
+Along with the work of Complex Tensor Migration and Filtering Improvement, we also added autograd tests to transforms. lfilter, biquad and its variants, and most transforms are now guaranteed to support autograd. For more details, refer to the release note.
+
+(Stable) Improved Windows Support
+Torchaudio implements some operations in C++ for reasons such as performance and integration with third-party libraries. These C++ components were only available on Linux and macOS. In this release, we have added support to Windows. With this, the efficient filtering implementation mentioned above is also available on Windows.
+
+However, please note that not all the C++ components are available for Windows. “sox_io” backend and torchaudio.functional.compute_kaldi_pitch are not supported.
+
+(Stable) I/O Functions Migration
+Since the 0.6 release, we have continuously improved I/O functionality. Specifically, in 0.8 we changed the default backend from “sox” to “sox_io” and applied the same switch to API of the “soundfile” backend. The 0.9 release concludes this migration by removing the deprecated backends. For more details, please refer to #903.
+
+(Beta) Wav2Vec2.0 Model
+We have added the model architectures from Wav2Vec2.0. You can import fine-tuned models parameters published on fairseq and Hugging Face Hub. Our model definition supports TorchScript, and it is possible to deploy the model to non-Python environments, such as C++, Android and iOS.
+
+The following code snippet illustrates such a use case. Please check out our c++ example directory for the complete example. Currently, it is designed for running inference. If you would like more support for training, please file a feature request.
+
+# Import fine-tuned model from Hugging Face Hub
+import transformers
+from torchaudio.models.wav2vec2.utils import import_huggingface_model
+
+original = Wav2Vec2ForCTC.from_pretrained(" facebook="" wav2vec2-base-960h")="" imported="import_huggingface_model(original)" #="" import="" fine-tuned="" model="" from="" fairseq="" torchaudio.models.wav2vec2.utils="" import_fairseq_model="" original,="" _,="" _="fairseq.checkpoint_utils.load_model_ensemble_and_task(" ["wav2vec_small_960h.pt"],="" arg_overrides="{'data':" "&lt;data_dir&gt;"})="" build="" uninitialized="" and="" load="" state="" dict="" torchaudio.models="" wav2vec2_base="" model.load_state_dict(imported.state_dict())="" quantize="" script="" optimize="" for="" mobile="" quantized_model="torch.quantization.quantize_dynamic(" model,="" qconfig_spec="{torch.nn.Linear}," dtype="torch.qint8)" scripted_model="torch.jit.script(quantized_model)" optimized_model="optimize_for_mobile(scripted_model)" optimized_model.save("model_for_deployment.pt")="" more="" details,="" see="" the="" documentation.="" (beta)="" resampling="" improvement="" in="" release="" 0.8,="" we="" vectorized="" operation="" torchaudio.compliance.kaldi.resample_waveform,="" which="" improved="" performance="" of="" resample_waveform="" torchaudio.transforms.resample.="" this="" release,="" have="" further="" revised="" way="" algorithm="" is="" implemented.="" have:="" added="" kaiser="" window="" support="" a="" wider="" range="" quality.="" rolloff="" parameter="" anti-aliasing="" control.="" mechanism="" to="" precompute="" kernel="" cache="" it="" torchaudio.transforms.resample="" even="" faster="" operation.="" moved="" implementation="" torchaudio.compliance.kaldi.resample_waveform="" torchaudio.functional.resample="" deprecated="" torchaudio.compliance.kaldi.resample_waveform.="" (prototype)="" rnn="" transducer="" loss="" used="" training="" models,="" popular="" architecture="" speech="" recognition="" tasks.="" prototype="" torchaudio="" currently="" supports="" autograd,="" torchscript,="" float16="" float32,="" can="" also="" be="" run="" on="" both="" cpu="" cuda.="" please="" refer="" torchtext="" 0.10.0="" new="" vocab="" module="" introduce="" that="" replaces="" current="" class.="" provides="" common="" functional="" apis="" nlp="" workflows.="" backed="" by="" an="" efficient="" c++="" reduces="" batch="" look-up="" time="" up-to="" ~85%="" (refer="" summary="" #1248="" #1290="" information="" benchmarks),="" torchscript.="" provide="" accompanying="" factory="" functions="" object="" either="" through="" python="" ordered="" dictionary="" or="" iterator="" yields="" lists="" tokens.="" #creating="" text="" file="" io="" torchtext.vocab="" build_vocab_from_iterator="" #generator="" yield="" list="" tokens="" def="" yield_tokens(file_path):="" with="" io.open(file_path,="" encoding="utf-8" )="" as="" f:="" line="" line.strip().split()="" #get="" vocab_obj="build_vocab_from_iterator(yield_tokens(file_path)," specials="[&quot;<unk>&quot;])" collections="" counter,="" ordereddict="" counter="Counter([&quot;a&quot;," "a",="" "b",="" "b"])="" sorted_by_freq_tuples="sorted(counter.items()," key="lambda" x:="" x[1],="" reverse="True)" ordered_dict="OrderedDict(sorted_by_freq_tuples)" #common="" api="" usage="" #look-up="" index="" vocab_obj["a"]="" #batch="" indices="" vocab_obj.looup_indices(["a","b"])="" #support="" forward="" pytorch="" nn="" modules="" vocab_obj(["a","b"])="" vocab_obj.lookup_tokens([0,1])="" #set="" default="" return="" when="" token="" not="" found="" vocab_obj.set_default_index(0)="" vocab_obj["out_of_vocabulary"]="" #prints="" 0="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube="" linkedin.="" cheers!="" -team="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="New PyTorch Library Releases in PyTorch 1.9, including TorchVision, TorchAudio, and more">
+<meta property="og:description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.9 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio. These releases, along with the PyTorch 1.9 release, include a number of new features and improvements that will provide a broad set of updates for the PyTorch community.
+
+Some highlights include:
+
+
+  TorchVision - Added new SSD and SSDLite models, quantized kernels for object detection, GPU Jpeg decoding, and iOS support. See release notes here.
+  TorchAudio - Added wav2vec 2.0 model deployable in non-Python environments (including C++, Android, and iOS). Many performance improvements in lfilter, spectral operations, resampling. Added options for quality control in sampling (i.e. Kaiser window support). Initiated the migration of complex tensors operations. Improved autograd support. See release notes here.
+  TorchText - Added a new high-performance Vocab module that provides common functional APIs for NLP workflows. See release notes here.
+
+
+We’d like to thank the community for their support and work on this latest release.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+TorchVision 0.10
+
+(Stable) Quantized kernels for object detection
+The forward pass of the nms and roi_align operators now support tensors with a quantized dtype, which can help lower the memory footprint of object detection models, particularly on mobile environments. For more details, refer to the documentation.
+
+(Stable) Speed optimizations for Tensor transforms
+The resize and flip transforms have been optimized and its runtime improved by up to 5x on the CPU.
+
+(Stable) Documentation improvements
+Significant improvements were made to the documentation. In particular, a new gallery of examples is available. These examples visually illustrate how each transform acts on an image, and also properly documents and illustrates the output of the segmentation models.
+
+The example gallery will be extended in the future to provide more comprehensive examples and serve as a reference for common torchvision tasks. For more details, refer to the documentation.
+
+(Beta) New models for detection
+SSD and SSDlite are two popular object detection architectures that are efficient in terms of speed and provide good results for low resolution pictures. In this release, we provide implementations for the original SSD model with VGG16 backbone and for its mobile-friendly variant SSDlite with MobileNetV3-Large backbone.
+
+The models were pre-trained on COCO train2017 and can be used as follows:
+
+import torch
+import torchvision
+
+# Original SSD variant
+x = [torch.rand(3, 300, 300), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Mobile-friendly SSDlite variant
+x = [torch.rand(3, 320, 320), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+
+The following accuracies can be obtained on COCO val2017 (full results available in #3403 and #3757):
+
+
+  
+    
+      Model
+      mAP
+      mAP@50
+      mAP@75
+    
+  
+  
+    
+      SSD300 VGG16
+      25.1
+      41.5
+      26.2
+    
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      34.3
+      22.1
+    
+  
+
+
+For more details, refer to the documentation.
+
+(Beta) JPEG decoding on the GPU
+Decoding jpegs is now possible on GPUs with the use of nvjpeg, which should be readily available in your CUDA setup. The decoding time of a single image should be about 2 to 3 times faster than with libjpeg on CPU. While the resulting tensor will be stored on the GPU device, the input raw tensor still needs to reside on the host (CPU), because the first stages of the decoding process take place on the host:
+from torchvision.io.image import read_file, decode_jpeg
+
+data = read_file('path_to_image.jpg')  # raw data is on CPU
+img = decode_jpeg(data, device='cuda')  # decoded image in on GPU
+
+For more details, see the documentation.
+
+(Beta) iOS support
+TorchVision 0.10 now provides pre-compiled iOS binaries for its C++ operators, which means you can run Faster R-CNN and Mask R-CNN on iOS. An example app on how to build a program leveraging those ops can be found here.
+
+TorchAudio 0.9.0
+
+(Stable) Complex Tensor Migration
+TorchAudio has functions that handle complex-valued tensors. These functions follow a convention to use an extra dimension to represent real and imaginary parts. In PyTorch 1.6, the native complex type was introduced. As its API is getting stable, torchaudio has started to migrate to the native complex type.
+
+In this release, we added support for native complex tensors, and you can opt-in to use them. Using the native complex types, we have verified that affected functions continue to support autograd and TorchScript, moreover, switching to native complex types improves their performance. For more details, refer to pytorch/audio#1337.
+
+(Stable) Filtering Improvement
+In release 0.8, we added the C++ implementation of the core part of lfilter for CPU, which improved the performance. In this release, we optimized some internal operations of the CPU implementation for further performance improvement. We also added autograd support to both CPU and GPU. Now lfilter and all the biquad filters (biquad, band_biquad, bass_biquad, treble_biquad, allpass_biquad, lowpass_biquad, highpass_biquad, bandpass_biquad, equalizer_biquad and bandrefect_biquad) benefit from the performance improvement and support autograd. We also moved the implementation of overdrive to C++ for performance improvement. For more details, refer to the documentation.
+
+(Stable) Improved Autograd Support
+Along with the work of Complex Tensor Migration and Filtering Improvement, we also added autograd tests to transforms. lfilter, biquad and its variants, and most transforms are now guaranteed to support autograd. For more details, refer to the release note.
+
+(Stable) Improved Windows Support
+Torchaudio implements some operations in C++ for reasons such as performance and integration with third-party libraries. These C++ components were only available on Linux and macOS. In this release, we have added support to Windows. With this, the efficient filtering implementation mentioned above is also available on Windows.
+
+However, please note that not all the C++ components are available for Windows. “sox_io” backend and torchaudio.functional.compute_kaldi_pitch are not supported.
+
+(Stable) I/O Functions Migration
+Since the 0.6 release, we have continuously improved I/O functionality. Specifically, in 0.8 we changed the default backend from “sox” to “sox_io” and applied the same switch to API of the “soundfile” backend. The 0.9 release concludes this migration by removing the deprecated backends. For more details, please refer to #903.
+
+(Beta) Wav2Vec2.0 Model
+We have added the model architectures from Wav2Vec2.0. You can import fine-tuned models parameters published on fairseq and Hugging Face Hub. Our model definition supports TorchScript, and it is possible to deploy the model to non-Python environments, such as C++, Android and iOS.
+
+The following code snippet illustrates such a use case. Please check out our c++ example directory for the complete example. Currently, it is designed for running inference. If you would like more support for training, please file a feature request.
+
+# Import fine-tuned model from Hugging Face Hub
+import transformers
+from torchaudio.models.wav2vec2.utils import import_huggingface_model
+
+original = Wav2Vec2ForCTC.from_pretrained(" facebook="" wav2vec2-base-960h")="" imported="import_huggingface_model(original)" #="" import="" fine-tuned="" model="" from="" fairseq="" torchaudio.models.wav2vec2.utils="" import_fairseq_model="" original,="" _,="" _="fairseq.checkpoint_utils.load_model_ensemble_and_task(" ["wav2vec_small_960h.pt"],="" arg_overrides="{'data':" "&lt;data_dir&gt;"})="" build="" uninitialized="" and="" load="" state="" dict="" torchaudio.models="" wav2vec2_base="" model.load_state_dict(imported.state_dict())="" quantize="" script="" optimize="" for="" mobile="" quantized_model="torch.quantization.quantize_dynamic(" model,="" qconfig_spec="{torch.nn.Linear}," dtype="torch.qint8)" scripted_model="torch.jit.script(quantized_model)" optimized_model="optimize_for_mobile(scripted_model)" optimized_model.save("model_for_deployment.pt")="" more="" details,="" see="" the="" documentation.="" (beta)="" resampling="" improvement="" in="" release="" 0.8,="" we="" vectorized="" operation="" torchaudio.compliance.kaldi.resample_waveform,="" which="" improved="" performance="" of="" resample_waveform="" torchaudio.transforms.resample.="" this="" release,="" have="" further="" revised="" way="" algorithm="" is="" implemented.="" have:="" added="" kaiser="" window="" support="" a="" wider="" range="" quality.="" rolloff="" parameter="" anti-aliasing="" control.="" mechanism="" to="" precompute="" kernel="" cache="" it="" torchaudio.transforms.resample="" even="" faster="" operation.="" moved="" implementation="" torchaudio.compliance.kaldi.resample_waveform="" torchaudio.functional.resample="" deprecated="" torchaudio.compliance.kaldi.resample_waveform.="" (prototype)="" rnn="" transducer="" loss="" used="" training="" models,="" popular="" architecture="" speech="" recognition="" tasks.="" prototype="" torchaudio="" currently="" supports="" autograd,="" torchscript,="" float16="" float32,="" can="" also="" be="" run="" on="" both="" cpu="" cuda.="" please="" refer="" torchtext="" 0.10.0="" new="" vocab="" module="" introduce="" that="" replaces="" current="" class.="" provides="" common="" functional="" apis="" nlp="" workflows.="" backed="" by="" an="" efficient="" c++="" reduces="" batch="" look-up="" time="" up-to="" ~85%="" (refer="" summary="" #1248="" #1290="" information="" benchmarks),="" torchscript.="" provide="" accompanying="" factory="" functions="" object="" either="" through="" python="" ordered="" dictionary="" or="" iterator="" yields="" lists="" tokens.="" #creating="" text="" file="" io="" torchtext.vocab="" build_vocab_from_iterator="" #generator="" yield="" list="" tokens="" def="" yield_tokens(file_path):="" with="" io.open(file_path,="" encoding="utf-8" )="" as="" f:="" line="" line.strip().split()="" #get="" vocab_obj="build_vocab_from_iterator(yield_tokens(file_path)," specials="[&quot;<unk>&quot;])" collections="" counter,="" ordereddict="" counter="Counter([&quot;a&quot;," "a",="" "b",="" "b"])="" sorted_by_freq_tuples="sorted(counter.items()," key="lambda" x:="" x[1],="" reverse="True)" ordered_dict="OrderedDict(sorted_by_freq_tuples)" #common="" api="" usage="" #look-up="" index="" vocab_obj["a"]="" #batch="" indices="" vocab_obj.looup_indices(["a","b"])="" #support="" forward="" pytorch="" nn="" modules="" vocab_obj(["a","b"])="" vocab_obj.lookup_tokens([0,1])="" #set="" default="" return="" when="" token="" not="" found="" vocab_obj.set_default_index(0)="" vocab_obj["out_of_vocabulary"]="" #prints="" 0="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube="" linkedin.="" cheers!="" -team="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="New PyTorch Library Releases in PyTorch 1.9, including TorchVision, TorchAudio, and more">
+<meta name="twitter:description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.9 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio. These releases, along with the PyTorch 1.9 release, include a number of new features and improvements that will provide a broad set of updates for the PyTorch community.
+
+Some highlights include:
+
+
+  TorchVision - Added new SSD and SSDLite models, quantized kernels for object detection, GPU Jpeg decoding, and iOS support. See release notes here.
+  TorchAudio - Added wav2vec 2.0 model deployable in non-Python environments (including C++, Android, and iOS). Many performance improvements in lfilter, spectral operations, resampling. Added options for quality control in sampling (i.e. Kaiser window support). Initiated the migration of complex tensors operations. Improved autograd support. See release notes here.
+  TorchText - Added a new high-performance Vocab module that provides common functional APIs for NLP workflows. See release notes here.
+
+
+We’d like to thank the community for their support and work on this latest release.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+TorchVision 0.10
+
+(Stable) Quantized kernels for object detection
+The forward pass of the nms and roi_align operators now support tensors with a quantized dtype, which can help lower the memory footprint of object detection models, particularly on mobile environments. For more details, refer to the documentation.
+
+(Stable) Speed optimizations for Tensor transforms
+The resize and flip transforms have been optimized and its runtime improved by up to 5x on the CPU.
+
+(Stable) Documentation improvements
+Significant improvements were made to the documentation. In particular, a new gallery of examples is available. These examples visually illustrate how each transform acts on an image, and also properly documents and illustrates the output of the segmentation models.
+
+The example gallery will be extended in the future to provide more comprehensive examples and serve as a reference for common torchvision tasks. For more details, refer to the documentation.
+
+(Beta) New models for detection
+SSD and SSDlite are two popular object detection architectures that are efficient in terms of speed and provide good results for low resolution pictures. In this release, we provide implementations for the original SSD model with VGG16 backbone and for its mobile-friendly variant SSDlite with MobileNetV3-Large backbone.
+
+The models were pre-trained on COCO train2017 and can be used as follows:
+
+import torch
+import torchvision
+
+# Original SSD variant
+x = [torch.rand(3, 300, 300), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Mobile-friendly SSDlite variant
+x = [torch.rand(3, 320, 320), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+
+The following accuracies can be obtained on COCO val2017 (full results available in #3403 and #3757):
+
+
+  
+    
+      Model
+      mAP
+      mAP@50
+      mAP@75
+    
+  
+  
+    
+      SSD300 VGG16
+      25.1
+      41.5
+      26.2
+    
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      34.3
+      22.1
+    
+  
+
+
+For more details, refer to the documentation.
+
+(Beta) JPEG decoding on the GPU
+Decoding jpegs is now possible on GPUs with the use of nvjpeg, which should be readily available in your CUDA setup. The decoding time of a single image should be about 2 to 3 times faster than with libjpeg on CPU. While the resulting tensor will be stored on the GPU device, the input raw tensor still needs to reside on the host (CPU), because the first stages of the decoding process take place on the host:
+from torchvision.io.image import read_file, decode_jpeg
+
+data = read_file('path_to_image.jpg')  # raw data is on CPU
+img = decode_jpeg(data, device='cuda')  # decoded image in on GPU
+
+For more details, see the documentation.
+
+(Beta) iOS support
+TorchVision 0.10 now provides pre-compiled iOS binaries for its C++ operators, which means you can run Faster R-CNN and Mask R-CNN on iOS. An example app on how to build a program leveraging those ops can be found here.
+
+TorchAudio 0.9.0
+
+(Stable) Complex Tensor Migration
+TorchAudio has functions that handle complex-valued tensors. These functions follow a convention to use an extra dimension to represent real and imaginary parts. In PyTorch 1.6, the native complex type was introduced. As its API is getting stable, torchaudio has started to migrate to the native complex type.
+
+In this release, we added support for native complex tensors, and you can opt-in to use them. Using the native complex types, we have verified that affected functions continue to support autograd and TorchScript, moreover, switching to native complex types improves their performance. For more details, refer to pytorch/audio#1337.
+
+(Stable) Filtering Improvement
+In release 0.8, we added the C++ implementation of the core part of lfilter for CPU, which improved the performance. In this release, we optimized some internal operations of the CPU implementation for further performance improvement. We also added autograd support to both CPU and GPU. Now lfilter and all the biquad filters (biquad, band_biquad, bass_biquad, treble_biquad, allpass_biquad, lowpass_biquad, highpass_biquad, bandpass_biquad, equalizer_biquad and bandrefect_biquad) benefit from the performance improvement and support autograd. We also moved the implementation of overdrive to C++ for performance improvement. For more details, refer to the documentation.
+
+(Stable) Improved Autograd Support
+Along with the work of Complex Tensor Migration and Filtering Improvement, we also added autograd tests to transforms. lfilter, biquad and its variants, and most transforms are now guaranteed to support autograd. For more details, refer to the release note.
+
+(Stable) Improved Windows Support
+Torchaudio implements some operations in C++ for reasons such as performance and integration with third-party libraries. These C++ components were only available on Linux and macOS. In this release, we have added support to Windows. With this, the efficient filtering implementation mentioned above is also available on Windows.
+
+However, please note that not all the C++ components are available for Windows. “sox_io” backend and torchaudio.functional.compute_kaldi_pitch are not supported.
+
+(Stable) I/O Functions Migration
+Since the 0.6 release, we have continuously improved I/O functionality. Specifically, in 0.8 we changed the default backend from “sox” to “sox_io” and applied the same switch to API of the “soundfile” backend. The 0.9 release concludes this migration by removing the deprecated backends. For more details, please refer to #903.
+
+(Beta) Wav2Vec2.0 Model
+We have added the model architectures from Wav2Vec2.0. You can import fine-tuned models parameters published on fairseq and Hugging Face Hub. Our model definition supports TorchScript, and it is possible to deploy the model to non-Python environments, such as C++, Android and iOS.
+
+The following code snippet illustrates such a use case. Please check out our c++ example directory for the complete example. Currently, it is designed for running inference. If you would like more support for training, please file a feature request.
+
+# Import fine-tuned model from Hugging Face Hub
+import transformers
+from torchaudio.models.wav2vec2.utils import import_huggingface_model
+
+original = Wav2Vec2ForCTC.from_pretrained(" facebook="" wav2vec2-base-960h")="" imported="import_huggingface_model(original)" #="" import="" fine-tuned="" model="" from="" fairseq="" torchaudio.models.wav2vec2.utils="" import_fairseq_model="" original,="" _,="" _="fairseq.checkpoint_utils.load_model_ensemble_and_task(" ["wav2vec_small_960h.pt"],="" arg_overrides="{'data':" "&lt;data_dir&gt;"})="" build="" uninitialized="" and="" load="" state="" dict="" torchaudio.models="" wav2vec2_base="" model.load_state_dict(imported.state_dict())="" quantize="" script="" optimize="" for="" mobile="" quantized_model="torch.quantization.quantize_dynamic(" model,="" qconfig_spec="{torch.nn.Linear}," dtype="torch.qint8)" scripted_model="torch.jit.script(quantized_model)" optimized_model="optimize_for_mobile(scripted_model)" optimized_model.save("model_for_deployment.pt")="" more="" details,="" see="" the="" documentation.="" (beta)="" resampling="" improvement="" in="" release="" 0.8,="" we="" vectorized="" operation="" torchaudio.compliance.kaldi.resample_waveform,="" which="" improved="" performance="" of="" resample_waveform="" torchaudio.transforms.resample.="" this="" release,="" have="" further="" revised="" way="" algorithm="" is="" implemented.="" have:="" added="" kaiser="" window="" support="" a="" wider="" range="" quality.="" rolloff="" parameter="" anti-aliasing="" control.="" mechanism="" to="" precompute="" kernel="" cache="" it="" torchaudio.transforms.resample="" even="" faster="" operation.="" moved="" implementation="" torchaudio.compliance.kaldi.resample_waveform="" torchaudio.functional.resample="" deprecated="" torchaudio.compliance.kaldi.resample_waveform.="" (prototype)="" rnn="" transducer="" loss="" used="" training="" models,="" popular="" architecture="" speech="" recognition="" tasks.="" prototype="" torchaudio="" currently="" supports="" autograd,="" torchscript,="" float16="" float32,="" can="" also="" be="" run="" on="" both="" cpu="" cuda.="" please="" refer="" torchtext="" 0.10.0="" new="" vocab="" module="" introduce="" that="" replaces="" current="" class.="" provides="" common="" functional="" apis="" nlp="" workflows.="" backed="" by="" an="" efficient="" c++="" reduces="" batch="" look-up="" time="" up-to="" ~85%="" (refer="" summary="" #1248="" #1290="" information="" benchmarks),="" torchscript.="" provide="" accompanying="" factory="" functions="" object="" either="" through="" python="" ordered="" dictionary="" or="" iterator="" yields="" lists="" tokens.="" #creating="" text="" file="" io="" torchtext.vocab="" build_vocab_from_iterator="" #generator="" yield="" list="" tokens="" def="" yield_tokens(file_path):="" with="" io.open(file_path,="" encoding="utf-8" )="" as="" f:="" line="" line.strip().split()="" #get="" vocab_obj="build_vocab_from_iterator(yield_tokens(file_path)," specials="[&quot;<unk>&quot;])" collections="" counter,="" ordereddict="" counter="Counter([&quot;a&quot;," "a",="" "b",="" "b"])="" sorted_by_freq_tuples="sorted(counter.items()," key="lambda" x:="" x[1],="" reverse="True)" ordered_dict="OrderedDict(sorted_by_freq_tuples)" #common="" api="" usage="" #look-up="" index="" vocab_obj["a"]="" #batch="" indices="" vocab_obj.looup_indices(["a","b"])="" #support="" forward="" pytorch="" nn="" modules="" vocab_obj(["a","b"])="" vocab_obj.lookup_tokens([0,1])="" #set="" default="" return="" when="" token="" not="" found="" vocab_obj.set_default_index(0)="" vocab_obj["out_of_vocabulary"]="" #prints="" 0="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube="" linkedin.="" cheers!="" -team="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年6月15日</p>
+            <h1>
+                <a class="blog-title">PyTorch 1.9 版本中的新 PyTorch 库发布，包括 TorchVision、TorchAudio 等</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>今天，我们宣布了对多个 PyTorch 库的更新，同时发布了 <a href="https://pytorch.org/blog/pytorch-1.9-released/">PyTorch 1.9 版本 </a>。这些更新包括领域库（如 TorchVision、TorchText 和 TorchAudio）的新版本。这些版本以及 PyTorch 1.9 版本都包含了许多新功能和改进，将为 PyTorch 社区提供一系列更新。</p>
+
+<p>以下是一些亮点：</p>
+
+<ul>
+  <li><strong>TorchVision</strong> - 添加了新的 SSD 和 SSDLite 模型，对象检测的量化内核，GPU Jpeg 解码，以及 iOS 支持。请参阅<a href="https://github.com/pytorch/vision/releases">发布说明 </a>。</li>
+  <li><strong>TorchAudio</strong> - 添加了 wav2vec 2.0 模型，可在非 Python 环境中部署（包括 C++、Android 和 iOS）。在 lfilter、频谱操作、重采样等方面进行了许多性能改进。增加了采样质量控制的选项（即 Kaiser 窗口支持）。启动了复杂数张量操作的迁移。改进了自动微分支持。请参阅<a href="https://github.com/pytorch/audio/releases">发布说明 </a>。</li>
+  <li><strong>TorchText</strong> - 添加了一个新的高性能 Vocab 模块，为 NLP 工作流程提供常见的功能 API。请参阅<a href="https://github.com/pytorch/text/releases">发布说明 </a>。</li>
+</ul>
+
+<p>我们想感谢社区对这次最新版本的支持和工作。</p>
+
+<p>PyTorch 版本中的功能分为稳定版、测试版和原型版。您可以在<a href="https://pytorch.org/blog/pytorch-feature-classification-changes/">这篇博客文章</a>中了解更多关于定义的信息。</p>
+
+<h1 id="torchvision-010">TorchVision 0.10</h1>
+
+<h3 id="stable-quantized-kernels-for-object-detection">（稳定）对象检测的量化内核</h3>
+<p>nms 和 roi_align 算子的前向传播现在支持量化数据类型的张量，这有助于降低目标检测模型的内存占用，尤其是在移动环境中。更多详情请参阅<a href="https://pytorch.org/vision/stable/ops.html#torchvision.ops.roi_align">文档 </a>。</p>
+
+<h3 id="stable-speed-optimizations-for-tensor-transforms">(稳定) Tensor 变换的速度优化</h3>
+<p>优化了 resize 和 flip 变换，其 CPU 运行时间提高了 5 倍。</p>
+
+<h3 id="stable-documentation-improvements">(稳定) 文档改进</h3>
+<p>文档进行了重大改进。特别是，新增了一个示例画廊。这些示例直观地展示了每个转换对图像的作用，并正确地记录和展示了分割模型的输出。</p>
+
+<p>未来将扩展示例画廊，提供更全面的示例，并作为常见 torchvision 任务的参考。更多详情请参阅<a href="https://pytorch.org/vision/stable/auto_examples/index.html">文档 </a>。</p>
+
+<h3 id="beta-new-models-for-detection">（Beta）新的检测模型</h3>
+<p><a href="https://arxiv.org/abs/1512.02325">SSD</a> 和 <a href="https://arxiv.org/abs/1801.04381">SSDlite</a> 是两种流行的目标检测架构，在速度和效率方面表现良好，对于低分辨率图片也能提供良好的结果。在本版本中，我们提供了原始 SSD 模型（VGG16 作为骨干网络）及其移动友好版本 SSDlite（MobileNetV3-Large 作为骨干网络）的实现。</p>
+
+<p>模型在 COCO train2017 上进行了预训练，可以使用如下：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torchvision</span>
+
+<span class="c1"># Original SSD variant
+</span><span class="n">x</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">300</span><span class="p">,</span> <span class="mi">300</span><span class="p">),</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">500</span><span class="p">,</span> <span class="mi">400</span><span class="p">)]</span>
+<span class="n">m_detector</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">ssd300_vgg16</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_detector</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_detector</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="c1"># Mobile-friendly SSDlite variant
+</span><span class="n">x</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">320</span><span class="p">,</span> <span class="mi">320</span><span class="p">),</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">500</span><span class="p">,</span> <span class="mi">400</span><span class="p">)]</span>
+<span class="n">m_detector</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">ssdlite320_mobilenet_v3_large</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_detector</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_detector</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>在 COCO val2017 上可以获得以下准确率（完整结果请见 <a href="https://github.com/pytorch/vision/pull/3403">#3403</a> 和 <a href="https://github.com/pytorch/vision/pull/3757">#3757</a>）：</p>
+
+<table class="table table-striped table-bordered">
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>平均精度均值（mAP）</th>
+      <th>50%召回率下的平均精度均值（mAP@50）</th>
+      <th>mAP@75</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SSD300 VGG16</td>
+      <td>25.1</td>
+      <td>41.5</td>
+      <td>26.2</td>
+    </tr>
+    <tr>
+      <td>SSDlite320 MobileNetV3-Large</td>
+      <td>21.3</td>
+      <td>34.3</td>
+      <td>22.1</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>如需更多详细信息，请参阅<a href="https://pytorch.org/vision/stable/models.html#id37">文档 </a>。</p>
+
+<h3 id="beta-jpeg-decoding-on-the-gpu">(Beta) GPU 上的 JPEG 解码</h3>
+<p>现在可以使用 <a href="https://developer.nvidia.com/nvjpeg">nvjpeg</a> 在 GPU 上解码 JPEG，这应该在您的 CUDA 设置中 readily 可用。单个图像的解码时间应该比 CPU 上的 libjpeg 快 2 到 3 倍。虽然结果张量将存储在 GPU 设备上，但输入原始张量仍然需要位于主机（CPU）上，因为解码过程的前几个阶段是在主机上进行的：from torchvision.io.image import read_file, decode_jpeg</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">data</span> <span class="o">=</span> <span class="n">read_file</span><span class="p">(</span><span class="s">'path_to_image.jpg'</span><span class="p">)</span>  <span class="c1"># raw data is on CPU
+</span><span class="n">img</span> <span class="o">=</span> <span class="n">decode_jpeg</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">)</span>  <span class="c1"># decoded image in on GPU
+</span></code></pre></div></div>
+<p>更多详情，请参阅<a href="https://pytorch.org/vision/stable/io.html#torchvision.io.decode_jpeg">文档 </a>。</p>
+
+<h3 id="beta-ios-support">(Beta) iOS 支持</h3>
+<p>TorchVision 0.10 现在为 C++ 运算符提供了预编译的 iOS 二进制文件，这意味着您可以在 iOS 上运行 Faster R-CNN 和 Mask R-CNN。有关如何利用这些运算符构建程序的示例应用，请参阅<a href="https://github.com/pytorch/vision/tree/master/ios/VisionTestApp">此处 </a>。</p>
+
+<h1 id="torchaudio-090">TorchAudio 0.9.0</h1>
+
+<h3 id="stable-complex-tensor-migration">(稳定) 复杂张量迁移</h3>
+<p>TorchAudio 具有处理复数值张量的函数。这些函数遵循使用额外维度来表示实部和虚部的约定。在 PyTorch 1.6 中引入了原生复数类型。随着其 API 的稳定，torchaudio 开始迁移到原生复数类型。</p>
+
+<p>在本版本中，我们增加了对原生复杂数组的支持，您可以选择启用它们。使用原生复杂数组类型，我们已验证受影响的函数继续支持自动微分和 TorchScript，此外，切换到原生复杂数组类型还可以提高其性能。更多详情请参阅 <a href="https://github.com/pytorch/audio/issues/1337">pytorch/audio#1337</a>。</p>
+
+<h3 id="stable-filtering-improvement">(稳定) 过滤器改进</h3>
+<p>在版本 0.8 中，我们为 CPU 添加了 <code class="language-plaintext highlighter-rouge">lfilter</code> 核心部分的 C++ 实现，从而提高了性能。在本版本中，我们对 CPU 实现的一些内部操作进行了优化，以进一步提高性能。我们还为 CPU 和 GPU 添加了 autograd 支持。现在 <code class="language-plaintext highlighter-rouge">lfilter</code> 以及所有 <code class="language-plaintext highlighter-rouge">biquad</code> 滤波器（<code class="language-plaintext highlighter-rouge">biquad</code>、<code class="language-plaintext highlighter-rouge">band_biquad</code>、<code class="language-plaintext highlighter-rouge">bass_biquad</code>、<code class="language-plaintext highlighter-rouge">treble_biquad</code>、<code class="language-plaintext highlighter-rouge">allpass_biquad</code>、<code class="language-plaintext highlighter-rouge">lowpass_biquad</code>、<code class="language-plaintext highlighter-rouge">highpass_biquad</code>、<code class="language-plaintext highlighter-rouge">bandpass_biquad</code>、<code class="language-plaintext highlighter-rouge">equalizer_biquad</code> 和 <code class="language-plaintext highlighter-rouge">bandrefect_biquad</code>）都受益于性能提升并支持 autograd。我们还为了性能提升将过载的实现移至 C++。更多详情请参阅 <a href="https://pytorch.org/audio/0.9.0/functional.html#lfilter"> 文档 </a>。</p>
+
+<h3 id="stable-improved-autograd-support">(稳定) 改进了 Autograd 支持</h3>
+<p>随着复杂张量迁移和滤波改进工作的进行，我们还为变换添加了自动微分测试。现在，大多数变换都支持自动微分。有关更多详细信息，请参阅<a href="https://github.com/pytorch/audio/releases">发布说明 </a>。</p>
+
+<h3 id="stable-improved-windows-support">(稳定) 改进了 Windows 支持</h3>
+<p>Torchaudio 为了性能和与第三方库的集成等原因，在 C++中实现了一些操作。这些 C++组件之前仅在 Linux 和 macOS 上可用。在本版本中，我们为 Windows 添加了支持。因此，上述高效的滤波实现现在也适用于 Windows。</p>
+
+<p>然而，请注意，并非所有 C++组件都适用于 Windows。“sox_io”后端和 <code class="language-plaintext highlighter-rouge">torchaudio.functional.compute_kaldi_pitch</code>  不受支持。</p>
+
+<h3 id="stable-io-functions-migration">(稳定) I/O 函数迁移</h3>
+<p>自 0.6 版本发布以来，我们不断改进 I/O 功能。具体来说，在 0.8 版本中，我们将默认后端从“sox”更改为“sox_io”，并将相同的切换应用于“soundfile”后端的 API。0.9 版本通过删除已弃用的后端来完成这次迁移。更多详情请参阅 <a href="https://github.com/pytorch/audio/issues/903">903</a>。</p>
+
+<h3 id="beta-wav2vec20-model">(测试版) Wav2Vec2.0 模型</h3>
+<p>我们添加了来自 <a href="https://arxiv.org/abs/2006.11477">Wav2Vec2.0</a> 的模型架构。您可以从 <a href="https://github.com/pytorch/fairseq/tree/master/examples/wav2vec">fairseq</a> 和 <a href="https://huggingface.co/models?filter=wav2vec2">Hugging Face Hub</a> 导入发布的微调模型参数。我们的模型定义支持 TorchScript，并且可以将模型部署到非 Python 环境，例如 C++、<a href="https://github.com/pytorch/android-demo-app/tree/master/SpeechRecognition">Android</a> 和 <a href="https://github.com/pytorch/ios-demo-app/tree/master/SpeechRecognition">iOS</a>。</p>
+
+<p>以下代码片段展示了这样的用例。请查看我们的 <a href="https://github.com/pytorch/audio/tree/master/examples/libtorchaudio">C++示例目录</a>以获取完整示例。目前，它设计用于运行推理。如果您需要更多关于训练的支持，请提交功能请求。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Import fine-tuned model from Hugging Face Hub
+</span><span class="kn">import</span> <span class="nn">transformers</span>
+<span class="kn">from</span> <span class="nn">torchaudio.models.wav2vec2.utils</span> <span class="kn">import</span> <span class="n">import_huggingface_model</span>
+
+<span class="n">original</span> <span class="o">=</span> <span class="n">Wav2Vec2ForCTC</span><span class="p">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="s">"facebook/wav2vec2-base-960h"</span><span class="p">)</span>
+<span class="n">imported</span> <span class="o">=</span> <span class="n">import_huggingface_model</span><span class="p">(</span><span class="n">original</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Import fine-tuned model from fairseq
+</span><span class="kn">import</span> <span class="nn">fairseq</span>
+<span class="kn">from</span> <span class="nn">torchaudio.models.wav2vec2.utils</span> <span class="kn">import</span> <span class="n">import_fairseq_model</span>
+
+<span class="n">original</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">fairseq</span><span class="p">.</span><span class="n">checkpoint_utils</span><span class="p">.</span><span class="n">load_model_ensemble_and_task</span><span class="p">(</span>
+    <span class="p">[</span><span class="s">"wav2vec_small_960h.pt"</span><span class="p">],</span> <span class="n">arg_overrides</span><span class="o">=</span><span class="p">{</span><span class="s">'data'</span><span class="p">:</span> <span class="s">"&lt;data_dir&gt;"</span><span class="p">})</span>
+<span class="n">imported</span> <span class="o">=</span> <span class="n">import_fairseq_model</span><span class="p">(</span><span class="n">original</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">w2v_encoder</span><span class="p">)</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Build uninitialized model and load state dict
+</span><span class="kn">from</span> <span class="nn">torchaudio.models</span> <span class="kn">import</span> <span class="n">wav2vec2_base</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">wav2vec2_base</span><span class="p">(</span><span class="n">num_out</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+<span class="n">model</span><span class="p">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">imported</span><span class="p">.</span><span class="n">state_dict</span><span class="p">())</span>
+
+<span class="c1"># Quantize / script / optimize for mobile
+</span><span class="n">quantized_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">quantization</span><span class="p">.</span><span class="n">quantize_dynamic</span><span class="p">(</span>
+    <span class="n">model</span><span class="p">,</span> <span class="n">qconfig_spec</span><span class="o">=</span><span class="p">{</span><span class="n">torch</span><span class="p">.</span><span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">},</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">qint8</span><span class="p">)</span>
+<span class="n">scripted_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">jit</span><span class="p">.</span><span class="n">script</span><span class="p">(</span><span class="n">quantized_model</span><span class="p">)</span>
+<span class="n">optimized_model</span> <span class="o">=</span> <span class="n">optimize_for_mobile</span><span class="p">(</span><span class="n">scripted_model</span><span class="p">)</span>
+<span class="n">optimized_model</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="s">"model_for_deployment.pt"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>更多详情，请参阅<a href="https://pytorch.org/audio/0.9.0/models.html#wav2vec2-0">文档 </a>。</p>
+
+<h3 id="beta-resampling-improvement">（Beta）重采样改进</h3>
+<p>在 0.8 版本中，我们对 <code class="language-plaintext highlighter-rouge">torchaudio.compliance.kaldi.resample_waveform</code> 中的操作进行了向量化，这提高了 <code class="language-plaintext highlighter-rouge">resample_waveform</code> 和 <code class="language-plaintext highlighter-rouge">torchaudio.transforms.Resample</code> 的性能。在本版本中，我们进一步改进了重采样算法的实现方式。</p>
+
+<p>我们有：</p>
+<ul>
+  <li>添加了对 Kaiser 窗口的支持，以实现更广泛的滤波质量。</li>
+  <li>添加了用于抗混叠控制的<code class="language-plaintext highlighter-rouge">滚降</code>参数。</li>
+  <li>添加了预计算内核并缓存到 <code class="language-plaintext highlighter-rouge">torchaudio.transforms.Resample</code> 的机制，以实现更快的操作。</li>
+  <li>将实现从 <code class="language-plaintext highlighter-rouge">torchaudio.compliance.kaldi.resample_waveform</code> 迁移到 <code class="language-plaintext highlighter-rouge">torchaudio.functional.resample</code> ，并弃用 <code class="language-plaintext highlighter-rouge">torchaudio.compliance.kaldi.resample_waveform</code> 。</li>
+</ul>
+
+<p>更多详情，请参阅<a href="https://pytorch.org/audio/0.9.0/transforms.html#resample">文档 </a>。</p>
+
+<h3 id="prototype-rnn-transducer-loss">（原型）RNN Transducer 损失</h3>
+<p>RNN transducer 损失用于训练 RNN transducer 模型，这是一种在语音识别任务中流行的架构。torchaudio 中的当前原型损失支持 autograd、torchscript、float16 和 float32，并且可以在 CPU 和 CUDA 上运行。更多详情，请参阅<a href="https://pytorch.org/audio/stable/index.html">文档 </a>。</p>
+
+<h1 id="torchtext-0100">TorchText 0.10.0</h1>
+
+<h3 id="beta-new-vocab-module">(Beta) 新词汇模块</h3>
+<p>在本版本中，我们引入了一个新的词汇模块，该模块取代了当前的词汇类。新的词汇模块为 NLP 工作流程提供了常见的功能 API。该模块由高效的 C++实现支持，将批量查找时间减少了高达 85%（有关基准测试的详细信息，请参阅<a href="https://github.com/pytorch/text/pull/1248">编号 1248</a> 和<a href="https://github.com/pytorch/text/pull/1290">编号 1290</a> 的摘要），并支持 TorchScript。我们提供了配套的工厂函数，可用于通过 Python 有序字典或生成标记列表的迭代器来构建词汇对象。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">#creating Vocab from text file
+</span><span class="kn">import</span> <span class="nn">io</span>
+<span class="kn">from</span> <span class="nn">torchtext.vocab</span> <span class="kn">import</span> <span class="n">build_vocab_from_iterator</span>
+<span class="c1">#generator that yield list of tokens
+</span><span class="k">def</span> <span class="nf">yield_tokens</span><span class="p">(</span><span class="n">file_path</span><span class="p">):</span>
+   <span class="k">with</span> <span class="n">io</span><span class="p">.</span><span class="nb">open</span><span class="p">(</span><span class="n">file_path</span><span class="p">,</span> <span class="n">encoding</span> <span class="o">=</span> <span class="s">'utf-8'</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+      <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">f</span><span class="p">:</span>
+          <span class="k">yield</span> <span class="n">line</span><span class="p">.</span><span class="n">strip</span><span class="p">().</span><span class="n">split</span><span class="p">()</span>
+<span class="c1">#get Vocab object
+</span><span class="n">vocab_obj</span> <span class="o">=</span> <span class="n">build_vocab_from_iterator</span><span class="p">(</span><span class="n">yield_tokens</span><span class="p">(</span><span class="n">file_path</span><span class="p">),</span> <span class="n">specials</span><span class="o">=</span><span class="p">[</span><span class="s">"&lt;unk&gt;"</span><span class="p">])</span>
+
+<span class="c1">#creating Vocab through ordered dict
+</span><span class="kn">from</span> <span class="nn">torchtext.vocab</span> <span class="kn">import</span> <span class="n">vocab</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">Counter</span><span class="p">,</span> <span class="n">OrderedDict</span>
+<span class="n">counter</span> <span class="o">=</span> <span class="n">Counter</span><span class="p">([</span><span class="s">"a"</span><span class="p">,</span> <span class="s">"a"</span><span class="p">,</span> <span class="s">"b"</span><span class="p">,</span> <span class="s">"b"</span><span class="p">,</span> <span class="s">"b"</span><span class="p">])</span>
+<span class="n">sorted_by_freq_tuples</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">counter</span><span class="p">.</span><span class="n">items</span><span class="p">(),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">reverse</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">ordered_dict</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">(</span><span class="n">sorted_by_freq_tuples</span><span class="p">)</span>
+<span class="n">vocab_obj</span> <span class="o">=</span> <span class="n">vocab</span><span class="p">(</span><span class="n">ordered_dict</span><span class="p">)</span>
+
+<span class="c1">#common API usage
+</span>
+<span class="c1">#look-up index
+</span><span class="n">vocab_obj</span><span class="p">[</span><span class="s">"a"</span><span class="p">]</span>
+
+<span class="c1">#batch look-up indices
+</span><span class="n">vocab_obj</span><span class="p">.</span><span class="n">looup_indices</span><span class="p">([</span><span class="s">"a"</span><span class="p">,</span><span class="s">"b"</span><span class="p">])</span>
+<span class="c1">#support forward API of PyTorch nn Modules
+</span><span class="n">vocab_obj</span><span class="p">([</span><span class="s">"a"</span><span class="p">,</span><span class="s">"b"</span><span class="p">])</span>
+
+<span class="c1">#batch look-up tokens
+</span><span class="n">vocab_obj</span><span class="p">.</span><span class="n">lookup_tokens</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">])</span>
+
+<span class="c1">#set default index to return when token not found
+</span><span class="n">vocab_obj</span><span class="p">.</span><span class="n">set_default_index</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">vocab_obj</span><span class="p">[</span><span class="s">"out_of_vocabulary"</span><span class="p">]</span> <span class="c1">#prints 0
+</span></code></pre></div></div>
+
+<p>如需更多详细信息，请参阅<a href="https://pytorch.org/text/stable/vocab.html">文档 </a>。</p>
+
+<p>感谢阅读。如果您对这些更新感兴趣并想加入 PyTorch 社区，我们鼓励您加入 <a href="https://discuss.pytorch.org/"> 讨论 </a> 论坛和 <a href="https://github.com/pytorch/pytorch/issues">GitHub 问题 </a>。要获取 PyTorch 的最新消息，请关注我们的 <a href="https://www.facebook.com/pytorch/">Facebook</a>、<a href="https://twitter.com/PyTorch">Twitter</a>、<a href="https://medium.com/pytorch">Medium</a>、<a href="https://www.youtube.com/pytorch">YouTube</a> 或 <a href="https://www.linkedin.com/company/pytorch">LinkedIn</a>。</p>
+
+<p>干杯！</p>
+
+<p>-PyTorch 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

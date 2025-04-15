@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Large Scale Training of Hugging Face Transformers on TPUs With PyTorch/XLA FSDP | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="AI is transforming many industries through advanced capabilities such as understanding and generating language, answering questions, and delivering accurate recommendations. These capabilities are fueled by ever-increasing size and complexity of AI models, which require vast amounts of computing power to train.
+
+To meet the growing demands of AI training at scale, last year we introduced Fully Sharded Data Parallel (FSDP) in PyTorch/XLA. FSDP is a model parallelism architecture that unlocks the ability to easily and efficiently scale AI models into hundreds of billions of parameters. With PyTorch/XLA FSDP, during distributed training, each device can store a specific model shard, and all-gather the full model weights when it is time to perform the forward pass. Nested FSDP further optimizes performance by only using a given layer’s full parameters during its forward pass.
+
+We are excited to announce that PyTorch/XLA FSDP has landed in Hugging Face Transformers. Now, Hugging Face users can train PyTorch models with up to 20 times more parameters using the same amount of computing power as before.
+
+We built PyTorch/XLA FSDP support directly into the Hugging Face Trainer class, so that any model using Trainer can leverage FSDP. And with the addition of automatic wrapping to PyTorch/XLA FSDP, nested FSDP wrapping is both flexible and simple to apply. These new features make it easy to train a wide range of Hugging Face models at large scales. In this guide, we demonstrate training GPT-2 models with up to 128B parameters on Google Cloud TPUs. PyTorch/XLA FSDP training on TPUs is highly efficient, achieving up to 45.1% model FLOPS utilization (MFU) for GPT-2:
+
+
+
+Figure 1: Model FLOPS utilization for Hugging Face GPT-2 on Google Cloud TPU v4
+
+Configuring PyTorch/XLA FSDP in the Hugging Face Trainer
+
+First, follow your preferred method to create your TPU(s) and install PyTorch and PyTorch/XLA. You need versions >= 2.0 for PyTorch and PyTorch/XLA.
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h-2.0-cp38-cp38-linux_x86_64.whl --user
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h_xla-2.0-cp38-cp38-linux_x86_64.whl
+
+
+Next, clone and install the Hugging Face Transformers repo. Install all necessary dependencies (e.g., datasets, evaluate, scikit-learn, accelerate).
+
+    cd $HOME
+    git clone https://github.com/huggingface/transformers.git cd transformers
+    git checkout v4.31-release
+    pip3 install -e .
+    pip3 install datasets evaluate scikit-learn
+    pip3 install accelerate==0.21.0
+
+
+In $HOME/transformers, create any model-specific configuration files you might need. Here is an example of a configuration file for a GPT-2 model with 2B parameters, which we later refer to as gpt2_config.json:
+
+{
+    " activation_function":="" "gelu_new",="" "architectures":="" [="" "gpt2lmheadmodel"="" ],="" "attn_pdrop":="" 0.1,="" "bos_token_id":="" 50256,="" "embd_pdrop":="" "eos_token_id":="" "initializer_range":="" 0.02,="" "layer_norm_epsilon":="" 1e-05,="" "model_type":="" "gpt2",="" "n_embd":="" 3072,="" "n_head":="" 24,="" "n_layer":="" 18,="" "n_positions":="" 1024,="" "resid_pdrop":="" "summary_activation":="" null,="" "summary_first_dropout":="" "summary_proj_to_labels":="" true,="" "summary_type":="" "cls_index",="" "summary_use_proj":="" "task_specific_params":="" {="" "text-generation":="" "do_sample":="" "max_length":="" 50="" }="" },="" "vocab_size":="" 50257="" with="" pytorch="" xla="" fsdp,="" it="" is="" possible="" to="" train="" model="" sizes="" much="" bigger="" than="" this="" on="" large="" accelerator="" slices.="" we="" have="" trained="" gpt-2="" models="" as="" 128b="" parameters="" these="" techniques;="" for="" expert="" tips="" how="" replicate="" scale,="" see="" the="" appendix.="" in="" $home="" transformers,="" create="" your="" fsdp="" configuration="" file,="" a="" json="" file="" containing="" all="" of="" configurable="" aspects="" wrapping="" stored="" dictionary.="" following="" official="" hugging="" face="" transformers="" documentation,="" arguments="" are="" available="" set:="" (bool,="" \*optional\*,="" defaults="" false):="" boolean="" which="" determines="" whether="" or="" not="" you="" use="" fsdp.="" make="" sure="" set="" true.="" xla_fsdp_settings="" (dict,="" \*optional\*):="" dictionary="" stores="" want="" set;="" note="" that="" do="" specify="" settings="" where="" using="" default="" value.="" complete="" list="" settings,="" here.="" compute_dtype="" and="" buffer_dtype,="" enter="" strings="" contain="" corresponding="" torch="" data="" type,="" e.g.="" bfloat16.="" fsdp_min_num_params="" (int,="" 0):="" an="" integer="" sets="" minimum="" number="" size-based="" auto="" wrapping.="" every="" module="" at="" least="" many="" will="" be="" wrapped.="" fsdp_transformer_layer_cls_to_wrap="" (list[str],="" (case-sensitive)="" transformer="" layer="" class="" names="" wrap.="" mutually="" exclusive="" fsdp_min_num_params.="" example:="" ["gpt2block",="" "gpt2mlp"].="" xla_fsdp_grad_ckpt="" gradient="" checkpointing="" over="" each="" nested="" wrapped="" layer.="" setting="" can="" only="" used="" when="" flag="" policy="" specified="" through="" fsdp_transformer_layer_cls_to_wrap.="" note:="" transformer-based="" models,="" instead="" performing="" automatic="" layers="" share="" weights="" should="" belong="" separate="" units,="" input="" output="" embedding="" weights.="" example,="" here="" what="" fsdp_config.json="" looks="" like:="" "fsdp_transformer_layer_cls_to_wrap":="" "gpt2block"="" "xla":="" "xla_fsdp_settings":="" "compute_dtype":="" "bfloat16",="" "shard_param_on_dim_0":="" "pin_layout_in_collective_ops":="" true="" "xla_fsdp_grad_ckpt":="" now,="" it’s="" time="" model!="" first,="" ensure="" runtime="" up="" appropriately="" by="" export="" pjrt_device="TPU" running="" training,="" key="" flags="" pass="" are:="" a)="" --fsdp="" "full_shard"="" b)="" --fsdp_config="" replace="" whatever="" named="" file.="" sample="" command="" our="" example="" 2b="" model,="" training="" started="" xla_spawn.py,="" launcher="" script="" distributed="" tpu="" training.="" python3="" -u="" examples="" xla_spawn.py="" --num_cores="" 4="" language-modeling="" run_clm.py="" \="" --num_train_epochs="" 1="" --dataset_name="" wikitext="" --dataset_config_name="" wikitext-2-raw-v1="" --per_device_train_batch_size="" 32="" --per_device_eval_batch_size="" --do_train="" --do_eval="" --output_dir="" tmp="" test-clm="" --overwrite_output_dir="" --config_name="" gpt2_config.json="" --cache_dir="" --tokenizer_name="" gpt2="" --block_size="" 1024="" --optim="" adafactor="" --adafactor="" --save_strategy="" no="" --logging_strategy="" measuring="" flops="" utilization="" (mfu)="" floating="" point="" operations="" required="" perform="" single="" forward="" backward="" pass.="" hardware-="" implementation-="" independent,="" depend="" underlying="" model.="" step,="" computed="" via="" formulas:="" tokens_per_batch="global_batch_size" \*="" seq_len="" flops_per_step="6" num_params="" sequence="" length="" estimation="" assumes="" dimensionality="" larger="" (d_model="" &gt;&gt;="" seq_len).="" if="" assumption="" violated="" self-attention="" start="" significant="" enough="" expression="" underestimate="" mfu.="" based="" step="" hardware="" details="" (numbers="" chips="" peak="" per="" chip),="" compute="" (mfu),="" measures="" effectively="" implementation="" hardware.="" achieving="" 100%="" mfu="" means="" being="" perfectly="" calculate="" formula:="" model_flops_utilization="FLOPS_per_step" step_time(s)="" chip_count="" flops_per_chip="" above="" cloud="" v4-8,="" measure="" 4.191s.="" formula,="" 35.7%="" v4-8.="" further="" calculating="" mfu,="" refer="" palm="" paper.="" table="" below="" presents="" between="" 128b,="" 1024.="" numcores="" v4-8="" v4-64="" v4-128="" v4-256="" v4-512="" #="" tokens="" batch="" 131,072="" 524,288="" 1,048,576="" 16b="" 20b="" 32b="" 64b="" (ms)="" 4,191="" 14,592="" 7,824="" 12,970="" 25,653="" 30,460="" pflops="" 1.65="" 62="" 101="" 404="" 809="" 38.8%="" 45.1%="" 44.4%="" 44.7%="" 37.7%="" 1:="" calculation="" among="" configurations,="" peaks="" parameter="" v4-128.="" result="" compares="" favorably="" to,="" 41.5%="" 22b="" megatron-like="" there="" two="" actionable="" insights="" from="" experiments:="" simply="" increasing="" without="" size="" generally="" lower="" utilization,="" because="" more="" spent="" sharing="" shards.="" uses="" all-reduce="" communication="" collectives="" asynchronous,="" chip-to-chip="" cannot="" overlapped="" computation.="" increases,="" shards="" must="" communicated="" so="" expect="" portion="" increase="" chips.="" second,="" better="" utilization.="" memory="" footprint="" decreases,="" often="" frees="" high="" bandwidth="" (hbm)="" scale="" global="" size.="" size,="" processed="" thus,="" does="" step.="" long="" proportionally,="" improve="" therefore,="" maximize="" recommend="" largest="" fit="" hbm="" slice,="" reduce="" parameters.="" very="" (tested="" parameters)="" xla,="" tensors="" initialized="" cpu="" before="" moved="" device.="" one="" may="" encounter="" host-side="" out-of-memory="" errors="" sufficiently="" large,="" even="" though="" device="" after="" sharding.="" avoid="" this,="" defer="" submodule’s="" initialization="" until="" wrapped,="" ensures="" submodules="" sharded="" soon="" their="" values="" populated,="" avoiding="" limitations.="" below,="" explain="" modify="" local="" copy="" repository="" technique.="" commands="" install="" torchdistx,="" library="" experimental="" features.="" engine="" behind="" deferred="" initialization,="" allows="" don’t="" require="" immediate="" storage="" materialized="" later.="" also="" need="" specific="" 2.0="" version="" takes="" advantage="" package;="" uninstall="" installed="" them="" earlier.="" pip3="" --index-url="" [https:="" download.pytorch.org="" whl="" test="" cpu](https:="" cpu)="" --user="" torch_xla[torchdistx]="" -f="" https:="" storage.googleapis.com="" tpu-pytorch="" wheels="" tpuvm="" experimen="" tal="" torch_xla-2.0-cp38-cp38-linux_x86_64.whl="" next,="" apply="" changes="" transformers:="" src="" trainer.py,="" add="" function="" _wrap_model="" line="" immediately="" prior="" wrapping:="" torchdistx="" import="" deferred_init="" def="" _init_with_torchdistx(module):="" check_fn(k):="" return="" isinstance(k,="" fsdp)="" deferred_init.materialize_module(module,="" check_fn="check_fn)" materialize_module="" initialize="" returns="" case,="" checks="" has="" been="" within="" _wrap_model,="" accept="" additional="" argument="" param_init_fn="_init_with_torchdistX:" self.model="model" =="" fsdp(="" auto_wrap_policy="auto_wrap_policy," auto_wrapper_callable="auto_wrapper_callable," \*\*fsdp_kwargs,="" )="" run_clm.py,="" statement="" beginning="" file:="" edit="" deferred_init.deferred_init="" replacing="" config)="" supplying="" own="" otherwise,="" accordingly.="" comment="" out="" lines="" follow="" above:="" n_params="sum({p.data_ptr():" p.numel()="" p="" model.parameters()}.values())="" logger.info(f"training="" new="" scratch="" -="" total="" params")="" they="" cause="" error="" left="" unmodified,="" since="" actually="" executed.="" changes,="" now="" run="" parameters,="" provided="" suitably="" large.="" next="" steps="" &amp;="" acknowledgements="" learn="" more,="" docs="" found="" we’d="" love="" hear="" into="" any="" issues="" just="" tell="" us="" about="" it.="" ecstatic="" what’s="" ahead="" invite="" community="" join="" us.="" developed="" fully="" open="" source.="" so,="" please="" issues,="" submit="" pull="" requests,="" send="" rfcs="" github="" openly="" collaborate.="" like="" thank="" ronghang="" hu="" ross="" girshick="" meta="" ai="" lysandre="" debut,="" sourab="" mangrulkar,="" sylvain="" gugger="" arthur="" zucker="" support="" collaboration.="" jiewen="" tan,="" liyang="" lu,="" cromar,="" vaibhav="" singh,="" chandra="" devarakonda="" assistance="" preparing="" post.="" cheers!="" team="" google="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Large Scale Training of Hugging Face Transformers on TPUs With PyTorch/XLA FSDP">
+<meta property="og:description" content="AI is transforming many industries through advanced capabilities such as understanding and generating language, answering questions, and delivering accurate recommendations. These capabilities are fueled by ever-increasing size and complexity of AI models, which require vast amounts of computing power to train.
+
+To meet the growing demands of AI training at scale, last year we introduced Fully Sharded Data Parallel (FSDP) in PyTorch/XLA. FSDP is a model parallelism architecture that unlocks the ability to easily and efficiently scale AI models into hundreds of billions of parameters. With PyTorch/XLA FSDP, during distributed training, each device can store a specific model shard, and all-gather the full model weights when it is time to perform the forward pass. Nested FSDP further optimizes performance by only using a given layer’s full parameters during its forward pass.
+
+We are excited to announce that PyTorch/XLA FSDP has landed in Hugging Face Transformers. Now, Hugging Face users can train PyTorch models with up to 20 times more parameters using the same amount of computing power as before.
+
+We built PyTorch/XLA FSDP support directly into the Hugging Face Trainer class, so that any model using Trainer can leverage FSDP. And with the addition of automatic wrapping to PyTorch/XLA FSDP, nested FSDP wrapping is both flexible and simple to apply. These new features make it easy to train a wide range of Hugging Face models at large scales. In this guide, we demonstrate training GPT-2 models with up to 128B parameters on Google Cloud TPUs. PyTorch/XLA FSDP training on TPUs is highly efficient, achieving up to 45.1% model FLOPS utilization (MFU) for GPT-2:
+
+
+
+Figure 1: Model FLOPS utilization for Hugging Face GPT-2 on Google Cloud TPU v4
+
+Configuring PyTorch/XLA FSDP in the Hugging Face Trainer
+
+First, follow your preferred method to create your TPU(s) and install PyTorch and PyTorch/XLA. You need versions >= 2.0 for PyTorch and PyTorch/XLA.
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h-2.0-cp38-cp38-linux_x86_64.whl --user
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h_xla-2.0-cp38-cp38-linux_x86_64.whl
+
+
+Next, clone and install the Hugging Face Transformers repo. Install all necessary dependencies (e.g., datasets, evaluate, scikit-learn, accelerate).
+
+    cd $HOME
+    git clone https://github.com/huggingface/transformers.git cd transformers
+    git checkout v4.31-release
+    pip3 install -e .
+    pip3 install datasets evaluate scikit-learn
+    pip3 install accelerate==0.21.0
+
+
+In $HOME/transformers, create any model-specific configuration files you might need. Here is an example of a configuration file for a GPT-2 model with 2B parameters, which we later refer to as gpt2_config.json:
+
+{
+    " activation_function":="" "gelu_new",="" "architectures":="" [="" "gpt2lmheadmodel"="" ],="" "attn_pdrop":="" 0.1,="" "bos_token_id":="" 50256,="" "embd_pdrop":="" "eos_token_id":="" "initializer_range":="" 0.02,="" "layer_norm_epsilon":="" 1e-05,="" "model_type":="" "gpt2",="" "n_embd":="" 3072,="" "n_head":="" 24,="" "n_layer":="" 18,="" "n_positions":="" 1024,="" "resid_pdrop":="" "summary_activation":="" null,="" "summary_first_dropout":="" "summary_proj_to_labels":="" true,="" "summary_type":="" "cls_index",="" "summary_use_proj":="" "task_specific_params":="" {="" "text-generation":="" "do_sample":="" "max_length":="" 50="" }="" },="" "vocab_size":="" 50257="" with="" pytorch="" xla="" fsdp,="" it="" is="" possible="" to="" train="" model="" sizes="" much="" bigger="" than="" this="" on="" large="" accelerator="" slices.="" we="" have="" trained="" gpt-2="" models="" as="" 128b="" parameters="" these="" techniques;="" for="" expert="" tips="" how="" replicate="" scale,="" see="" the="" appendix.="" in="" $home="" transformers,="" create="" your="" fsdp="" configuration="" file,="" a="" json="" file="" containing="" all="" of="" configurable="" aspects="" wrapping="" stored="" dictionary.="" following="" official="" hugging="" face="" transformers="" documentation,="" arguments="" are="" available="" set:="" (bool,="" \*optional\*,="" defaults="" false):="" boolean="" which="" determines="" whether="" or="" not="" you="" use="" fsdp.="" make="" sure="" set="" true.="" xla_fsdp_settings="" (dict,="" \*optional\*):="" dictionary="" stores="" want="" set;="" note="" that="" do="" specify="" settings="" where="" using="" default="" value.="" complete="" list="" settings,="" here.="" compute_dtype="" and="" buffer_dtype,="" enter="" strings="" contain="" corresponding="" torch="" data="" type,="" e.g.="" bfloat16.="" fsdp_min_num_params="" (int,="" 0):="" an="" integer="" sets="" minimum="" number="" size-based="" auto="" wrapping.="" every="" module="" at="" least="" many="" will="" be="" wrapped.="" fsdp_transformer_layer_cls_to_wrap="" (list[str],="" (case-sensitive)="" transformer="" layer="" class="" names="" wrap.="" mutually="" exclusive="" fsdp_min_num_params.="" example:="" ["gpt2block",="" "gpt2mlp"].="" xla_fsdp_grad_ckpt="" gradient="" checkpointing="" over="" each="" nested="" wrapped="" layer.="" setting="" can="" only="" used="" when="" flag="" policy="" specified="" through="" fsdp_transformer_layer_cls_to_wrap.="" note:="" transformer-based="" models,="" instead="" performing="" automatic="" layers="" share="" weights="" should="" belong="" separate="" units,="" input="" output="" embedding="" weights.="" example,="" here="" what="" fsdp_config.json="" looks="" like:="" "fsdp_transformer_layer_cls_to_wrap":="" "gpt2block"="" "xla":="" "xla_fsdp_settings":="" "compute_dtype":="" "bfloat16",="" "shard_param_on_dim_0":="" "pin_layout_in_collective_ops":="" true="" "xla_fsdp_grad_ckpt":="" now,="" it’s="" time="" model!="" first,="" ensure="" runtime="" up="" appropriately="" by="" export="" pjrt_device="TPU" running="" training,="" key="" flags="" pass="" are:="" a)="" --fsdp="" "full_shard"="" b)="" --fsdp_config="" replace="" whatever="" named="" file.="" sample="" command="" our="" example="" 2b="" model,="" training="" started="" xla_spawn.py,="" launcher="" script="" distributed="" tpu="" training.="" python3="" -u="" examples="" xla_spawn.py="" --num_cores="" 4="" language-modeling="" run_clm.py="" \="" --num_train_epochs="" 1="" --dataset_name="" wikitext="" --dataset_config_name="" wikitext-2-raw-v1="" --per_device_train_batch_size="" 32="" --per_device_eval_batch_size="" --do_train="" --do_eval="" --output_dir="" tmp="" test-clm="" --overwrite_output_dir="" --config_name="" gpt2_config.json="" --cache_dir="" --tokenizer_name="" gpt2="" --block_size="" 1024="" --optim="" adafactor="" --adafactor="" --save_strategy="" no="" --logging_strategy="" measuring="" flops="" utilization="" (mfu)="" floating="" point="" operations="" required="" perform="" single="" forward="" backward="" pass.="" hardware-="" implementation-="" independent,="" depend="" underlying="" model.="" step,="" computed="" via="" formulas:="" tokens_per_batch="global_batch_size" \*="" seq_len="" flops_per_step="6" num_params="" sequence="" length="" estimation="" assumes="" dimensionality="" larger="" (d_model="" &gt;&gt;="" seq_len).="" if="" assumption="" violated="" self-attention="" start="" significant="" enough="" expression="" underestimate="" mfu.="" based="" step="" hardware="" details="" (numbers="" chips="" peak="" per="" chip),="" compute="" (mfu),="" measures="" effectively="" implementation="" hardware.="" achieving="" 100%="" mfu="" means="" being="" perfectly="" calculate="" formula:="" model_flops_utilization="FLOPS_per_step" step_time(s)="" chip_count="" flops_per_chip="" above="" cloud="" v4-8,="" measure="" 4.191s.="" formula,="" 35.7%="" v4-8.="" further="" calculating="" mfu,="" refer="" palm="" paper.="" table="" below="" presents="" between="" 128b,="" 1024.="" numcores="" v4-8="" v4-64="" v4-128="" v4-256="" v4-512="" #="" tokens="" batch="" 131,072="" 524,288="" 1,048,576="" 16b="" 20b="" 32b="" 64b="" (ms)="" 4,191="" 14,592="" 7,824="" 12,970="" 25,653="" 30,460="" pflops="" 1.65="" 62="" 101="" 404="" 809="" 38.8%="" 45.1%="" 44.4%="" 44.7%="" 37.7%="" 1:="" calculation="" among="" configurations,="" peaks="" parameter="" v4-128.="" result="" compares="" favorably="" to,="" 41.5%="" 22b="" megatron-like="" there="" two="" actionable="" insights="" from="" experiments:="" simply="" increasing="" without="" size="" generally="" lower="" utilization,="" because="" more="" spent="" sharing="" shards.="" uses="" all-reduce="" communication="" collectives="" asynchronous,="" chip-to-chip="" cannot="" overlapped="" computation.="" increases,="" shards="" must="" communicated="" so="" expect="" portion="" increase="" chips.="" second,="" better="" utilization.="" memory="" footprint="" decreases,="" often="" frees="" high="" bandwidth="" (hbm)="" scale="" global="" size.="" size,="" processed="" thus,="" does="" step.="" long="" proportionally,="" improve="" therefore,="" maximize="" recommend="" largest="" fit="" hbm="" slice,="" reduce="" parameters.="" very="" (tested="" parameters)="" xla,="" tensors="" initialized="" cpu="" before="" moved="" device.="" one="" may="" encounter="" host-side="" out-of-memory="" errors="" sufficiently="" large,="" even="" though="" device="" after="" sharding.="" avoid="" this,="" defer="" submodule’s="" initialization="" until="" wrapped,="" ensures="" submodules="" sharded="" soon="" their="" values="" populated,="" avoiding="" limitations.="" below,="" explain="" modify="" local="" copy="" repository="" technique.="" commands="" install="" torchdistx,="" library="" experimental="" features.="" engine="" behind="" deferred="" initialization,="" allows="" don’t="" require="" immediate="" storage="" materialized="" later.="" also="" need="" specific="" 2.0="" version="" takes="" advantage="" package;="" uninstall="" installed="" them="" earlier.="" pip3="" --index-url="" [https:="" download.pytorch.org="" whl="" test="" cpu](https:="" cpu)="" --user="" torch_xla[torchdistx]="" -f="" https:="" storage.googleapis.com="" tpu-pytorch="" wheels="" tpuvm="" experimen="" tal="" torch_xla-2.0-cp38-cp38-linux_x86_64.whl="" next,="" apply="" changes="" transformers:="" src="" trainer.py,="" add="" function="" _wrap_model="" line="" immediately="" prior="" wrapping:="" torchdistx="" import="" deferred_init="" def="" _init_with_torchdistx(module):="" check_fn(k):="" return="" isinstance(k,="" fsdp)="" deferred_init.materialize_module(module,="" check_fn="check_fn)" materialize_module="" initialize="" returns="" case,="" checks="" has="" been="" within="" _wrap_model,="" accept="" additional="" argument="" param_init_fn="_init_with_torchdistX:" self.model="model" =="" fsdp(="" auto_wrap_policy="auto_wrap_policy," auto_wrapper_callable="auto_wrapper_callable," \*\*fsdp_kwargs,="" )="" run_clm.py,="" statement="" beginning="" file:="" edit="" deferred_init.deferred_init="" replacing="" config)="" supplying="" own="" otherwise,="" accordingly.="" comment="" out="" lines="" follow="" above:="" n_params="sum({p.data_ptr():" p.numel()="" p="" model.parameters()}.values())="" logger.info(f"training="" new="" scratch="" -="" total="" params")="" they="" cause="" error="" left="" unmodified,="" since="" actually="" executed.="" changes,="" now="" run="" parameters,="" provided="" suitably="" large.="" next="" steps="" &amp;="" acknowledgements="" learn="" more,="" docs="" found="" we’d="" love="" hear="" into="" any="" issues="" just="" tell="" us="" about="" it.="" ecstatic="" what’s="" ahead="" invite="" community="" join="" us.="" developed="" fully="" open="" source.="" so,="" please="" issues,="" submit="" pull="" requests,="" send="" rfcs="" github="" openly="" collaborate.="" like="" thank="" ronghang="" hu="" ross="" girshick="" meta="" ai="" lysandre="" debut,="" sourab="" mangrulkar,="" sylvain="" gugger="" arthur="" zucker="" support="" collaboration.="" jiewen="" tan,="" liyang="" lu,="" cromar,="" vaibhav="" singh,="" chandra="" devarakonda="" assistance="" preparing="" post.="" cheers!="" team="" google="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Large Scale Training of Hugging Face Transformers on TPUs With PyTorch/XLA FSDP">
+<meta name="twitter:description" content="AI is transforming many industries through advanced capabilities such as understanding and generating language, answering questions, and delivering accurate recommendations. These capabilities are fueled by ever-increasing size and complexity of AI models, which require vast amounts of computing power to train.
+
+To meet the growing demands of AI training at scale, last year we introduced Fully Sharded Data Parallel (FSDP) in PyTorch/XLA. FSDP is a model parallelism architecture that unlocks the ability to easily and efficiently scale AI models into hundreds of billions of parameters. With PyTorch/XLA FSDP, during distributed training, each device can store a specific model shard, and all-gather the full model weights when it is time to perform the forward pass. Nested FSDP further optimizes performance by only using a given layer’s full parameters during its forward pass.
+
+We are excited to announce that PyTorch/XLA FSDP has landed in Hugging Face Transformers. Now, Hugging Face users can train PyTorch models with up to 20 times more parameters using the same amount of computing power as before.
+
+We built PyTorch/XLA FSDP support directly into the Hugging Face Trainer class, so that any model using Trainer can leverage FSDP. And with the addition of automatic wrapping to PyTorch/XLA FSDP, nested FSDP wrapping is both flexible and simple to apply. These new features make it easy to train a wide range of Hugging Face models at large scales. In this guide, we demonstrate training GPT-2 models with up to 128B parameters on Google Cloud TPUs. PyTorch/XLA FSDP training on TPUs is highly efficient, achieving up to 45.1% model FLOPS utilization (MFU) for GPT-2:
+
+
+
+Figure 1: Model FLOPS utilization for Hugging Face GPT-2 on Google Cloud TPU v4
+
+Configuring PyTorch/XLA FSDP in the Hugging Face Trainer
+
+First, follow your preferred method to create your TPU(s) and install PyTorch and PyTorch/XLA. You need versions >= 2.0 for PyTorch and PyTorch/XLA.
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h-2.0-cp38-cp38-linux_x86_64.whl --user
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h_xla-2.0-cp38-cp38-linux_x86_64.whl
+
+
+Next, clone and install the Hugging Face Transformers repo. Install all necessary dependencies (e.g., datasets, evaluate, scikit-learn, accelerate).
+
+    cd $HOME
+    git clone https://github.com/huggingface/transformers.git cd transformers
+    git checkout v4.31-release
+    pip3 install -e .
+    pip3 install datasets evaluate scikit-learn
+    pip3 install accelerate==0.21.0
+
+
+In $HOME/transformers, create any model-specific configuration files you might need. Here is an example of a configuration file for a GPT-2 model with 2B parameters, which we later refer to as gpt2_config.json:
+
+{
+    " activation_function":="" "gelu_new",="" "architectures":="" [="" "gpt2lmheadmodel"="" ],="" "attn_pdrop":="" 0.1,="" "bos_token_id":="" 50256,="" "embd_pdrop":="" "eos_token_id":="" "initializer_range":="" 0.02,="" "layer_norm_epsilon":="" 1e-05,="" "model_type":="" "gpt2",="" "n_embd":="" 3072,="" "n_head":="" 24,="" "n_layer":="" 18,="" "n_positions":="" 1024,="" "resid_pdrop":="" "summary_activation":="" null,="" "summary_first_dropout":="" "summary_proj_to_labels":="" true,="" "summary_type":="" "cls_index",="" "summary_use_proj":="" "task_specific_params":="" {="" "text-generation":="" "do_sample":="" "max_length":="" 50="" }="" },="" "vocab_size":="" 50257="" with="" pytorch="" xla="" fsdp,="" it="" is="" possible="" to="" train="" model="" sizes="" much="" bigger="" than="" this="" on="" large="" accelerator="" slices.="" we="" have="" trained="" gpt-2="" models="" as="" 128b="" parameters="" these="" techniques;="" for="" expert="" tips="" how="" replicate="" scale,="" see="" the="" appendix.="" in="" $home="" transformers,="" create="" your="" fsdp="" configuration="" file,="" a="" json="" file="" containing="" all="" of="" configurable="" aspects="" wrapping="" stored="" dictionary.="" following="" official="" hugging="" face="" transformers="" documentation,="" arguments="" are="" available="" set:="" (bool,="" \*optional\*,="" defaults="" false):="" boolean="" which="" determines="" whether="" or="" not="" you="" use="" fsdp.="" make="" sure="" set="" true.="" xla_fsdp_settings="" (dict,="" \*optional\*):="" dictionary="" stores="" want="" set;="" note="" that="" do="" specify="" settings="" where="" using="" default="" value.="" complete="" list="" settings,="" here.="" compute_dtype="" and="" buffer_dtype,="" enter="" strings="" contain="" corresponding="" torch="" data="" type,="" e.g.="" bfloat16.="" fsdp_min_num_params="" (int,="" 0):="" an="" integer="" sets="" minimum="" number="" size-based="" auto="" wrapping.="" every="" module="" at="" least="" many="" will="" be="" wrapped.="" fsdp_transformer_layer_cls_to_wrap="" (list[str],="" (case-sensitive)="" transformer="" layer="" class="" names="" wrap.="" mutually="" exclusive="" fsdp_min_num_params.="" example:="" ["gpt2block",="" "gpt2mlp"].="" xla_fsdp_grad_ckpt="" gradient="" checkpointing="" over="" each="" nested="" wrapped="" layer.="" setting="" can="" only="" used="" when="" flag="" policy="" specified="" through="" fsdp_transformer_layer_cls_to_wrap.="" note:="" transformer-based="" models,="" instead="" performing="" automatic="" layers="" share="" weights="" should="" belong="" separate="" units,="" input="" output="" embedding="" weights.="" example,="" here="" what="" fsdp_config.json="" looks="" like:="" "fsdp_transformer_layer_cls_to_wrap":="" "gpt2block"="" "xla":="" "xla_fsdp_settings":="" "compute_dtype":="" "bfloat16",="" "shard_param_on_dim_0":="" "pin_layout_in_collective_ops":="" true="" "xla_fsdp_grad_ckpt":="" now,="" it’s="" time="" model!="" first,="" ensure="" runtime="" up="" appropriately="" by="" export="" pjrt_device="TPU" running="" training,="" key="" flags="" pass="" are:="" a)="" --fsdp="" "full_shard"="" b)="" --fsdp_config="" replace="" whatever="" named="" file.="" sample="" command="" our="" example="" 2b="" model,="" training="" started="" xla_spawn.py,="" launcher="" script="" distributed="" tpu="" training.="" python3="" -u="" examples="" xla_spawn.py="" --num_cores="" 4="" language-modeling="" run_clm.py="" \="" --num_train_epochs="" 1="" --dataset_name="" wikitext="" --dataset_config_name="" wikitext-2-raw-v1="" --per_device_train_batch_size="" 32="" --per_device_eval_batch_size="" --do_train="" --do_eval="" --output_dir="" tmp="" test-clm="" --overwrite_output_dir="" --config_name="" gpt2_config.json="" --cache_dir="" --tokenizer_name="" gpt2="" --block_size="" 1024="" --optim="" adafactor="" --adafactor="" --save_strategy="" no="" --logging_strategy="" measuring="" flops="" utilization="" (mfu)="" floating="" point="" operations="" required="" perform="" single="" forward="" backward="" pass.="" hardware-="" implementation-="" independent,="" depend="" underlying="" model.="" step,="" computed="" via="" formulas:="" tokens_per_batch="global_batch_size" \*="" seq_len="" flops_per_step="6" num_params="" sequence="" length="" estimation="" assumes="" dimensionality="" larger="" (d_model="" &gt;&gt;="" seq_len).="" if="" assumption="" violated="" self-attention="" start="" significant="" enough="" expression="" underestimate="" mfu.="" based="" step="" hardware="" details="" (numbers="" chips="" peak="" per="" chip),="" compute="" (mfu),="" measures="" effectively="" implementation="" hardware.="" achieving="" 100%="" mfu="" means="" being="" perfectly="" calculate="" formula:="" model_flops_utilization="FLOPS_per_step" step_time(s)="" chip_count="" flops_per_chip="" above="" cloud="" v4-8,="" measure="" 4.191s.="" formula,="" 35.7%="" v4-8.="" further="" calculating="" mfu,="" refer="" palm="" paper.="" table="" below="" presents="" between="" 128b,="" 1024.="" numcores="" v4-8="" v4-64="" v4-128="" v4-256="" v4-512="" #="" tokens="" batch="" 131,072="" 524,288="" 1,048,576="" 16b="" 20b="" 32b="" 64b="" (ms)="" 4,191="" 14,592="" 7,824="" 12,970="" 25,653="" 30,460="" pflops="" 1.65="" 62="" 101="" 404="" 809="" 38.8%="" 45.1%="" 44.4%="" 44.7%="" 37.7%="" 1:="" calculation="" among="" configurations,="" peaks="" parameter="" v4-128.="" result="" compares="" favorably="" to,="" 41.5%="" 22b="" megatron-like="" there="" two="" actionable="" insights="" from="" experiments:="" simply="" increasing="" without="" size="" generally="" lower="" utilization,="" because="" more="" spent="" sharing="" shards.="" uses="" all-reduce="" communication="" collectives="" asynchronous,="" chip-to-chip="" cannot="" overlapped="" computation.="" increases,="" shards="" must="" communicated="" so="" expect="" portion="" increase="" chips.="" second,="" better="" utilization.="" memory="" footprint="" decreases,="" often="" frees="" high="" bandwidth="" (hbm)="" scale="" global="" size.="" size,="" processed="" thus,="" does="" step.="" long="" proportionally,="" improve="" therefore,="" maximize="" recommend="" largest="" fit="" hbm="" slice,="" reduce="" parameters.="" very="" (tested="" parameters)="" xla,="" tensors="" initialized="" cpu="" before="" moved="" device.="" one="" may="" encounter="" host-side="" out-of-memory="" errors="" sufficiently="" large,="" even="" though="" device="" after="" sharding.="" avoid="" this,="" defer="" submodule’s="" initialization="" until="" wrapped,="" ensures="" submodules="" sharded="" soon="" their="" values="" populated,="" avoiding="" limitations.="" below,="" explain="" modify="" local="" copy="" repository="" technique.="" commands="" install="" torchdistx,="" library="" experimental="" features.="" engine="" behind="" deferred="" initialization,="" allows="" don’t="" require="" immediate="" storage="" materialized="" later.="" also="" need="" specific="" 2.0="" version="" takes="" advantage="" package;="" uninstall="" installed="" them="" earlier.="" pip3="" --index-url="" [https:="" download.pytorch.org="" whl="" test="" cpu](https:="" cpu)="" --user="" torch_xla[torchdistx]="" -f="" https:="" storage.googleapis.com="" tpu-pytorch="" wheels="" tpuvm="" experimen="" tal="" torch_xla-2.0-cp38-cp38-linux_x86_64.whl="" next,="" apply="" changes="" transformers:="" src="" trainer.py,="" add="" function="" _wrap_model="" line="" immediately="" prior="" wrapping:="" torchdistx="" import="" deferred_init="" def="" _init_with_torchdistx(module):="" check_fn(k):="" return="" isinstance(k,="" fsdp)="" deferred_init.materialize_module(module,="" check_fn="check_fn)" materialize_module="" initialize="" returns="" case,="" checks="" has="" been="" within="" _wrap_model,="" accept="" additional="" argument="" param_init_fn="_init_with_torchdistX:" self.model="model" =="" fsdp(="" auto_wrap_policy="auto_wrap_policy," auto_wrapper_callable="auto_wrapper_callable," \*\*fsdp_kwargs,="" )="" run_clm.py,="" statement="" beginning="" file:="" edit="" deferred_init.deferred_init="" replacing="" config)="" supplying="" own="" otherwise,="" accordingly.="" comment="" out="" lines="" follow="" above:="" n_params="sum({p.data_ptr():" p.numel()="" p="" model.parameters()}.values())="" logger.info(f"training="" new="" scratch="" -="" total="" params")="" they="" cause="" error="" left="" unmodified,="" since="" actually="" executed.="" changes,="" now="" run="" parameters,="" provided="" suitably="" large.="" next="" steps="" &amp;="" acknowledgements="" learn="" more,="" docs="" found="" we’d="" love="" hear="" into="" any="" issues="" just="" tell="" us="" about="" it.="" ecstatic="" what’s="" ahead="" invite="" community="" join="" us.="" developed="" fully="" open="" source.="" so,="" please="" issues,="" submit="" pull="" requests,="" send="" rfcs="" github="" openly="" collaborate.="" like="" thank="" ronghang="" hu="" ross="" girshick="" meta="" ai="" lysandre="" debut,="" sourab="" mangrulkar,="" sylvain="" gugger="" arthur="" zucker="" support="" collaboration.="" jiewen="" tan,="" liyang="" lu,="" cromar,="" vaibhav="" singh,="" chandra="" devarakonda="" assistance="" preparing="" post.="" cheers!="" team="" google="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年8月24日</p>
+            <h1>
+                <a class="blog-title">在 TPU 上使用 PyTorch/XLA FSDP 对 Hugging Face Transformer 进行大规模训练</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由亚历克斯·沃特海姆、米尔达德·莫哈马迪、杰克·曹、亚历克斯·斯皮里多诺夫、乔·斯皮萨克、利桑德·德布特、西尔万·古格、索拉布·曼格鲁卡尔</p>
+                    <p>人工智能通过理解、生成语言、回答问题和提供准确推荐等高级功能正在改变许多行业。这些功能由不断增长和复杂的人工智能模型驱动，这些模型需要大量的计算能力来训练。</p>
+
+<p>为了满足大规模人工智能训练不断增长的需求，去年我们在 PyTorch/XLA 中引入了<a href="https://pytorch.org/blog/scaling-pytorch-models-on-cloud-tpus-with-fsdp/">完全分片数据并行（FSDP）</a>。FSDP 是一种模型并行架构，它解锁了将人工智能模型轻松且高效地扩展到数百亿参数的能力。在 <a href="https://github.com/pytorch/xla/blob/master/docs/fsdp.md">PyTorch/XLA FSDP</a> 中，在分布式训练期间，每个设备可以存储特定的模型分片，并在执行前向传递时收集完整的模型权重。嵌套 FSDP 通过仅在执行前向传递时使用给定层的完整参数来进一步优化性能。</p>
+
+<p>我们非常高兴地宣布，PyTorch/XLA FSDP 已成功 <a href="https://github.com/huggingface/transformers/releases/tag/v4.27.0"> 落地 </a> 在 <a href="https://github.com/huggingface/transformers">Hugging Face Transformers</a> 中。现在，Hugging Face 用户可以使用与之前相同的计算能力，训练参数高达 20 倍的 PyTorch 模型。</p>
+
+<p>我们将 PyTorch/XLA FSDP 支持直接集成到 Hugging Face Trainer 类中，因此任何使用 Trainer 的模型都可以利用 FSDP。通过添加自动包装到 PyTorch/XLA FSDP，嵌套 FSDP 包装既灵活又简单易用。这些新功能使得在大规模上训练各种 Hugging Face 模型变得容易。在本指南中，我们展示了在 Google Cloud TPUs 上训练参数高达 128B 的 GPT-2 模型。PyTorch/XLA FSDP 在 TPU 上的训练效率非常高，GPT-2 的模型 FLOPS 利用率（MFU）高达 45.1%：</p>
+
+<p><img src="/assets/images/hugging_face_transformers.svg" alt="Figure 1: Model FLOPS utilization for Hugging Face GPT-2 on Google Cloud TPU v4" style="width:100%; margin-top: 4em;"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 1</strong>：Hugging Face GPT-2 在 Google Cloud TPU v4 上的模型 FLOPS 利用率</em></small></p>
+
+<h2 id="configuring-pytorchxla-fsdp-in-the-hugging-face-trainer">在 Hugging Face Trainer 中配置 PyTorch/XLA FSDP</h2>
+
+<p>首先，按照您首选的方法创建您的 TPU（s），并安装 PyTorch 和 PyTorch/XLA。您需要 PyTorch 和 PyTorch/XLA 的版本大于等于 2.0。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h-2.0-cp38-cp38-linux_x86_64.whl --user
+
+    pip3 install https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/torc h_xla-2.0-cp38-cp38-linux_x86_64.whl
+</code></pre></div></div>
+
+<p>接下来，克隆并安装 Hugging Face Transformers 仓库。安装所有必要的依赖项（例如，datasets、evaluate、scikit-learn、accelerate）。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    cd $HOME
+    git clone https://github.com/huggingface/transformers.git cd transformers
+    git checkout v4.31-release
+    pip3 install -e .
+    pip3 install datasets evaluate scikit-learn
+    pip3 install accelerate==0.21.0
+</code></pre></div></div>
+
+<p>在 <code class="language-plaintext highlighter-rouge">$HOME/transformers</code> 中，创建您可能需要的任何特定模型配置文件。以下是一个 GPT-2 模型（2B 参数）的配置文件示例，我们稍后将称之为 <code class="language-plaintext highlighter-rouge">gpt2_config.json</code>：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>{
+    "activation_function": "gelu_new", 
+    "architectures": [
+        "GPT2LMHeadModel"
+    ],
+    "attn_pdrop": 0.1,
+    "bos_token_id": 50256, "embd_pdrop": 0.1, "eos_token_id": 50256, "initializer_range": 0.02, "layer_norm_epsilon": 1e-05, "model_type": "gpt2",
+    "n_embd": 3072,
+    "n_head": 24,
+    "n_layer": 18,
+    "n_positions": 1024,
+    "resid_pdrop": 0.1,
+    "summary_activation": null,
+    "summary_first_dropout": 0.1,
+    "summary_proj_to_labels": true,
+    "summary_type": "cls_index",
+    "summary_use_proj": true,
+    "task_specific_params": {
+        "text-generation": {
+            "do_sample": true,
+            "max_length": 50
+        }
+    },
+    "vocab_size": 50257
+}
+</code></pre></div></div>
+
+<p>使用 PyTorch/XLA FSDP，可以在大型加速器切片上训练比这更大的模型大小。我们已经使用这些技术训练了 128B 参数的 GPT-2 模型；有关如何复制此规模的专家技巧，请参阅附录。</p>
+
+<p>在 <code class="language-plaintext highlighter-rouge">$HOME/transformers</code> 中，创建您的 FSDP 配置文件，一个包含所有可配置的 XLA FSDP 包装方面的 JSON 文件，存储为字典。按照 <a href="https://huggingface.co/docs/transformers/main_classes/trainer#pytorchxla-fully-sharded-data-parallel"> 官方 Hugging Face Transformers XLA FSDP 文档 </a>，以下是一些可设置的参数：</p>
+<ul>
+  <li> <code class="language-plaintext highlighter-rouge">xla (bool, \*optional\*, defaults to False)</code> : 这是一个布尔值，用于确定是否使用 XLA FSDP。请确保将其设置为 <code class="language-plaintext highlighter-rouge">true</code>。</li>
+  <li> <code class="language-plaintext highlighter-rouge">xla_fsdp_settings (dict, \*optional\*)</code> : 这是一个字典，存储了您想要设置的 XLA FSDP 包装的所有参数；请注意，对于使用默认值的参数，您无需指定设置。有关设置列表的完整信息，请参阅 <a href="https://github.com/pytorch/xla/blob/master/torch_xla/distributed/fsdp/xla_fully_sharded_data_parallel.py"> 此处 </a>。</li>
+</ul>
+
+<p>对于 <code class="language-plaintext highlighter-rouge">compute_dtype</code> 和 <code class="language-plaintext highlighter-rouge">buffer_dtype</code>，请将这些作为包含相应 torch 数据类型的字符串输入，例如 <code class="language-plaintext highlighter-rouge">bfloat16</code>。</p>
+
+<ul>
+  <li> <code class="language-plaintext highlighter-rouge">fsdp_min_num_params (int, \*optional\*, defaults to 0)</code> : 设置基于大小的自动换行所需的最小参数数量。每个参数数量至少与 <code class="language-plaintext highlighter-rouge">fsdp_min_num_params</code> 相同的模块都将被 XLA FSDP 包装。</li>
+  <li> <code class="language-plaintext highlighter-rouge">fsdp_transformer_layer_cls_to_wrap (List[str], \*optional\*)</code> : 要包装的（区分大小写）转换层类名列表。请注意，这与 <code class="language-plaintext highlighter-rouge">fsdp_min_num_params</code> 是互斥的。示例：<code class="language-plaintext highlighter-rouge">["GPT2Block", "GPT2MLP"]</code>。</li>
+  <li> <code class="language-plaintext highlighter-rouge">xla_fsdp_grad_ckpt (bool, \*optional\*, defaults to False)</code> : 这是一个布尔值，用于确定是否在每个嵌套的 XLA FSDP 包装层上使用梯度检查点。此设置只能在将 <code class="language-plaintext highlighter-rouge">xla</code> 标志设置为 true 时使用，并且通过 <code class="language-plaintext highlighter-rouge">fsdp_min_num_params</code> 或 <code class="language-plaintext highlighter-rouge">fsdp_transformer_layer_cls_to_wrap</code> 指定自动包装策略。</li>
+</ul>
+
+<p><strong>注意：</strong> 对于基于转换器的模型，在执行自动嵌套 FSDP 包装时，请使用 <code class="language-plaintext highlighter-rouge">fsdp_transformer_layer_cls_to_wrap</code> 代替 <code class="language-plaintext highlighter-rouge">fsdp_min_num_params</code>。共享权重的层不应属于不同的 FSDP 包装单元，并且基于转换器的模型中的输入和输出嵌入层共享权重。</p>
+
+<p>对于这个 GPT-2 示例，这是相应的 <code class="language-plaintext highlighter-rouge">fsdp_config.json</code> 文件的样子：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    {
+        "fsdp_transformer_layer_cls_to_wrap": [
+            "GPT2Block"
+        ],
+        "xla": true,
+        "xla_fsdp_settings": {
+            "compute_dtype": "bfloat16",
+            "shard_param_on_dim_0": true,
+            "pin_layout_in_collective_ops": true
+        },
+       "xla_fsdp_grad_ckpt": true
+    }
+</code></pre></div></div>
+
+<table>
+  <tbody>
+    <tr>
+      <td>现在，是时候训练你的模型了！首先，确保你已经适当地设置了 PyTorch/XLA 运行时，通过设置</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    export PJRT_DEVICE=TPU
+</code></pre></div></div>
+
+<p>在运行训练时，需要传递的关键标志是：</p>
+
+<p>a) <code class="language-plaintext highlighter-rouge">--fsdp "full_shard"</code>
+b) <code class="language-plaintext highlighter-rouge">--fsdp_config fsdp_config.json</code></p>
+
+<p>其中你应该将 <code class="language-plaintext highlighter-rouge">fsdp_config.json</code> 替换为你命名的 FSDP 配置文件名。以下是一个训练示例 2B GPT-2 模型的命令示例，其中训练是通过 <code class="language-plaintext highlighter-rouge">xla_spawn.py</code>，一个用于分布式 TPU 训练的 <a href="https://github.com/huggingface/transformers/blob/main/examples/pytorch/xla_spawn.py"> 启动脚本 </a> 启动的。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    python3 -u examples/pytorch/xla_spawn.py --num_cores 4 examples/pytorch/language-modeling/run_clm.py \
+    --num_train_epochs 1 \
+    --dataset_name wikitext \
+    --dataset_config_name wikitext-2-raw-v1 \ --per_device_train_batch_size 32 \ --per_device_eval_batch_size 32 \
+    --do_train \
+    --do_eval \
+    --output_dir /tmp/test-clm \
+    --overwrite_output_dir \
+    --config_name gpt2_config.json \
+    --cache_dir /tmp \
+    --tokenizer_name gpt2 \
+    --block_size 1024 \
+    --optim adafactor \
+    --adafactor true \
+    --save_strategy no \
+    --logging_strategy no \
+    --fsdp "full_shard" \
+    --fsdp_config fsdp_config.json
+</code></pre></div></div>
+
+<h2 id="measuring-model-flops-utilization-mfu-for-gpt-2">测量 GPT-2 的模型 FLOPS 利用率 (MFU)</h2>
+
+<p>模型 FLOPS 是执行单个正向和反向传递所需的浮点运算次数。模型 FLOPS 与硬件和实现无关，仅取决于底层模型。在每一步中，FLOPS 的数量通过以下公式计算：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>tokens_per_batch = global_batch_size \* seq_len
+
+FLOPS_per_step = 6 \* tokens_per_batch \* num_params
+</code></pre></div></div>
+
+<p>其中 <code class="language-plaintext highlighter-rouge">seq_len</code> 是序列长度，<code class="language-plaintext highlighter-rouge">num_params</code> 是模型中的参数数量。我们注意到，这个估计假设输入维度性远大于输入序列长度 (<code class="language-plaintext highlighter-rouge">d_model &gt;&gt; seq_len</code>)。如果这个假设被违反，自注意力 FLOPS 将变得足够显著，并且这个表达式将低估真实的 MFU。</p>
+
+<p>基于步骤时间和硬件细节（芯片数量和每个芯片的峰值 FLOPS），我们可以计算模型 FLOPS 利用率 (MFU)，这衡量了我们的实现如何有效地使用底层硬件。达到 100% MFU 意味着该模型完美地使用了硬件。我们使用以下公式计算 MFU：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model_FLOPS_utilization = FLOPS_per_step / step_time(s) / chip_count / FLOPS_per_chip
+</code></pre></div></div>
+
+<p>当在 Cloud TPU v4-8 上使用上述 XLA FSDP 配置文件训练 2B 参数的 GPT-2 模型时，我们测量到每步耗时 4.191 秒。使用上述公式，我们计算出 v4-8 上的 MFU 为 35.7%。有关计算 MFU 的更多详细信息，请参阅 <a href="https://arxiv.org/pdf/2204.02311.pdf">PaLM 论文 </a>。</p>
+
+<p>下表展示了 2B 至 128B 大小的 GPT-2 模型在序列长度为 1024 时的 MFU。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>TPU 核心数</strong></th>
+      <th><strong>v4-8</strong></th>
+      <th><strong>v4-64</strong></th>
+      <th><strong>v4-128</strong></th>
+      <th><strong>v4-128</strong></th>
+      <th><strong>v4-256</strong></th>
+      <th><strong>v4-512</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>批次/令牌数量</strong></td>
+      <td>131,072</td>
+      <td>524,288</td>
+      <td>524,288</td>
+      <td>524,288</td>
+      <td>1,048,576</td>
+      <td>1,048,576</td>
+    </tr>
+    <tr>
+      <td><strong>参数数量</strong></td>
+      <td>2B</td>
+      <td>16B</td>
+      <td>20B</td>
+      <td>32B</td>
+      <td>64B</td>
+      <td>128B</td>
+    </tr>
+    <tr>
+      <td><strong>步骤时间（毫秒）</strong></td>
+      <td>4,191</td>
+      <td>14,592</td>
+      <td>7,824</td>
+      <td>12,970</td>
+      <td>25,653</td>
+      <td>30,460</td>
+    </tr>
+    <tr>
+      <td><strong>每步 PFLOPS</strong></td>
+      <td>1.65</td>
+      <td>50</td>
+      <td>62</td>
+      <td>101</td>
+      <td>404</td>
+      <td>809</td>
+    </tr>
+    <tr>
+      <td><strong>MFU</strong></td>
+      <td>35.7%</td>
+      <td>38.8%</td>
+      <td>45.1%</td>
+      <td>44.4%</td>
+      <td>44.7%</td>
+      <td>37.7%</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>表格 1：GPT-2 模型 FLOPS 利用率计算详情</strong></p>
+
+<p>在这些配置中，20B 参数模型在 v4-128 上的 MFU 峰值达到 45.1%。这个结果与例如 22B Megatron-like 模型的 41.5% MFU 相比，表现更佳。<a href="https://arxiv.org/pdf/2205.05198.pdf"> 一个 22B Megatron-like 模型</a></p>
+
+<p>从这些实验中我们可以得到两个有价值的见解：</p>
+
+<p>首先，仅仅增加芯片数量而不增加批处理大小通常意味着 FLOPS 利用率降低，因为更多的时间被用于共享模型碎片。FSDP 使用全量减少通信集体，这些集体不是异步的，这意味着芯片间的通信不能与计算重叠。随着芯片数量的增加，必须通信的模型碎片数量也增加，因此我们预计随着芯片数量的增加，通信所占的步骤时间比例也会增加。</p>
+
+<p>其次，增加批大小通常意味着更好的 FLOPS 利用率。随着芯片数量的增加，模型的内存占用减少，这通常可以释放出高带宽内存（HBM），以便扩大全局批大小。随着全局批大小的增大，每步处理的 token 数量增加，因此每步的 FLOPS 也相应增加。只要步长时间不按比例增加，我们预计更大的全局批大小可以提高 MFU。</p>
+
+<p>因此，为了最大化 MFU，我们建议使用尽可能大的全局批大小进行训练，该批大小可以适应 TPU 切片的 HBM，并使用 FSDP 减少模型参数所需的内存。</p>
+
+<h2 id="training-very-large-models-tested-to-128b-parameters">训练非常大的模型（已测试至 128B 参数）</h2>
+
+<p>当使用 PyTorch/XLA 时，必须在将张量移动到 XLA 设备之前在 CPU 上初始化。这意味着即使模型在分片后可以适应设备 HBM，如果模型足够大，也可能遇到主机端内存不足错误。为了避免这种情况，我们必须将每个子模块的初始化推迟到其值被填充后，这确保了子模块在值被填充后立即分片，避免了主机端限制。</p>
+
+<p>下面，我们将解释如何使用此技术修改 Hugging Face transformers 仓库的本地副本以训练参数高达 128B 的 GPT-2 模型。</p>
+
+<p>首先，使用以下命令安装 torchdistX 库，这是一个包含实验性 PyTorch 分布式功能的库。这是延迟初始化的引擎，允许您创建不需要立即存储的 tensor，可以在稍后实现。您还需要安装一个特定的 PyTorch/XLA 2.0 版本，以利用此包；请注意，如果您之前安装了 PyTorch 和 PyTorch/XLA，则必须先卸载它们。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip3 install torch==2.0 --index-url [https://download.pytorch.org/whl/test/cpu](https://download.pytorch.org/whl/test/cpu) --user
+pip3 install torch_xla[torchdistx] -f https://storage.googleapis.com/tpu-pytorch/wheels/tpuvm/experimen tal/torch_xla-2.0-cp38-cp38-linux_x86_64.whl
+</code></pre></div></div>
+
+<p>接下来，将以下更改应用到您的 Hugging Face Transformers 本地副本中：</p>
+
+<p>在 <code class="language-plaintext highlighter-rouge">src/transformers/trainer.py</code> 中，在 <code class="language-plaintext highlighter-rouge">_wrap_model</code> 之前立即添加以下函数：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from torchdistx import deferred_init
+
+def _init_with_torchdistX(module):
+    def check_fn(k):
+        return not isinstance(k, FSDP)
+    deferred_init.materialize_module(module, check_fn=check_fn)
+</code></pre></div></div>
+
+<p>函数 <code class="language-plaintext highlighter-rouge">materialize_module</code> 将初始化模型张量，如果 <code class="language-plaintext highlighter-rouge">check_fn</code> 返回 <code class="language-plaintext highlighter-rouge">True</code>。在这种情况下，<code class="language-plaintext highlighter-rouge">check_fn</code> 检查模块是否已被 FSDP 包装。</p>
+
+<p>在 <code class="language-plaintext highlighter-rouge">_wrap_model</code> 中，修改你的 FSDP 包装以接受额外的参数 <code class="language-plaintext highlighter-rouge">param_init_fn=_init_with_torchdistX</code> ：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>self.model = model = FSDP(
+        model,
+        auto_wrap_policy=auto_wrap_policy,
+        auto_wrapper_callable=auto_wrapper_callable,
+        param_init_fn=_init_with_torchdistX,
+        \*\*fsdp_kwargs,
+    )
+</code></pre></div></div>
+
+<p>在 <code class="language-plaintext highlighter-rouge">examples/pytorch/language-modeling/run_clm.py</code> 中，在文件开头添加以下导入语句：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from torchdistx import deferred_init
+</code></pre></div></div>
+
+<p>编辑模型初始化，使模型通过 <code class="language-plaintext highlighter-rouge">deferred_init.deferred_init</code> 进行包装，替换以下行</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model = AutoModelForCausalLM.from_config(config)
+</code></pre></div></div>
+
+<p>with</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model = deferred_init.deferred_init(AutoModelForCausalLM.from_config, config)
+</code></pre></div></div>
+
+<p>注意这假设你提供了自己的模型配置文件。否则，你应该相应地修改你的模型初始化语句。</p>
+
+<p>你还应该注释掉上面这一行之后的这两行：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values()) logger.info(f"Training new model from scratch - Total size={n_params/2\*\*20:.2f}M params")
+</code></pre></div></div>
+
+<p>如果不修改，它们将导致错误，因为这些行执行时模型张量实际上并没有存储空间。</p>
+
+<p>通过这些更改，您现在可以运行具有多达 128B 参数的 GPT-2 模型，前提是加速器大小足够大。</p>
+
+<h2 id="next-steps--acknowledgements">下一步 &amp; 致谢</h2>
+
+<p>想了解更多信息，请访问<a href="https://huggingface.co/docs/transformers/main_classes/trainer#pytorchxla-fully-sharded-data-parallel">此处</a>的文档。如果您在使用 PyTorch/XLA 的 FSDP 遇到任何问题，或者只是想告诉我们您是如何使用它的，我们非常愿意<a href="https://github.com/pytorch/xla#providing-feedback">听取您的意见 </a>。</p>
+
+<p>我们对 PyTorch/XLA 的未来感到非常兴奋，并邀请社区加入我们。PyTorch/XLA 完全开源开发。因此，请向 <a href="https://github.com/pytorch/xla">GitHub</a> 提交问题、提交拉取请求和发送 RFC，以便我们可以公开协作。</p>
+
+<p>我们想感谢 Meta AI 的 Ronghang Hu 和 Ross Girshick，以及 Lysandre Debut、Sourab Mangrulkar、Sylvain Gugger 和 Arthur Zucker 给予的所有支持和合作。我们还要感谢 Jiewen Tan、Liyang Lu、Will Cromar、Vaibhav Singh 和 Chandra Devarakonda 在准备这篇帖子中的帮助。</p>
+
+<p>干杯！</p>
+
+<p>谷歌 PyTorch/XLA 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

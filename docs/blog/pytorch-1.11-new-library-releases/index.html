@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Introducing TorchRec, and other domain library updates in PyTorch 1.11 | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are introducing the beta release of TorchRec and a number of improvements to the current PyTorch domain libraries, alongside the PyTorch 1.11 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch. Highlights include:
+
+
+  TorchRec, a PyTorch domain library for Recommendation Systems, is available in beta. View it on GitHub.
+  TorchAudio - Added Enformer- and RNN-T-based models and recipes to support the full development lifecycle of a streaming ASR model. See the release notes here.
+  TorchText - Added beta support for RoBERTa and XLM-R models, byte-level BPE tokenizer, and text datasets backed by TorchData. See the release notes here.
+  TorchVision - Added 4 new model families and 14 new classification datasets such as CLEVR, GTSRB, FER2013. See the release notes here.
+
+
+TorchRec 0.1
+
+We announced TorchRec a few weeks ago and we are excited to release the beta version today. To recap, TorchRec is a PyTorch domain library for Recommendation Systems. This new library provides common sparsity and parallelism primitives, enabling researchers to build state-of-the-art personalization models and deploy them in production. TorchRec was used to train a 1.25 trillion parameter model, pushed to production in January 2022.
+
+In particular, the library includes:
+
+
+  Modeling primitives, such as embedding bags and jagged tensors, that enable easy authoring of large, performant multi-device/multi-node models using hybrid data-parallelism and model-parallelism.
+  Optimized RecSys kernels powered by FBGEMM, including support for sparse and quantized operations.
+  A sharder which can partition embedding tables with a variety of different strategies including data-parallel, table-wise, row-wise, table-wise-row-wise, and column-wise sharding.
+  A planner which can automatically generate optimized sharding plans for models.
+  Pipelining to overlap dataloading device transfer (copy to GPU), inter-device communications (input_dist), and computation (forward, backward) for increased performance.
+  GPU inference support.
+  Common modules for RecSys, such as models and public datasets (Criteo &amp; Movielens).
+
+
+Please check the TorchRec announcement post here, video tutorial, install instructions here, test drive the feature through this tutorial here, and refer to the reference document here.
+
+TorchAudio 0.11
+
+TorchAudio: Building Blocks for Audio and Speech Processing
+
+We published a paper, TorchAudio: Building Blocks for Audio and Speech Processing, describing the overview of the TorchAudio library. If you find TorchAudio useful for your research, please help us share with the community by citing our paper.
+
+(Beta) RNN-T &amp; (Prototype) Emformer Models and Recipes
+
+
+  
+
+
+Emformer is an efficient memory-transformer-based streaming acoustic model that has demonstrated state-of-the-art streaming automatic speech recognition (ASR) performance in low-latency, resource-constrained scenarios, such as on-device applications (citation: https://arxiv.org/abs/2010.10759).
+
+The TorchAudio v0.11 release includes the following beta features:
+
+
+  Implementation of Emformer (docs)
+  Recurrent neural network transducer (RNN-T) streaming ASR model that uses Emformer for its transcription network (docs)
+  RNN-T beam search decoder with TorchScript support (docs)
+  LibriSpeech Emformer RNN-T training recipe (GitHub) and corresponding pre-trained streaming ASR inference pipeline (docs)
+
+
+Also there are prototype features that are available from nightly builds or the main branch.
+
+
+  Training recipes trained on MuST-C and TED-LIUM3 datasets. (GitHub)
+  Pre-trained pipelines corresponding to the recipes. (docs)
+  Tutorial that steps through performing online speech recognition with RNN-T Emformer model. (docs)
+
+
+Collectively, these features cover the full development lifecycle of a streaming ASR model, from definition through training and inference, and enable users to easily develop their own Emformer- and RNN-T-based models.
+
+Special thanks to Yangyang Shi, Jay Mahadeokar, and Gil Keren for their code contributions and guidance.
+
+(Beta) HuBERT Pretrain Model
+
+The masked prediction training of HuBERT model requires the masked logits, unmasked logits, and feature norm as the outputs. The logits are for cross-entropy losses and the feature norm is for penalty loss. The release adds HuBERTPretrainModel and corresponding factory functions (hubert_pretrain_base, hubert_pretrain_large, and hubert_pretrain_xlarge) to enable training from scratch.
+
+(Prototype) CTC Beam Search Decoder
+
+In recent releases, TorchAudio has added support for ASR models fine-tuned on CTC loss. The addition of an inference time CTC beam search decoder enables running end-to-end ASR evaluation using TorchAudio utils.
+
+The CTC decoder in TorchAudio supports customizable beam search decoding with lexicon constraint. It also has optional KenLM language model support.
+
+For more details, please check out the API tutorial. This prototype feature is available through nightly builds.
+
+(Prototype) Streaming API
+
+TorchAudio started as simple audio I/O APIs that supplement PyTorch. With the recent addition of ASR models and training recipes, the project has received requests to support high-level application development.
+
+Streaming API makes it easy to develop and test the model in online inference. It utilizes ffmpeg under the hood, and enables reading media from online services and hardware devices, decoding media in an incremental manner, and applying filters and preprocessing.
+
+Please checkout the API tutorial and the documentation. There are also the streaming ASR tutorial and the device streaming ASR tutorial. This feature is available from nightly releases. Please refer to pytorch.org for how to install nightly builds.
+
+TorchText 0.12
+
+(Beta) RoBERTa and XLM-R Models
+
+TorchText has added support for pre-trained RoBERTa and XLM-R models. It would allow users to train end-2-end Transformer Encoder based models on standard NLP tasks using TorchText.
+
+More specifically:
+
+
+  The models are torchscriptable and hence can be employed for production use-cases.
+  The model APIs let users to easily attach custom task-specific heads with pre-trained encoders.
+  The API also comes equipped with data pre-processing transforms to match the pre-trained weights and model configuration.
+
+
+We have added a tutorial to demonstrate SST-2 binary text classification task with pre-trained XLM-R base architecture.
+
+For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) byte-level BPE tokenizer
+
+TorchText has added support for a Byte-Level BPE tokenizer, as used in GPT-2. This tokenizer is also used for tokenizing inputs to the pre-trained RoBERTa models described previously. In addition to the RoBERTa vocab, users can also load their own custom BPE vocab to use the tokenizer. Furthermore, the tokenizer is fully torchscriptable and hence can be employed for production use-cases. For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) Text datasets backed by TorchData
+
+TorchText has modernized its datasets by migrating from older-style Iterable Datasets to TorchData’s DataPipes. TorchData is a library that provides modular/composable primitives, allowing users to load and transform data in performant data pipelines.
+
+These DataPipes work out-of-the-box with PyTorch DataLoader and would enable new functionalities like auto-sharding. Users can now easily do data manipulation and pre-processing using user-defined functions and transformations in a functional style programming. Datasets backed by DataPipes also enable standard flow-control like batching, collation, shuffling and bucketizing.
+
+Collectively, DataPipes provides a comprehensive experience for data preprocessing and tensorization needs in a pythonic and flexible way for model training. We have added a tutorial to demonstrate data-processing pipelining using the modernized dataset for binary text-classification.
+
+You can learn more about TorchData DataPipe APIs in its official documentation.
+
+TorchVision 0.12
+
+New Models
+
+Four new model families have been released in the latest version along with pre-trained weights for their variants.
+
+#1 Object Detection
+
+FCOS is a popular, fully convolutional, anchor-free model for object detection. In this release we include a community-contributed model implementation as well as pre-trained weights. The model was trained on COCO train2017 and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = [torch.rand(3, 224, 224)]
+fcos = models.detection.fcos_resnet50_fpn(pretrained=True).eval()
+predictions =  fcos(x)
+
+
+The box AP of the pre-trained model on COCO val2017 is 39.2 (see #4961 for more details).
+
+We would like to thank Hu Ye and Zhiqiang Wang for contributing to the model implementation and initial training. This was the first community-contributed model in a long while, and given its success, we decided to use the learnings from this process and create a new model contribution guidelines.
+
+#2 Optical Flow support and RAFT model
+
+TorchVision now supports optical flow! Optical Flow models try to predict movement in a video: given two consecutive frames, the model predicts where each pixel of the first frame ends up in the second frame. Check out our new tutorial on Optical Flow!
+
+We implemented a torchscript-compatible RAFT model with pre-trained weights (both normal and “small” versions), and added support for training and evaluating optical flow models. Our training scripts support distributed training across processes and nodes, leading to much faster training time than the original implementation. We also added 5 new optical flow datasets: Flying Chairs, Flying Things, Sintel, Kitti, and HD1K.
+
+
+  
+
+
+#3. Image Classification
+
+Vision Transformer (ViT) and ConvNeXt are two popular architectures which can be used as image classifiers or as backbones for downstream vision tasks. In this release we include 8 pre-trained weights for their classification variants. The models were trained on ImageNet and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = torch.rand(1, 3, 224, 224)
+vit = models.vit_b_16(pretrained=True).eval()
+convnext = models.convnext_tiny(pretrained=True).eval()
+predictions1 = vit(x)
+predictions2 = convnext(x)
+
+
+The accuracies of the pre-trained models obtained on ImageNet val are seen below:
+
+
+  
+    
+      Model
+      Acc@1
+      Acc@5
+    
+  
+  
+    
+      vit_b_16
+      81.072
+      95.318
+    
+    
+      vit_b_32
+      75.912
+      92.466
+    
+    
+      vit_l_16
+      79.662
+      94.638
+    
+    
+      vit_l_32
+      76.972
+      93.07
+    
+    
+      convnext_tiny
+      82.52
+      96.146
+    
+    
+      convnext_small
+      83.616
+      96.65
+    
+    
+      convnext_base
+      84.062
+      96.87
+    
+    
+      convnext_large
+      84.414
+      96.976
+    
+  
+
+
+The above models have been trained using an adjusted version of our new training recipe and this allows us to offer models with accuracies significantly higher than the ones on the original papers.
+
+#4. GPU Video Decoding
+
+In this release, we add support for GPU video decoding in the video reading API. To use hardware-accelerated decoding, we just need to pass a cuda device to the video reading API as shown below:
+
+import torchvision
+
+reader = torchvision.io.VideoReader(file_name, device=" cuda:0")="" for="" frame="" in="" reader:="" print(frame)="" we="" also="" support="" seeking="" to="" anyframe="" or="" a="" keyframe="" the="" video="" before="" reading,="" as="" shown="" below:="" reader.seek(seek_time)="" new="" datasets="" have="" implemented="" 14="" classification="" datasets:="" clevr,="" gtsrb,="" fer2013,="" sun397,="" country211,="" flowers102,="" fvgc_aircraft,="" oxfordiiitpet,="" dtd,="" food="" 101,="" rendered="" sst2,="" stanford="" cars,="" pcam,="" and="" eurosat.="" part="" of="" our="" work="" on="" optical="" flow="" (see="" above="" more="" details),="" added="" 5="" flying="" chairs,="" things,="" sintel,="" kitti,="" hd1k.="" other="" updates="" documentation="" layout:="" each="" function="" class="" is="" now="" documented="" separate="" page,="" clearing="" up="" some="" space="" per-module="" pages,="" easing="" discovery="" proposed="" apis.="" compare="" e.g.="" previous="" docs="" vs="" ones.="" please="" let="" us="" know="" if="" you="" any="" feedback!="" model="" contribution="" guidelines="" been="" published="" following="" success="" fcos="" which="" was="" contributed="" by="" community.="" these="" aim="" be="" an="" overview="" process="" anyone="" who="" would="" like="" suggest,="" implement="" train="" model.="" upcoming="" prototype="" api="" -="" are="" currently="" working="" adds="" multi-weight="" all="" builder="" methods.="" this="" will="" enable="" offer="" multiple="" pre-trained="" weights,="" associated="" with="" their="" meta-data="" inference="" transforms.="" still="" under="" review="" thus="" not="" included="" release="" but="" can="" read="" about="" it="" blogpost="" provide="" your="" feedback="" dedicated="" github="" issue.="" changes="" deprecation="" policy="" until="" now,="" torchvision="" almost="" never="" remove="" deprecated="" order="" aligned="" consistent="" pytorch="" core,="" updating="" policy.="" 2-release="" cycle:="" apis="" raise="" warning="" 2="" versions,="" removed="" after="" that.="" reflect="" smooth="" transition,="" decided="" to:="" that="" had="" v0.8,="" released="" 1.5="" years="" ago.="" update="" removal="" timeline="" v0.14,="" 2-cycle="" starting="" v0.12.="" captum="" 0.5="" library="" interpretability.="" release,="" expanded="" influential="" instances="" both="" similarity="" based="" influences="" novel="" algorithms,="" tracin="" its="" variants.="" variants="" faster="" approximation="" influence="" scores="" random="" projections="" fully="" connected="" layers.="" specifically="" new,="" influence,="" subsection="" includes:="" similarityinfluence="" computes="" between="" test="" training="" examples="" using="" default="" (cosine="" euclidean)="" custom="" user="" definite="" metrics="" w.r.t.="" given="" input="" tracincp="" approximates="" score="" example="" dot-product="" loss="" gradients="" parameters="" examples.="" note="" use="" then="" compute="" self="" influence.="" method="" described="" below="" return="" top-k="" proponents="" opponents="" largest="" positive="" negative="" respectively.="" tracincpfast="" avoids="" computing="" large="" parameter="" matrices.="" dot="" products="" last="" layer="" activations="" tracincpfastrandproj="" uses="" nearest="" neighbor="" such="" annoy="" product="" quantities.="" reduce="" dimensionality="" corresponding="" method,="" addition,="" allows="" project="" those="" vectors="" into="" lower="" dimensional="" projection="" implementation="" found="" page="" tutorials.="" thanks="" you’re="" interested="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" from="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" torchrec="" 0.1="" torchaudio="" 0.11="" torchtext="" 0.12="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/pytorch-logo.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/pytorch-logo.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Introducing TorchRec, and other domain library updates in PyTorch 1.11">
+<meta property="og:description" content="We are introducing the beta release of TorchRec and a number of improvements to the current PyTorch domain libraries, alongside the PyTorch 1.11 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch. Highlights include:
+
+
+  TorchRec, a PyTorch domain library for Recommendation Systems, is available in beta. View it on GitHub.
+  TorchAudio - Added Enformer- and RNN-T-based models and recipes to support the full development lifecycle of a streaming ASR model. See the release notes here.
+  TorchText - Added beta support for RoBERTa and XLM-R models, byte-level BPE tokenizer, and text datasets backed by TorchData. See the release notes here.
+  TorchVision - Added 4 new model families and 14 new classification datasets such as CLEVR, GTSRB, FER2013. See the release notes here.
+
+
+TorchRec 0.1
+
+We announced TorchRec a few weeks ago and we are excited to release the beta version today. To recap, TorchRec is a PyTorch domain library for Recommendation Systems. This new library provides common sparsity and parallelism primitives, enabling researchers to build state-of-the-art personalization models and deploy them in production. TorchRec was used to train a 1.25 trillion parameter model, pushed to production in January 2022.
+
+In particular, the library includes:
+
+
+  Modeling primitives, such as embedding bags and jagged tensors, that enable easy authoring of large, performant multi-device/multi-node models using hybrid data-parallelism and model-parallelism.
+  Optimized RecSys kernels powered by FBGEMM, including support for sparse and quantized operations.
+  A sharder which can partition embedding tables with a variety of different strategies including data-parallel, table-wise, row-wise, table-wise-row-wise, and column-wise sharding.
+  A planner which can automatically generate optimized sharding plans for models.
+  Pipelining to overlap dataloading device transfer (copy to GPU), inter-device communications (input_dist), and computation (forward, backward) for increased performance.
+  GPU inference support.
+  Common modules for RecSys, such as models and public datasets (Criteo &amp; Movielens).
+
+
+Please check the TorchRec announcement post here, video tutorial, install instructions here, test drive the feature through this tutorial here, and refer to the reference document here.
+
+TorchAudio 0.11
+
+TorchAudio: Building Blocks for Audio and Speech Processing
+
+We published a paper, TorchAudio: Building Blocks for Audio and Speech Processing, describing the overview of the TorchAudio library. If you find TorchAudio useful for your research, please help us share with the community by citing our paper.
+
+(Beta) RNN-T &amp; (Prototype) Emformer Models and Recipes
+
+
+  
+
+
+Emformer is an efficient memory-transformer-based streaming acoustic model that has demonstrated state-of-the-art streaming automatic speech recognition (ASR) performance in low-latency, resource-constrained scenarios, such as on-device applications (citation: https://arxiv.org/abs/2010.10759).
+
+The TorchAudio v0.11 release includes the following beta features:
+
+
+  Implementation of Emformer (docs)
+  Recurrent neural network transducer (RNN-T) streaming ASR model that uses Emformer for its transcription network (docs)
+  RNN-T beam search decoder with TorchScript support (docs)
+  LibriSpeech Emformer RNN-T training recipe (GitHub) and corresponding pre-trained streaming ASR inference pipeline (docs)
+
+
+Also there are prototype features that are available from nightly builds or the main branch.
+
+
+  Training recipes trained on MuST-C and TED-LIUM3 datasets. (GitHub)
+  Pre-trained pipelines corresponding to the recipes. (docs)
+  Tutorial that steps through performing online speech recognition with RNN-T Emformer model. (docs)
+
+
+Collectively, these features cover the full development lifecycle of a streaming ASR model, from definition through training and inference, and enable users to easily develop their own Emformer- and RNN-T-based models.
+
+Special thanks to Yangyang Shi, Jay Mahadeokar, and Gil Keren for their code contributions and guidance.
+
+(Beta) HuBERT Pretrain Model
+
+The masked prediction training of HuBERT model requires the masked logits, unmasked logits, and feature norm as the outputs. The logits are for cross-entropy losses and the feature norm is for penalty loss. The release adds HuBERTPretrainModel and corresponding factory functions (hubert_pretrain_base, hubert_pretrain_large, and hubert_pretrain_xlarge) to enable training from scratch.
+
+(Prototype) CTC Beam Search Decoder
+
+In recent releases, TorchAudio has added support for ASR models fine-tuned on CTC loss. The addition of an inference time CTC beam search decoder enables running end-to-end ASR evaluation using TorchAudio utils.
+
+The CTC decoder in TorchAudio supports customizable beam search decoding with lexicon constraint. It also has optional KenLM language model support.
+
+For more details, please check out the API tutorial. This prototype feature is available through nightly builds.
+
+(Prototype) Streaming API
+
+TorchAudio started as simple audio I/O APIs that supplement PyTorch. With the recent addition of ASR models and training recipes, the project has received requests to support high-level application development.
+
+Streaming API makes it easy to develop and test the model in online inference. It utilizes ffmpeg under the hood, and enables reading media from online services and hardware devices, decoding media in an incremental manner, and applying filters and preprocessing.
+
+Please checkout the API tutorial and the documentation. There are also the streaming ASR tutorial and the device streaming ASR tutorial. This feature is available from nightly releases. Please refer to pytorch.org for how to install nightly builds.
+
+TorchText 0.12
+
+(Beta) RoBERTa and XLM-R Models
+
+TorchText has added support for pre-trained RoBERTa and XLM-R models. It would allow users to train end-2-end Transformer Encoder based models on standard NLP tasks using TorchText.
+
+More specifically:
+
+
+  The models are torchscriptable and hence can be employed for production use-cases.
+  The model APIs let users to easily attach custom task-specific heads with pre-trained encoders.
+  The API also comes equipped with data pre-processing transforms to match the pre-trained weights and model configuration.
+
+
+We have added a tutorial to demonstrate SST-2 binary text classification task with pre-trained XLM-R base architecture.
+
+For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) byte-level BPE tokenizer
+
+TorchText has added support for a Byte-Level BPE tokenizer, as used in GPT-2. This tokenizer is also used for tokenizing inputs to the pre-trained RoBERTa models described previously. In addition to the RoBERTa vocab, users can also load their own custom BPE vocab to use the tokenizer. Furthermore, the tokenizer is fully torchscriptable and hence can be employed for production use-cases. For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) Text datasets backed by TorchData
+
+TorchText has modernized its datasets by migrating from older-style Iterable Datasets to TorchData’s DataPipes. TorchData is a library that provides modular/composable primitives, allowing users to load and transform data in performant data pipelines.
+
+These DataPipes work out-of-the-box with PyTorch DataLoader and would enable new functionalities like auto-sharding. Users can now easily do data manipulation and pre-processing using user-defined functions and transformations in a functional style programming. Datasets backed by DataPipes also enable standard flow-control like batching, collation, shuffling and bucketizing.
+
+Collectively, DataPipes provides a comprehensive experience for data preprocessing and tensorization needs in a pythonic and flexible way for model training. We have added a tutorial to demonstrate data-processing pipelining using the modernized dataset for binary text-classification.
+
+You can learn more about TorchData DataPipe APIs in its official documentation.
+
+TorchVision 0.12
+
+New Models
+
+Four new model families have been released in the latest version along with pre-trained weights for their variants.
+
+#1 Object Detection
+
+FCOS is a popular, fully convolutional, anchor-free model for object detection. In this release we include a community-contributed model implementation as well as pre-trained weights. The model was trained on COCO train2017 and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = [torch.rand(3, 224, 224)]
+fcos = models.detection.fcos_resnet50_fpn(pretrained=True).eval()
+predictions =  fcos(x)
+
+
+The box AP of the pre-trained model on COCO val2017 is 39.2 (see #4961 for more details).
+
+We would like to thank Hu Ye and Zhiqiang Wang for contributing to the model implementation and initial training. This was the first community-contributed model in a long while, and given its success, we decided to use the learnings from this process and create a new model contribution guidelines.
+
+#2 Optical Flow support and RAFT model
+
+TorchVision now supports optical flow! Optical Flow models try to predict movement in a video: given two consecutive frames, the model predicts where each pixel of the first frame ends up in the second frame. Check out our new tutorial on Optical Flow!
+
+We implemented a torchscript-compatible RAFT model with pre-trained weights (both normal and “small” versions), and added support for training and evaluating optical flow models. Our training scripts support distributed training across processes and nodes, leading to much faster training time than the original implementation. We also added 5 new optical flow datasets: Flying Chairs, Flying Things, Sintel, Kitti, and HD1K.
+
+
+  
+
+
+#3. Image Classification
+
+Vision Transformer (ViT) and ConvNeXt are two popular architectures which can be used as image classifiers or as backbones for downstream vision tasks. In this release we include 8 pre-trained weights for their classification variants. The models were trained on ImageNet and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = torch.rand(1, 3, 224, 224)
+vit = models.vit_b_16(pretrained=True).eval()
+convnext = models.convnext_tiny(pretrained=True).eval()
+predictions1 = vit(x)
+predictions2 = convnext(x)
+
+
+The accuracies of the pre-trained models obtained on ImageNet val are seen below:
+
+
+  
+    
+      Model
+      Acc@1
+      Acc@5
+    
+  
+  
+    
+      vit_b_16
+      81.072
+      95.318
+    
+    
+      vit_b_32
+      75.912
+      92.466
+    
+    
+      vit_l_16
+      79.662
+      94.638
+    
+    
+      vit_l_32
+      76.972
+      93.07
+    
+    
+      convnext_tiny
+      82.52
+      96.146
+    
+    
+      convnext_small
+      83.616
+      96.65
+    
+    
+      convnext_base
+      84.062
+      96.87
+    
+    
+      convnext_large
+      84.414
+      96.976
+    
+  
+
+
+The above models have been trained using an adjusted version of our new training recipe and this allows us to offer models with accuracies significantly higher than the ones on the original papers.
+
+#4. GPU Video Decoding
+
+In this release, we add support for GPU video decoding in the video reading API. To use hardware-accelerated decoding, we just need to pass a cuda device to the video reading API as shown below:
+
+import torchvision
+
+reader = torchvision.io.VideoReader(file_name, device=" cuda:0")="" for="" frame="" in="" reader:="" print(frame)="" we="" also="" support="" seeking="" to="" anyframe="" or="" a="" keyframe="" the="" video="" before="" reading,="" as="" shown="" below:="" reader.seek(seek_time)="" new="" datasets="" have="" implemented="" 14="" classification="" datasets:="" clevr,="" gtsrb,="" fer2013,="" sun397,="" country211,="" flowers102,="" fvgc_aircraft,="" oxfordiiitpet,="" dtd,="" food="" 101,="" rendered="" sst2,="" stanford="" cars,="" pcam,="" and="" eurosat.="" part="" of="" our="" work="" on="" optical="" flow="" (see="" above="" more="" details),="" added="" 5="" flying="" chairs,="" things,="" sintel,="" kitti,="" hd1k.="" other="" updates="" documentation="" layout:="" each="" function="" class="" is="" now="" documented="" separate="" page,="" clearing="" up="" some="" space="" per-module="" pages,="" easing="" discovery="" proposed="" apis.="" compare="" e.g.="" previous="" docs="" vs="" ones.="" please="" let="" us="" know="" if="" you="" any="" feedback!="" model="" contribution="" guidelines="" been="" published="" following="" success="" fcos="" which="" was="" contributed="" by="" community.="" these="" aim="" be="" an="" overview="" process="" anyone="" who="" would="" like="" suggest,="" implement="" train="" model.="" upcoming="" prototype="" api="" -="" are="" currently="" working="" adds="" multi-weight="" all="" builder="" methods.="" this="" will="" enable="" offer="" multiple="" pre-trained="" weights,="" associated="" with="" their="" meta-data="" inference="" transforms.="" still="" under="" review="" thus="" not="" included="" release="" but="" can="" read="" about="" it="" blogpost="" provide="" your="" feedback="" dedicated="" github="" issue.="" changes="" deprecation="" policy="" until="" now,="" torchvision="" almost="" never="" remove="" deprecated="" order="" aligned="" consistent="" pytorch="" core,="" updating="" policy.="" 2-release="" cycle:="" apis="" raise="" warning="" 2="" versions,="" removed="" after="" that.="" reflect="" smooth="" transition,="" decided="" to:="" that="" had="" v0.8,="" released="" 1.5="" years="" ago.="" update="" removal="" timeline="" v0.14,="" 2-cycle="" starting="" v0.12.="" captum="" 0.5="" library="" interpretability.="" release,="" expanded="" influential="" instances="" both="" similarity="" based="" influences="" novel="" algorithms,="" tracin="" its="" variants.="" variants="" faster="" approximation="" influence="" scores="" random="" projections="" fully="" connected="" layers.="" specifically="" new,="" influence,="" subsection="" includes:="" similarityinfluence="" computes="" between="" test="" training="" examples="" using="" default="" (cosine="" euclidean)="" custom="" user="" definite="" metrics="" w.r.t.="" given="" input="" tracincp="" approximates="" score="" example="" dot-product="" loss="" gradients="" parameters="" examples.="" note="" use="" then="" compute="" self="" influence.="" method="" described="" below="" return="" top-k="" proponents="" opponents="" largest="" positive="" negative="" respectively.="" tracincpfast="" avoids="" computing="" large="" parameter="" matrices.="" dot="" products="" last="" layer="" activations="" tracincpfastrandproj="" uses="" nearest="" neighbor="" such="" annoy="" product="" quantities.="" reduce="" dimensionality="" corresponding="" method,="" addition,="" allows="" project="" those="" vectors="" into="" lower="" dimensional="" projection="" implementation="" found="" page="" tutorials.="" thanks="" you’re="" interested="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" from="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" torchrec="" 0.1="" torchaudio="" 0.11="" torchtext="" 0.12="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Introducing TorchRec, and other domain library updates in PyTorch 1.11">
+<meta name="twitter:description" content="We are introducing the beta release of TorchRec and a number of improvements to the current PyTorch domain libraries, alongside the PyTorch 1.11 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch. Highlights include:
+
+
+  TorchRec, a PyTorch domain library for Recommendation Systems, is available in beta. View it on GitHub.
+  TorchAudio - Added Enformer- and RNN-T-based models and recipes to support the full development lifecycle of a streaming ASR model. See the release notes here.
+  TorchText - Added beta support for RoBERTa and XLM-R models, byte-level BPE tokenizer, and text datasets backed by TorchData. See the release notes here.
+  TorchVision - Added 4 new model families and 14 new classification datasets such as CLEVR, GTSRB, FER2013. See the release notes here.
+
+
+TorchRec 0.1
+
+We announced TorchRec a few weeks ago and we are excited to release the beta version today. To recap, TorchRec is a PyTorch domain library for Recommendation Systems. This new library provides common sparsity and parallelism primitives, enabling researchers to build state-of-the-art personalization models and deploy them in production. TorchRec was used to train a 1.25 trillion parameter model, pushed to production in January 2022.
+
+In particular, the library includes:
+
+
+  Modeling primitives, such as embedding bags and jagged tensors, that enable easy authoring of large, performant multi-device/multi-node models using hybrid data-parallelism and model-parallelism.
+  Optimized RecSys kernels powered by FBGEMM, including support for sparse and quantized operations.
+  A sharder which can partition embedding tables with a variety of different strategies including data-parallel, table-wise, row-wise, table-wise-row-wise, and column-wise sharding.
+  A planner which can automatically generate optimized sharding plans for models.
+  Pipelining to overlap dataloading device transfer (copy to GPU), inter-device communications (input_dist), and computation (forward, backward) for increased performance.
+  GPU inference support.
+  Common modules for RecSys, such as models and public datasets (Criteo &amp; Movielens).
+
+
+Please check the TorchRec announcement post here, video tutorial, install instructions here, test drive the feature through this tutorial here, and refer to the reference document here.
+
+TorchAudio 0.11
+
+TorchAudio: Building Blocks for Audio and Speech Processing
+
+We published a paper, TorchAudio: Building Blocks for Audio and Speech Processing, describing the overview of the TorchAudio library. If you find TorchAudio useful for your research, please help us share with the community by citing our paper.
+
+(Beta) RNN-T &amp; (Prototype) Emformer Models and Recipes
+
+
+  
+
+
+Emformer is an efficient memory-transformer-based streaming acoustic model that has demonstrated state-of-the-art streaming automatic speech recognition (ASR) performance in low-latency, resource-constrained scenarios, such as on-device applications (citation: https://arxiv.org/abs/2010.10759).
+
+The TorchAudio v0.11 release includes the following beta features:
+
+
+  Implementation of Emformer (docs)
+  Recurrent neural network transducer (RNN-T) streaming ASR model that uses Emformer for its transcription network (docs)
+  RNN-T beam search decoder with TorchScript support (docs)
+  LibriSpeech Emformer RNN-T training recipe (GitHub) and corresponding pre-trained streaming ASR inference pipeline (docs)
+
+
+Also there are prototype features that are available from nightly builds or the main branch.
+
+
+  Training recipes trained on MuST-C and TED-LIUM3 datasets. (GitHub)
+  Pre-trained pipelines corresponding to the recipes. (docs)
+  Tutorial that steps through performing online speech recognition with RNN-T Emformer model. (docs)
+
+
+Collectively, these features cover the full development lifecycle of a streaming ASR model, from definition through training and inference, and enable users to easily develop their own Emformer- and RNN-T-based models.
+
+Special thanks to Yangyang Shi, Jay Mahadeokar, and Gil Keren for their code contributions and guidance.
+
+(Beta) HuBERT Pretrain Model
+
+The masked prediction training of HuBERT model requires the masked logits, unmasked logits, and feature norm as the outputs. The logits are for cross-entropy losses and the feature norm is for penalty loss. The release adds HuBERTPretrainModel and corresponding factory functions (hubert_pretrain_base, hubert_pretrain_large, and hubert_pretrain_xlarge) to enable training from scratch.
+
+(Prototype) CTC Beam Search Decoder
+
+In recent releases, TorchAudio has added support for ASR models fine-tuned on CTC loss. The addition of an inference time CTC beam search decoder enables running end-to-end ASR evaluation using TorchAudio utils.
+
+The CTC decoder in TorchAudio supports customizable beam search decoding with lexicon constraint. It also has optional KenLM language model support.
+
+For more details, please check out the API tutorial. This prototype feature is available through nightly builds.
+
+(Prototype) Streaming API
+
+TorchAudio started as simple audio I/O APIs that supplement PyTorch. With the recent addition of ASR models and training recipes, the project has received requests to support high-level application development.
+
+Streaming API makes it easy to develop and test the model in online inference. It utilizes ffmpeg under the hood, and enables reading media from online services and hardware devices, decoding media in an incremental manner, and applying filters and preprocessing.
+
+Please checkout the API tutorial and the documentation. There are also the streaming ASR tutorial and the device streaming ASR tutorial. This feature is available from nightly releases. Please refer to pytorch.org for how to install nightly builds.
+
+TorchText 0.12
+
+(Beta) RoBERTa and XLM-R Models
+
+TorchText has added support for pre-trained RoBERTa and XLM-R models. It would allow users to train end-2-end Transformer Encoder based models on standard NLP tasks using TorchText.
+
+More specifically:
+
+
+  The models are torchscriptable and hence can be employed for production use-cases.
+  The model APIs let users to easily attach custom task-specific heads with pre-trained encoders.
+  The API also comes equipped with data pre-processing transforms to match the pre-trained weights and model configuration.
+
+
+We have added a tutorial to demonstrate SST-2 binary text classification task with pre-trained XLM-R base architecture.
+
+For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) byte-level BPE tokenizer
+
+TorchText has added support for a Byte-Level BPE tokenizer, as used in GPT-2. This tokenizer is also used for tokenizing inputs to the pre-trained RoBERTa models described previously. In addition to the RoBERTa vocab, users can also load their own custom BPE vocab to use the tokenizer. Furthermore, the tokenizer is fully torchscriptable and hence can be employed for production use-cases. For additional details on model APIs and usage examples, please refer to the documentation.
+
+(Beta) Text datasets backed by TorchData
+
+TorchText has modernized its datasets by migrating from older-style Iterable Datasets to TorchData’s DataPipes. TorchData is a library that provides modular/composable primitives, allowing users to load and transform data in performant data pipelines.
+
+These DataPipes work out-of-the-box with PyTorch DataLoader and would enable new functionalities like auto-sharding. Users can now easily do data manipulation and pre-processing using user-defined functions and transformations in a functional style programming. Datasets backed by DataPipes also enable standard flow-control like batching, collation, shuffling and bucketizing.
+
+Collectively, DataPipes provides a comprehensive experience for data preprocessing and tensorization needs in a pythonic and flexible way for model training. We have added a tutorial to demonstrate data-processing pipelining using the modernized dataset for binary text-classification.
+
+You can learn more about TorchData DataPipe APIs in its official documentation.
+
+TorchVision 0.12
+
+New Models
+
+Four new model families have been released in the latest version along with pre-trained weights for their variants.
+
+#1 Object Detection
+
+FCOS is a popular, fully convolutional, anchor-free model for object detection. In this release we include a community-contributed model implementation as well as pre-trained weights. The model was trained on COCO train2017 and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = [torch.rand(3, 224, 224)]
+fcos = models.detection.fcos_resnet50_fpn(pretrained=True).eval()
+predictions =  fcos(x)
+
+
+The box AP of the pre-trained model on COCO val2017 is 39.2 (see #4961 for more details).
+
+We would like to thank Hu Ye and Zhiqiang Wang for contributing to the model implementation and initial training. This was the first community-contributed model in a long while, and given its success, we decided to use the learnings from this process and create a new model contribution guidelines.
+
+#2 Optical Flow support and RAFT model
+
+TorchVision now supports optical flow! Optical Flow models try to predict movement in a video: given two consecutive frames, the model predicts where each pixel of the first frame ends up in the second frame. Check out our new tutorial on Optical Flow!
+
+We implemented a torchscript-compatible RAFT model with pre-trained weights (both normal and “small” versions), and added support for training and evaluating optical flow models. Our training scripts support distributed training across processes and nodes, leading to much faster training time than the original implementation. We also added 5 new optical flow datasets: Flying Chairs, Flying Things, Sintel, Kitti, and HD1K.
+
+
+  
+
+
+#3. Image Classification
+
+Vision Transformer (ViT) and ConvNeXt are two popular architectures which can be used as image classifiers or as backbones for downstream vision tasks. In this release we include 8 pre-trained weights for their classification variants. The models were trained on ImageNet and can be used as follows:
+
+import torch
+from torchvision import models
+
+x = torch.rand(1, 3, 224, 224)
+vit = models.vit_b_16(pretrained=True).eval()
+convnext = models.convnext_tiny(pretrained=True).eval()
+predictions1 = vit(x)
+predictions2 = convnext(x)
+
+
+The accuracies of the pre-trained models obtained on ImageNet val are seen below:
+
+
+  
+    
+      Model
+      Acc@1
+      Acc@5
+    
+  
+  
+    
+      vit_b_16
+      81.072
+      95.318
+    
+    
+      vit_b_32
+      75.912
+      92.466
+    
+    
+      vit_l_16
+      79.662
+      94.638
+    
+    
+      vit_l_32
+      76.972
+      93.07
+    
+    
+      convnext_tiny
+      82.52
+      96.146
+    
+    
+      convnext_small
+      83.616
+      96.65
+    
+    
+      convnext_base
+      84.062
+      96.87
+    
+    
+      convnext_large
+      84.414
+      96.976
+    
+  
+
+
+The above models have been trained using an adjusted version of our new training recipe and this allows us to offer models with accuracies significantly higher than the ones on the original papers.
+
+#4. GPU Video Decoding
+
+In this release, we add support for GPU video decoding in the video reading API. To use hardware-accelerated decoding, we just need to pass a cuda device to the video reading API as shown below:
+
+import torchvision
+
+reader = torchvision.io.VideoReader(file_name, device=" cuda:0")="" for="" frame="" in="" reader:="" print(frame)="" we="" also="" support="" seeking="" to="" anyframe="" or="" a="" keyframe="" the="" video="" before="" reading,="" as="" shown="" below:="" reader.seek(seek_time)="" new="" datasets="" have="" implemented="" 14="" classification="" datasets:="" clevr,="" gtsrb,="" fer2013,="" sun397,="" country211,="" flowers102,="" fvgc_aircraft,="" oxfordiiitpet,="" dtd,="" food="" 101,="" rendered="" sst2,="" stanford="" cars,="" pcam,="" and="" eurosat.="" part="" of="" our="" work="" on="" optical="" flow="" (see="" above="" more="" details),="" added="" 5="" flying="" chairs,="" things,="" sintel,="" kitti,="" hd1k.="" other="" updates="" documentation="" layout:="" each="" function="" class="" is="" now="" documented="" separate="" page,="" clearing="" up="" some="" space="" per-module="" pages,="" easing="" discovery="" proposed="" apis.="" compare="" e.g.="" previous="" docs="" vs="" ones.="" please="" let="" us="" know="" if="" you="" any="" feedback!="" model="" contribution="" guidelines="" been="" published="" following="" success="" fcos="" which="" was="" contributed="" by="" community.="" these="" aim="" be="" an="" overview="" process="" anyone="" who="" would="" like="" suggest,="" implement="" train="" model.="" upcoming="" prototype="" api="" -="" are="" currently="" working="" adds="" multi-weight="" all="" builder="" methods.="" this="" will="" enable="" offer="" multiple="" pre-trained="" weights,="" associated="" with="" their="" meta-data="" inference="" transforms.="" still="" under="" review="" thus="" not="" included="" release="" but="" can="" read="" about="" it="" blogpost="" provide="" your="" feedback="" dedicated="" github="" issue.="" changes="" deprecation="" policy="" until="" now,="" torchvision="" almost="" never="" remove="" deprecated="" order="" aligned="" consistent="" pytorch="" core,="" updating="" policy.="" 2-release="" cycle:="" apis="" raise="" warning="" 2="" versions,="" removed="" after="" that.="" reflect="" smooth="" transition,="" decided="" to:="" that="" had="" v0.8,="" released="" 1.5="" years="" ago.="" update="" removal="" timeline="" v0.14,="" 2-cycle="" starting="" v0.12.="" captum="" 0.5="" library="" interpretability.="" release,="" expanded="" influential="" instances="" both="" similarity="" based="" influences="" novel="" algorithms,="" tracin="" its="" variants.="" variants="" faster="" approximation="" influence="" scores="" random="" projections="" fully="" connected="" layers.="" specifically="" new,="" influence,="" subsection="" includes:="" similarityinfluence="" computes="" between="" test="" training="" examples="" using="" default="" (cosine="" euclidean)="" custom="" user="" definite="" metrics="" w.r.t.="" given="" input="" tracincp="" approximates="" score="" example="" dot-product="" loss="" gradients="" parameters="" examples.="" note="" use="" then="" compute="" self="" influence.="" method="" described="" below="" return="" top-k="" proponents="" opponents="" largest="" positive="" negative="" respectively.="" tracincpfast="" avoids="" computing="" large="" parameter="" matrices.="" dot="" products="" last="" layer="" activations="" tracincpfastrandproj="" uses="" nearest="" neighbor="" such="" annoy="" product="" quantities.="" reduce="" dimensionality="" corresponding="" method,="" addition,="" allows="" project="" those="" vectors="" into="" lower="" dimensional="" projection="" implementation="" found="" page="" tutorials.="" thanks="" you’re="" interested="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" from="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" torchrec="" 0.1="" torchaudio="" 0.11="" torchtext="" 0.12="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年3月10日</p>
+            <h1>
+                <a class="blog-title">介绍 TorchRec 以及其他 PyTorch 1.11 中的领域库更新</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>我们推出了 TorchRec 的 beta 版本以及当前 PyTorch 领域库的众多改进，与 <a href="https://pytorch.org/blog/pytorch-1.11-released/">PyTorch 1.11 版本</a>一同发布。这些更新展示了我们致力于开发跨所有领域的通用和可扩展的 API，以使我们的社区更容易在 PyTorch 上构建生态系统项目。亮点包括：</p>
+
+<ul>
+  <li><strong>TorchRec</strong>，一个用于推荐系统的 PyTorch 领域库，现已提供 beta 版本。<a href="https://github.com/pytorch/torchrec"> 在 GitHub 上查看 </a>。</li>
+  <li><strong>TorchAudio</strong> - 添加了基于 Enformer 和 RNN-T 的模型和配方，以支持流式 ASR 模型的完整开发生命周期。请参阅<a href="https://github.com/pytorch/audio/releases">此处</a>的发布说明。</li>
+  <li><strong>TorchText</strong> - 添加了对 RoBERTa 和 XLM-R 模型的 beta 支持，字节级 BPE 分词器和由 TorchData 支持的文本数据集。请参阅<a href="https://github.com/pytorch/text/releases">此处</a>的发布说明。</li>
+  <li><strong>torchvision</strong> - 添加了 4 个新的模型系列和 14 个新的分类数据集，例如 CLEVR、GTSRB、FER2013。请参阅发布说明 <a href="https://github.com/pytorch/vision/releases"> 此处 </a>。</li>
+</ul>
+
+<h2 id="torchrec-01">TorchRec 0.1</h2>
+
+<p>几周前我们 <a href="https://pytorch.org/blog/introducing-torchrec/"> 宣布了 TorchRec</a>，今天我们很高兴发布其 beta 版本。回顾一下，TorchRec 是一个用于推荐系统的 PyTorch 领域库。这个新库提供了常见的稀疏性和并行性原语，使研究人员能够构建最先进的个性化模型并将它们部署到生产环境中。TorchRec 被用于训练一个 1250 亿参数的模型，并于 2022 年 1 月投入生产。</p>
+
+<p>尤其是库包括：</p>
+
+<ul>
+  <li>建模原语，如嵌入包和锯齿形张量，这些原语使作者能够轻松编写大型、高性能的多设备/多节点模型，使用混合数据并行性和模型并行性。</li>
+  <li>优化了 RecSys 内核，由 <a href="https://github.com/pytorch/FBGEMM">FBGEMM</a> 提供支持，包括对稀疏和量化操作的支持。</li>
+  <li>一种能够使用多种不同策略（包括数据并行、表并行、行并行、表行并行和列并行）对嵌入表进行分区的分片器。</li>
+  <li>一种能够自动生成针对模型优化的分片计划的规划器。</li>
+  <li>通过流水线重叠数据加载设备传输（复制到 GPU）、设备间通信（输入分布式）和计算（正向、反向）以提高性能。</li>
+  <li>支持 GPU 推理。</li>
+  <li>常见的推荐系统模块，如模型和公共数据集（Criteo &amp; Movielens）。</li>
+</ul>
+
+<p>请查看 TorchRec 公告帖子<a href="https://pytorch.org/blog/introducing-torchrec/">这里 </a>，<a href="https://www.youtube.com/watch?v=cjgj41dvSeQ"> 视频教程 </a>，<a href="https://github.com/pytorch/torchrec#readme"> 安装说明 </a>，通过这个教程<a href="https://maskerprc.github.io/tutorials/intermediate/torchrec_tutorial.html">这里</a>体验该功能，并参考<a href="https://pytorch.org/torchrec/">这里</a>的参考文档。</p>
+
+<h2 id="torchaudio-011">TorchAudio 0.11</h2>
+
+<h4 id="torchaudio-building-blocks-for-audio-and-speech-processing">TorchAudio：音频和语音处理的构建模块</h4>
+
+<p>我们发表了一篇论文，<a href="https://arxiv.org/abs/2110.15018">TorchAudio：音频和语音处理的构建模块 </a>，描述了 TorchAudio 库的概述。如果您在研究中发现 TorchAudio 很有用，请帮助我们与社区分享，并引用我们的论文。</p>
+
+<h4 id="beta-rnn-t--prototype-emformer-models-and-recipes">(Beta) RNN-T &amp; (Prototype) Emformer 模型和配方</h4>
+
+<p align="center">
+  <img src="/assets/images/torchaudio-rnnt-emformer-demo.gif" width="60%">
+</p>
+
+<p>Emformer 是一种高效的基于记忆变换器的流式语音模型，在低延迟、资源受限的场景中，如设备端应用中，已经展示了最先进的流式语音识别（ASR）性能（参考文献：<a href="https://arxiv.org/abs/2010.10759">https://arxiv.org/abs/2010.10759</a>）。</p>
+
+<p>TorchAudio v0.11 版本包含以下测试功能：</p>
+
+<ul>
+  <li>Emformer 的实现（<a href="https://pytorch.org/audio/main/models.html#emformer"> 文档 </a>）</li>
+  <li>基于 Emformer 的转录网络的循环神经网络转录器（RNN-T）流式 ASR 模型（<a href="https://pytorch.org/audio/main/models.html#rnn-t"> 文档 </a>）</li>
+  <li>支持 TorchScript 的 RNN-T 束搜索解码器（<a href="https://pytorch.org/audio/main/models.html#rnntbeamsearch"> 文档 </a>）</li>
+  <li>LibriSpeech Emformer RNN-T 训练配方（<a href="https://github.com/pytorch/audio/tree/release/0.11/examples/asr/librispeech_emformer_rnnt">GitHub</a>）以及相应的预训练流式 ASR 推理管道（<a href="https://pytorch.org/audio/main/pipelines.html#emformer-rnnt-base-librispeech"> 文档 </a>）</li>
+</ul>
+
+<p>此外，还有来自夜间构建或主分支的可用原型功能。</p>
+
+<ul>
+  <li>基于 MuST-C 和 TED-LIUM3 数据集训练的训练食谱。（<a href="https://github.com/pytorch/audio/tree/main/examples/asr/emformer_rnnt">GitHub</a>）</li>
+  <li>与食谱对应的预训练管道。（<a href="https://pytorch.org/audio/main/prototype.pipelines.html"> 文档 </a>）</li>
+  <li>演示如何使用 RNN-T Emformer 模型进行在线语音识别的教程。（<a href="https://pytorch.org/audio/main/tutorials/online_asr_tutorial.html"> 文档 </a>）</li>
+</ul>
+
+<p>这些功能共同覆盖了流式 ASR 模型的全生命周期，从定义到训练和推理，并使用户能够轻松开发自己的基于 Emformer 和 RNN-T 的模型。</p>
+
+<p>特别感谢杨阳、贾伊·马哈德卡和吉尔·凯伦对他们的代码贡献和指导。</p>
+
+<h4 id="beta-hubert-pretrain-model">(Beta) HuBERT 预训练模型</h4>
+
+<p>HuBERT 模型的掩码预测训练需要掩码 logits、未掩码 logits 和特征范数作为输出。logits 用于交叉熵损失，特征范数用于惩罚损失。此次发布添加了 HuBERTPretrainModel 和相应的工厂函数（hubert_pretrain_base、hubert_pretrain_large 和 hubert_pretrain_xlarge），以实现从头开始训练。</p>
+
+<h4 id="prototype-ctc-beam-search-decoder">(原型) CTC 光束搜索解码器</h4>
+
+<p>在最近版本中，TorchAudio 增加了对基于 CTC 损失的 ASR 模型微调的支持。新增的推理时间 CTC 波束搜索解码器使得可以使用 TorchAudio 工具运行端到端的 ASR 评估。</p>
+
+<p>TorchAudio 中的 CTC 解码器支持可定制的带词典约束的波束搜索解码，同时也支持可选的 KenLM 语言模型。</p>
+
+<p>更多详情，请查看 <a href="https://pytorch.org/audio/main/tutorials/asr_inference_with_ctc_decoder_tutorial.html">API 教程 </a>。此原型功能可通过夜间构建获得。</p>
+
+<h4 id="prototype-streaming-api">（原型）流式 API</h4>
+
+<p>TorchAudio 最初是简单的音频 I/O API，用于补充 PyTorch。随着最近添加了 ASR 模型和训练食谱，该项目收到了支持高级应用开发的需求。</p>
+
+<p>流式 API 使得在线推理中开发和测试模型变得简单。它底层使用 ffmpeg，并能够从在线服务和硬件设备读取媒体，以增量方式解码媒体，并应用过滤器和预处理。</p>
+
+<p>请查看 <a href="https://pytorch.org/audio/main/">API 教程</a>和<a href="https://pytorch.org/audio/main/">文档 </a>。还有<a href="https://pytorch.org/audio/main/tutorials/online_asr_tutorial.html">流式 ASR</a> 教程和<a href="https://pytorch.org/audio/main/tutorials/device_asr.html">设备流式 ASR</a> 教程。此功能从夜间版本中可用。请参考 <a href="https://pytorch.org/get-started/locally/">pytorch.org</a> 了解如何安装夜间构建。</p>
+
+<h2 id="torchtext-012">TorchText 0.12</h2>
+
+<h4 id="beta-roberta-and-xlm-r-models">(Beta) RoBERTa 和 XLM-R 模型</h4>
+
+<p>TorchText 已添加对预训练的 RoBERTa 和 XLM-R 模型的支持。这将允许用户使用 TorchText 在标准 NLP 任务上训练端到端 Transformer 编码器模型。</p>
+
+<p>更具体地说：</p>
+
+<ul>
+  <li>这些模型是 torchscriptable 的，因此可以用于生产用例。</li>
+  <li>模型 API 允许用户轻松地将定制的任务特定头部与预训练的编码器附加在一起。</li>
+  <li>该 API 还配备了数据预处理转换，以匹配预训练权重和模型配置。</li>
+</ul>
+
+<p>我们添加了一个<a href="https://pytorch.org/text/main/tutorials/sst2_classification_non_distributed.html">教程</a>来演示使用预训练的 XLM-R 基础架构进行 SST-2 二分类文本任务的示例。</p>
+
+<p>如需了解有关模型 API 和使用示例的更多详细信息，请参阅<a href="https://pytorch.org/text/main/models.html">文档 </a>。</p>
+
+<h4 id="beta-byte-level-bpe-tokenizer">(Beta) 字节级 BPE 分词器</h4>
+
+<p>TorchText 已添加对字节级 BPE 分词器的支持，该分词器用于 GPT-2。此分词器也用于对之前描述的预训练 RoBERTa 模型的输入进行分词。除了 RoBERTa 词汇表外，用户还可以加载自己的自定义 BPE 词汇表以使用该分词器。此外，该分词器完全支持 torchscript，因此可用于生产用例。有关模型 API 和使用示例的详细信息，请参阅<a href="https://pytorch.org/text/main/transforms.html#gpt2bpetokenizer">文档 </a>。</p>
+
+<h4 id="beta-text-datasets-backed-by-torchdata">(Beta) 基于 TorchData 的文本数据集</h4>
+
+<p>TorchText 通过将旧式可迭代数据集迁移到 <a href="https://github.com/pytorch/data#readme">TorchData 的 DataPipes</a>，对其数据集进行了现代化处理。TorchData 是一个库，它提供模块化/可组合的原语，使用户能够在高效的数据管道中加载数据和转换数据。</p>
+
+<p>这些 DataPipes 与 PyTorch DataLoader 无缝兼容，将启用自动分片等新功能。用户现在可以使用用户定义的函数和转换以函数式编程风格轻松进行数据操作和预处理。由 DataPipes 支持的数据集还支持标准流程控制，如批处理、收集、打乱和分桶。</p>
+
+<p>总体而言，DataPipes 以 Pythonic 和灵活的方式为数据预处理和模型训练中的张量化需求提供全面的体验。我们添加了一个<a href="https://pytorch.org/text/main/tutorials/sst2_classification_non_distributed.html">教程 </a>，以展示使用现代化数据集进行数据处理的管道化。</p>
+
+<p>您可以在<a href="https://pytorch.org/data">官方文档</a>中了解更多关于 TorchData DataPipe API 的信息。</p>
+
+<h2 id="torchvision-012">TorchVision 0.12</h2>
+
+<h3 id="new-models">新模型</h3>
+
+<p>最新版本中发布了四个新的模型系列，同时还包括了其变体的预训练权重。</p>
+
+<h4 id="1-object-detection">#1 目标检测</h4>
+
+<p><a href="https://arxiv.org/pdf/1904.01355.pdf">FCOS</a> 是一种流行的、全卷积、无锚框的目标检测模型。在本版本中，我们包括了一个社区贡献的模型实现以及预训练权重。该模型在 COCO train2017 数据集上进行了训练，可以使用以下方式：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torchvision</span> <span class="kn">import</span> <span class="n">models</span>
+
+<span class="n">x</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">)]</span>
+<span class="n">fcos</span> <span class="o">=</span> <span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">fcos_resnet50_fpn</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">).</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span>  <span class="n">fcos</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>预训练模型在 COCO val2017 数据集上的 AP 值为 39.2（更多详情请见<a href="https://github.com/pytorch/vision/pull/4961">第 4961 条 </a>）。</p>
+
+<p>感谢<a href="https://github.com/xiaohu2015">胡叶</a>和<a href="https://github.com/zhiqwang">王志强</a>为模型实现和初始训练做出的贡献。这是很长时间以来的第一个社区贡献模型，鉴于其成功，我们决定利用这个过程的学习经验，创建新的<a href="https://github.com/pytorch/vision/blob/main/CONTRIBUTING_MODELS.md">模型贡献指南 </a>。</p>
+
+<h4 id="2-optical-flow-support-and-raft-model">#2 光流支持与 RAFT 模型</h4>
+
+<p>TorchVision 现在支持光流！光流模型试图预测视频中的运动：给定两个连续帧，模型预测第一帧中的每个像素在第二帧中的最终位置。请查看我们<a href="https://pytorch.org/vision/0.12/auto_examples/plot_optical_flow.html#sphx-glr-auto-examples-plot-optical-flow-py">关于光流的新教程 </a>！</p>
+
+<p>我们实现了一个与 torchscript 兼容的 <a href="https://arxiv.org/abs/2003.12039">RAFT</a> 模型，并带有预训练权重（包括正常和“小型”版本），并增加了对<a href="https://github.com/pytorch/vision/tree/main/references/optical_flow">训练和评估</a>光流模型的支持。我们的训练脚本支持跨进程和节点的分布式训练，比原始实现快得多。我们还增加了 5 个新的<a href="https://pytorch.org/vision/0.12/datasets.html#optical-flow">光流数据集 </a>：飞椅、飞物、Sintel、Kitti 和 HD1K。</p>
+
+<p align="center">
+  <img src="/assets/images/image-classification.png" width="60%">
+</p>
+
+<h4 id="3-image-classification">#3. 图像分类</h4>
+
+<p><a href="https://arxiv.org/abs/2010.11929">视觉 Transformer</a>（ViT）和 <a href="https://arxiv.org/abs/2201.03545">ConvNeXt</a> 是两种流行的架构，可以用作图像分类器或作为下游视觉任务的骨干网络。在本版本中，我们包括了它们分类变体的 8 个预训练权重。这些模型在 ImageNet 上进行了训练，可以使用如下方式：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torchvision</span> <span class="kn">import</span> <span class="n">models</span>
+
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">)</span>
+<span class="n">vit</span> <span class="o">=</span> <span class="n">models</span><span class="p">.</span><span class="n">vit_b_16</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">).</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">convnext</span> <span class="o">=</span> <span class="n">models</span><span class="p">.</span><span class="n">convnext_tiny</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">).</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions1</span> <span class="o">=</span> <span class="n">vit</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="n">predictions2</span> <span class="o">=</span> <span class="n">convnext</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>在 ImageNet 验证集上获得的预训练模型的准确率如下：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>Model</strong></th>
+      <th style="text-align: right"><strong>Acc@1</strong></th>
+      <th style="text-align: right"><strong>Acc@5</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>vit_b_16</td>
+      <td style="text-align: right">81.072</td>
+      <td style="text-align: right">95.318</td>
+    </tr>
+    <tr>
+      <td>vit_b_32</td>
+      <td style="text-align: right">75.912</td>
+      <td style="text-align: right">92.466</td>
+    </tr>
+    <tr>
+      <td>vit_l_16</td>
+      <td style="text-align: right">79.662</td>
+      <td style="text-align: right">94.638</td>
+    </tr>
+    <tr>
+      <td>vit_l_32</td>
+      <td style="text-align: right">76.972</td>
+      <td style="text-align: right">93.07</td>
+    </tr>
+    <tr>
+      <td>convnext_tiny</td>
+      <td style="text-align: right">82.52</td>
+      <td style="text-align: right">96.146</td>
+    </tr>
+    <tr>
+      <td>convnext_small</td>
+      <td style="text-align: right">83.616</td>
+      <td style="text-align: right">96.65</td>
+    </tr>
+    <tr>
+      <td>convnext_base</td>
+      <td style="text-align: right">84.062</td>
+      <td style="text-align: right">96.87</td>
+    </tr>
+    <tr>
+      <td>convnext_large</td>
+      <td style="text-align: right">84.414</td>
+      <td style="text-align: right">96.976</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>以上模型已使用我们新调整的<a href="https://pytorch.org/blog/how-to-train-state-of-the-art-models-using-torchvision-latest-primitives/">训练配方</a>进行训练，这使得我们能够提供比原始论文中更高的准确率模型。</p>
+
+<h4 id="4-gpu-video-decoding">#4. GPU 视频解码</h4>
+
+<p>在本版本中，我们在视频读取 API 中添加了对 GPU 视频解码的支持。要使用硬件加速解码，我们只需将 cuda 设备传递给视频读取 API，如下所示：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torchvision</span>
+
+<span class="n">reader</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">io</span><span class="p">.</span><span class="n">VideoReader</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">"cuda:0"</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">reader</span><span class="p">:</span>
+    <span class="k">print</span><span class="p">(</span><span class="n">frame</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>我们还支持在读取视频前跳转到任意帧或关键帧，如下所示：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code><span class="n">读者 </span><span class="p">。</span><span class="n">seek</span><span class="p">(</span><span class="n">seek_time</span><span class="p">)</span>
+</code></font></font></font></pre></div></div>
+
+<h3 id="new-datasets">新数据集</h3>
+
+<p>我们实现了 14 个新的<a href="https://pytorch.org/vision/0.12/datasets.html#image-classification">分类数据集 </a>：CLEVR、GTSRB、FER2013、SUN397、Country211、Flowers102、fvgc_aircraft、OxfordIIITPet、DTD、Food 101、Rendered SST2、Stanford cars、PCAM 和 EuroSAT。</p>
+
+<p>作为我们支持光流（请参阅上方以获取更多详细信息）的工作的一部分，我们还添加了 5 个新的<a href="https://pytorch.org/vision/0.12/datasets.html#optical-flow">光流数据集 </a>：飞椅、飞行物、Sintel、Kitti 和 HD1K。</p>
+
+<h3 id="other-updates">其他更新</h3>
+
+<ul>
+  <li><strong>新的文档布局 </strong>：现在每个函数/类都有单独的文档页面，这有助于清理模块页面上的空间，并便于发现提议的 API。例如，比较我们的<a href="https://pytorch.org/vision/0.11/transforms.html">以前的文档</a>与<a href="https://pytorch.org/vision/0.12/transforms.html">新的文档 </a>。如果您有任何<a href="https://github.com/pytorch/vision/issues/5511">反馈 </a>，请告诉我们！</li>
+  <li>随着社区贡献的 <a href="https://github.com/pytorch/vision/pull/4961">FCOS</a> 模型的成功，我们发布了<a href="https://github.com/pytorch/vision/blob/main/CONTRIBUTING_MODELS.md">新的模型贡献指南 </a>。这些指南旨在为任何希望提出、实施和训练新模型的人提供一个模型贡献过程的概述。</li>
+  <li><strong>即将推出的原型 API</strong> - 我们目前正在开发一个原型 API，该 API 在所有模型构建方法中添加了多权重支持。这将使我们能够提供多个预训练权重，以及与它们的元数据和推理转换相关联。该 API 仍在审查中，因此尚未包含在发布中，但您可以在我们的<a href="https://pytorch.org/blog/introducing-torchvision-new-multi-weight-support-api/">博客文章</a>中了解更多信息，并在专门的 <a href="https://github.com/pytorch/vision/issues/5088">Github 问题</a>上提供反馈。</li>
+  <li><strong>我们的弃用策略变更 </strong> - 之前，torchvision 几乎从不移除弃用的 API。为了与 pytorch 核心保持一致和连贯，我们正在更新我们的弃用策略。我们现在遵循 2 个发布周期的弃用周期：弃用的 API 将在 2 个版本中引发警告，然后将被移除。为了反映这些变化并平滑过渡，我们决定：<ul>
+      <li>移除所有在 v0.8 或之前被弃用的 API，v0.8 是 1.5 年前发布的。</li>
+      <li>更新所有其他弃用 API 的移除时间表至 v0.14，以反映从 v0.12 开始的新 2 周期策略。</li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="captum-05">Captum 0.5</h3>
+
+<p><a href="https://captum.ai/">Captum</a> 是一个用于模型可解释性的 PyTorch 库。对于这次发布，我们扩展了 Captum，增加了有影响力的实例，并支持基于相似性的影响以及新型算法 <a href="https://arxiv.org/abs/2002.08484">TracIn</a> 及其变体。TracIn 变体通过随机投影为全连接层提供更快的影响分数近似。</p>
+
+<p>更具体地说，Captum 的新增“影响”子部分包括：</p>
+
+<ul>
+  <li><strong><a href="https://captum.ai/api/influence.html#similarityinfluence">相似性影响 </a></strong> 使用默认（余弦或欧几里得）或自定义用户定义的度量来计算测试示例和训练示例之间的相似度分数，针对给定的输入模型层。</li>
+  <li><strong><a href="https://captum.ai/api/influence.html#tracincp">TracInCP</a></strong> 通过计算测试和训练示例相对于模型参数的损失梯度的点积相似度，近似每个训练示例对给定测试示例的有影响力分数。请注意，如果我们使用训练示例作为测试示例，则计算自影响力。下面描述的此方法和其变体还返回前 k 个支持者和反对者，分别是前 k 个最大的正负影响力示例。</li>
+  <li><strong><a href="https://captum.ai/api/influence.html#tracincpfast">TracInCPFast</a></strong> 是 TracInCP 的近似，它避免了计算相对于大型参数矩阵的梯度。它通过计算训练和测试示例的最后一层全连接层激活与该层的损失梯度之间的点积来近似影响力分数。</li>
+  <li><strong><a href="https://captum.ai/api/influence.html#tracincpfastrandproj">TracInCPFastRandProj</a></strong> 使用 nearest neighbor approximation 库，如 annoy，来计算训练和测试量之间的点积。此外，此方法还可以通过随机投影矩阵将这些向量投影到低维空间，以降低层激活和相应梯度的维度。</li>
+</ul>
+
+<p>更多关于有影响力实例的实现信息可以在我们的 <a href="https://github.com/pytorch/captum/tree/master/captum/influence">GitHub</a> 页面和<a href="https://captum.ai/tutorials/TracInCP_Tutorial">教程</a>中找到。</p>
+
+<p>感谢阅读，如果您对这些更新感兴趣并想加入 PyTorch 社区，我们鼓励您加入<a href="https://discuss.pytorch.org/">讨论论坛</a>和 <a href="https://github.com/pytorch/pytorch/issues">GitHub 问题 </a>。要获取 PyTorch 的最新消息，请关注我们的 <a href="https://twitter.com/PyTorch">Twitter</a>、<a href="https://medium.com/pytorch">Medium</a>、<a href="https://www.youtube.com/pytorch">YouTube</a> 和 <a href="https://www.linkedin.com/company/pytorch">LinkedIn</a>。</p>
+
+<p>干杯！</p>
+
+<p>PyTorch 团队</p>
+
+<div class="pytorch-content-right">
+    <div class="pytorch-right-menu">
+        <div class="pytorch-side-scroll">
+            <ul>
+                <li>
+                    <a class="reference internal title-link has-children" href="#torchrec-01">TorchRec 0.1</a>
+                </li>
+                <li>
+                    <a class="reference internal title-link has-children" href="#torchaudio-011">TorchAudio 0.11</a>
+                          </li>
+                <li>
+                    <a class="reference internal title-link has-children" href="#torchtext-012">TorchText 0.12</a>
+                               </li>
+				<li>
+                    <a class="reference internal title-link has-children" href="#torchvision-012">TorchVision 0.12</a>                  
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+<style>
+    article.pytorch-article {
+        position: relative;
+    }
+    .pytorch-content-right {
+        position: absolute;
+        top: 1.8%;
+        right: -27%;
+    }
+    article.pytorch-article .pytorch-content-right ul {
+        padding-left: 1rem;
+        list-style-type: none;
+        margin: 0;
+    }
+    article.pytorch-article .pytorch-content-right ul li {
+        margin-bottom: 0;
+    }
+    article.pytorch-article .pytorch-content-right ul>li>a {
+        color: #262626;
+        font-weight: 500;
+        font-size: 0.825rem;
+    }
+    article.pytorch-article .pytorch-content-right ul>li>ul>li>a {
+        color: #6c6c6d;
+        font-weight: 400;
+    }
+</style>
+
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

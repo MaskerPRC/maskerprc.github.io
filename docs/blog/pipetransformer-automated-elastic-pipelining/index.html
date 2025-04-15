@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="In this blog post, we describe the first peer-reviewed research paper that explores accelerating the hybrid of PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline) - PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models (Transformers such as BERT [2]  and ViT [3]), published at ICML 2021.
+
+PipeTransformer leverages automated elastic pipelining for efficient distributed training of Transformer models. In PipeTransformer, we designed an adaptive on-the-fly freeze algorithm that can identify and freeze some layers gradually during training and an elastic pipelining system that can dynamically allocate resources to train the remaining active layers. More specifically, PipeTransformer automatically excludes frozen layers from the pipeline, packs active layers into fewer GPUs, and forks more replicas to increase data-parallel width. We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on SQuAD and GLUE datasets. Our results show that compared to the state-of-the-art baseline, PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+
+Next, we will introduce the background, motivation, our idea, design, and how we implement the algorithm and system with PyTorch Distributed APIs.
+
+
+  Paper: http://proceedings.mlr.press/v139/he21a.html
+  Source Code: https://DistML.ai.
+  Slides: https://docs.google.com/presentation/d/1t6HWL33KIQo2as0nSHeBpXYtTBcy0nXCoLiKd0EashY/edit?usp=sharing
+
+
+Introduction
+
+
+
+Figure 1: the Parameter Number of Transformer Models Increases Dramatically.
+
+
+Large Transformer models [4][5] have powered accuracy breakthroughs in both natural language processing and computer vision. GPT-3 [4] hit a new record high accuracy for nearly all NLP tasks. Vision Transformer (ViT) [3] also achieved 89\% top-1 accuracy in ImageNet, outperforming state-of-the-art convolutional networks ResNet-152 and EfficientNet. To tackle the growth in model sizes, researchers have proposed various distributed training techniques, including parameter servers [6][7][8], pipeline parallelism [9][10][11][12], intra-layer parallelism [13][14][15], and zero redundancy data-parallel [16].
+
+Existing distributed training solutions, however, only study scenarios where all model weights are required to be optimized throughout the training (i.e., computation and communication overhead remains relatively static over different iterations). Recent works on progressive training suggest that parameters in neural networks can be trained dynamically:
+
+
+  Freeze Training: Singular Vector Canonical Correlation Analysis for Deep Learning Dynamics and Interpretability. NeurIPS 2017
+  Efficient Training of BERT by Progressively Stacking. ICML 2019
+  Accelerating Training of Transformer-Based Language Models with Progressive Layer Dropping. NeurIPS 2020.
+  On the Transformer Growth for Progressive BERT Training. NACCL 2021
+
+
+
+
+
+
+Figure 2. Interpretable Freeze Training: DNNs converge bottom-up (Results on CIFAR10 using ResNet). Each pane shows layer-by-layer similarity using SVCCA [17][18]
+
+For example, in freeze training [17][18], neural networks usually converge from the bottom-up (i.e., not all layers need to be trained all the way through training). Figure 2 shows an example of how weights gradually stabilize during training in this approach. This observation motivates us to utilize freeze training for distributed training of Transformer models to accelerate training by dynamically allocating resources to focus on a shrinking set of active layers. Such a layer freezing strategy is especially pertinent to pipeline parallelism, as excluding consecutive bottom layers from the pipeline can reduce computation, memory, and communication overhead.
+
+
+
+
+Figure 3. The process of PipeTransformer’s automated and elastic pipelining to accelerate distributed training of Transformer models
+
+
+We propose PipeTransformer, an elastic pipelining training acceleration framework that automatically reacts to frozen layers by dynamically transforming the scope of the pipelined model and the number of pipeline replicas. To the best of our knowledge, this is the first paper that studies layer freezing in the context of both pipeline and data-parallel training. Figure 3 demonstrates the benefits of such a combination. First, by excluding frozen layers from the pipeline, the same model can be packed into fewer GPUs, leading to both fewer cross-GPU communications and smaller pipeline bubbles. Second, after packing the model into fewer GPUs, the same cluster can accommodate more pipeline replicas, increasing the width of data parallelism. More importantly, the speedups acquired from these two benefits are multiplicative rather than additive, further accelerating the training.
+
+The design of PipeTransformer faces four major challenges. First, the freeze algorithm must make on-the-fly and adaptive freezing decisions; however, existing work [17][18] only provides a posterior analysis tool. Second, the efficiency of pipeline re-partitioning results is influenced by multiple factors, including partition granularity, cross-partition activation size, and the chunking (the number of micro-batches) in mini-batches, which require reasoning and searching in a large solution space. Third, to dynamically introduce additional pipeline replicas, PipeTransformer must overcome the static nature of collective communications and avoid potentially complex cross-process messaging protocols when onboarding new processes (one pipeline is handled by one process). Finally, caching can save time for repeated forward propagation of frozen layers, but it must be shared between existing pipelines and newly added ones, as the system cannot afford to create and warm up a dedicated cache for each replica.
+
+
+
+
+Figure 4: An Animation to Show the Dynamics of PipeTransformer
+
+
+As shown in the animation (Figure 4), PipeTransformer is designed with four core building blocks to address the aforementioned challenges. First, we design a tunable and adaptive algorithm to generate signals that guide the selection of layers to freeze over different iterations (Freeze Algorithm). Once triggered by these signals, our elastic pipelining module (AutoPipe), then packs the remaining active layers into fewer GPUs by taking both activation sizes and variances of workloads across heterogeneous partitions (frozen layers and active layers) into account. It then splits a mini-batch into an optimal number of micro-batches based on prior profiling results for different pipeline lengths. Our next module, AutoDP, spawns additional pipeline replicas to occupy freed-up GPUs and maintains hierarchical communication process groups to attain dynamic membership for collective communications. Our final module, AutoCache, efficiently shares activations across existing and new data-parallel processes and automatically replaces stale caches during transitions.
+
+Overall, PipeTransformer combines the Freeze Algorithm, AutoPipe, AutoDP, and AutoCache modules to provide a significant training speedup.
+We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on GLUE and SQuAD datasets. Our results show that PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+Finally, we have also developed open-source flexible APIs for PipeTransformer, which offer a clean separation among the freeze algorithm, model definitions, and training accelerations, allowing for transferability to other algorithms that require similar freezing strategies.
+
+Overall Design
+
+Suppose we aim to train a massive model in a distributed training system where the hybrid of pipelined model parallelism and data parallelism is used to target scenarios where either the memory of a single GPU device cannot hold the model, or if loaded, the batch size is small enough to avoid running out of memory. More specifically, we define our settings as follows:
+
+Training task and model definition. We train Transformer models (e.g., Vision Transformer, BERT on large-scale image or text datasets. The Transformer model mathcal{F} has L layers, in which the i th layer is composed of a forward computation function f_i and a corresponding set of parameters.
+
+Training infrastructure. Assume the training infrastructure contains a GPU cluster that has N GPU servers (i.e. nodes). Each node has I GPUs. Our cluster is homogeneous, meaning that each GPU and server have the same hardware configuration. Each GPU’s memory capacity is M_\text{GPU}. Servers are connected by a high bandwidth network interface such as InfiniBand interconnect.
+
+Pipeline parallelism. In each machine, we load a model \mathcal{F} into a pipeline \mathcal{P} which has Kpartitions (K also represents the pipeline length). The kth partition p_k consists of consecutive layers. We assume each partition is handled by a single GPU device. 1 \leq K \leq I, meaning that we can build multiple pipelines for multiple model replicas in a single machine. We assume all GPU devices in a pipeline belonging to the same machine. Our pipeline is a synchronous pipeline, which does not involve stale gradients, and the number of micro-batches is M. In the Linux OS, each pipeline is handled by a single process. We refer the reader to GPipe [10] for more details.
+
+Data parallelism. DDP is a cross-machine distributed data-parallel process group within R parallel workers. Each worker is a pipeline replica (a single process). The rth worker’s index (ID) is rank r. For any two pipelines in DDP, they can belong to either the same GPU server or different GPU servers, and they can exchange gradients with the AllReduce algorithm.
+
+Under these settings, our goal is to accelerate training by leveraging freeze training, which does not require all layers to be trained throughout the duration of the training. Additionally, it may help save computation, communication, memory cost, and potentially prevent overfitting by consecutively freezing layers. However, these benefits can only be achieved by overcoming the four challenges of designing an adaptive freezing algorithm, dynamical pipeline re-partitioning, efficient resource reallocation, and cross-process caching, as discussed in the introduction.
+
+
+
+
+Figure 5. Overview of PipeTransformer Training System
+
+
+PipeTransformer co-designs an on-the-fly freeze algorithm and an automated elastic pipelining training system that can dynamically transform the scope of the pipelined model and the number of pipeline replicas. The overall system architecture is illustrated in Figure 5.  To support PipeTransformer’s elastic pipelining, we maintain a customized version of PyTorch Pipeline. For data parallelism, we use PyTorch DDP as a baseline. Other libraries are standard mechanisms of an operating system (e.g.,multi-processing) and thus avoid specialized software or hardware customization requirements. To ensure the generality of our framework, we have decoupled the training system into four core components: freeze algorithm, AutoPipe, AutoDP, and AutoCache. The freeze algorithm (grey) samples indicators from the training loop and makes layer-wise freezing decisions, which will be shared with AutoPipe (green). AutoPipe is an elastic pipeline module that speeds up training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs (pink), leading to both fewer cross-GPU communications and smaller pipeline bubbles. Subsequently, AutoPipe passes pipeline length information to AutoDP (purple), which then spawns more pipeline replicas to increase data-parallel width, if possible. The illustration also includes an example in which AutoDP introduces a new replica (purple). AutoCache (orange edges) is a cross-pipeline caching module, as illustrated by connections between pipelines. The source code architecture is aligned with Figure 5 for readability and generality.
+
+Implementation Using PyTorch APIs
+
+As can be seen from Figure 5, PipeTransformers contain four components: Freeze Algorithm, AutoPipe, AutoDP, and AutoCache. Among them, AutoPipe and AutoDP relies on PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline), respectively. In this blog, we only highlight the key implementation details of AutoPipe and AutoDP. For details of Freeze Algorithm and AutoCache, please refer to our paper.
+
+AutoPipe: Elastic Pipelining
+
+AutoPipe can accelerate training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs. This section elaborates on the key components of AutoPipe that dynamically 1) partition pipelines, 2) minimize the number of pipeline devices, and 3) optimize mini-batch chunk size accordingly.
+
+Basic Usage of PyTorch Pipeline
+
+Before diving into details of AutoPipe, let us warm up the basic usage of PyTorch Pipeline (torch.distributed.pipeline.sync.Pipe, see this tutorial). More specially, we present a simple example to understand the design of Pipeline in practice:
+
+# Step 1: build a model including two linear layers
+fc1 = nn.Linear(16, 8).cuda(0)
+fc2 = nn.Linear(8, 4).cuda(1)
+
+# Step 2: wrap the two layers with nn.Sequential
+model = nn.Sequential(fc1, fc2)
+
+# Step 3: build Pipe (torch.distributed.pipeline.sync.Pipe)
+model = Pipe(model, chunks=8)
+
+# do training/inference
+input = torch.rand(16, 16).cuda(0)
+output_rref = model(input)
+
+
+In this basic example, we can see that before initializing Pipe, we need to partition the model nn.Sequential into multiple GPU devices and set optimal chunk number (chunks). Balancing computation time across partitions is critical to pipeline training speed, as skewed workload distributions across stages can lead to stragglers and forcing devices with lighter workloads to wait. The chunk number may also have a non-trivial influence on the throughput of the pipeline.
+
+Balanced Pipeline Partitioning
+
+In dynamic training system such as PipeTransformer, maintaining optimally balanced partitions in terms of parameter numbers does not guarantee the fastest training speed because other factors also play a crucial role:
+
+
+
+
+Figure 6. The partition boundary is in the middle of a skip connection
+
+
+
+  
+    Cross-partition communication overhead. Placing a partition boundary in the middle of a skip connection leads to additional communications since tensors in the skip connection must now be copied to a different GPU. For example, with BERT partitions in Figure 6, partition k must take intermediate outputs from both partition k-2 and partition k-1. In contrast, if the boundary is placed after the addition layer, the communication overhead between partition k-1 and k is visibly smaller. Our measurements show that having cross-device communication is more expensive than having slightly imbalanced partitions (see the Appendix in our paper). Therefore, we do not consider breaking skip connections (highlighted separately as an entire attention layer and MLP layer in green color at line 7 in Algorithm 1.
+  
+  
+    Frozen layer memory footprint. During training, AutoPipe must recompute partition boundaries several times to balance two distinct types of layers: frozen layers and active layers. The frozen layer’s memory cost is a fraction of that inactive layer, given that the frozen layer does not need backward activation maps, optimizer states, and gradients. Instead of launching intrusive profilers to obtain thorough metrics on memory and computational cost, we define a tunable cost factor lambda_{\text{frozen}} to estimate the memory footprint ratio of a frozen layer over the same active layer. Based on empirical measurements in our experimental hardware, we set it to \frac{1}{6}.
+  
+
+
+
+
+
+
+
+Based on the above two considerations, AutoPipe balances pipeline partitions based on parameter sizes. More specifically, AutoPipe uses a greedy algorithm to allocate all frozen and active layers to evenly distribute partitioned sublayers into K GPU devices. Pseudocode is described as the load\_balance() function in Algorithm 1. The frozen layers are extracted from the original model and kept in a separate model instance \mathcal{F}_{\text{frozen}} in the first device of a pipeline.
+
+Note that the partition algorithm employed in this paper is not the only option; PipeTransformer is modularized to work with any alternatives.
+
+Pipeline Compression
+
+Pipeline compression helps to free up GPUs to accommodate more pipeline replicas and reduce the number of cross-device communications between partitions. To determine the timing of compression, we can estimate the memory cost of the largest partition after compression, and then compare it with that of the largest partition of a pipeline at timestep T=0. To avoid extensive memory profiling, the compression algorithm uses the parameter size as a proxy for the training memory footprint. Based on this simplification, the criterion of pipeline compression is as follows:
+
+
+
+
+
+
+Once the freeze notification is received, AutoPipe will always attempt to divide the pipeline length K by 2 (e.g., from 8 to 4, then 2). By using \frac{K}{2} as the input, the compression algorithm can verify if the result satisfies the criterion in Equation (1). Pseudocode is shown in lines 25-33 in Algorithm 1. Note that this compression makes the acceleration ratio exponentially increase during training, meaning that if a GPU server has a larger number of GPUs (e.g., more than 8), the acceleration ratio will be further amplified.
+
+
+
+
+Figure 7. Pipeline Bubble: F_{d,b}, and U_d" denote="" forward,="" backward,="" and="" the="" optimizer="" update="" of="" micro-batch="" b="" on="" device="" d,="" respectively.="" total="" bubble="" size="" in="" each="" iteration="" is="" k-1="" times="" per="" forward="" backward="" cost.="" additionally,="" such="" a="" technique="" can="" also="" speed="" up="" training="" by="" shrinking="" pipeline="" bubbles.="" to="" explain="" sizes="" pipeline,="" figure="" 7="" depicts="" how="" 4="" micro-batches="" run="" through="" 4-device="" k="4." general,="" (k-1)="" therefore,="" it="" clear="" that="" shorter="" pipelines="" have="" smaller="" sizes.="" dynamic="" number="" prior="" parallel="" systems="" use="" fixed="" mini-batch="" (m="" ).="" gpipe="" suggests="" m="" \geq="" \times="" k,="" where="" partitions="" (pipeline="" length).="" however,="" given="" pipetransformer="" dynamically="" configures="" we="" find="" be="" sub-optimal="" maintain="" static="" during="" training.="" moreover,="" when="" integrated="" with="" ddp,="" value="" has="" an="" impact="" efficiency="" ddp="" gradient="" synchronizations.="" since="" must="" wait="" for="" last="" finish="" its="" computation="" parameter="" before="" launching="" synchronization,="" finer="" lead="" overlap="" between="" communication.="" hence,="" instead="" using="" value,="" searches="" optimal="" fly="" hybrid="" environment="" enumerating="" values="" ranging="" from="" 6k.="" specific="" environment,="" profiling="" needs="" only="" done="" once="" (see="" algorithm="" 1="" line="" 35).="" complete="" source="" code,="" please="" refer="" https:="" github.com="" distributed-ai="" blob="" master="" pipe_transformer="" pipe="" auto_pipe.py.="" autodp:="" spawning="" more="" replicas="" as="" autopipe="" compresses="" same="" into="" fewer="" gpus,="" autodp="" automatically="" spawn="" new="" increase="" data-parallel="" width.="" despite="" conceptual="" simplicity,="" subtle="" dependencies="" communications="" states="" require="" careful="" design.="" challenges="" are="" threefold:="" communication:="" collective="" pytorch="" requires="" membership,="" which="" prevents="" connecting="" existing="" ones;="" state="" synchronization:="" newly="" activated="" processes="" consistent="" progress="" (e.g.,="" epoch="" learning="" rate),="" weights="" states,="" boundary="" frozen="" layers,="" gpu="" range;="" dataset="" redistribution:="" should="" re-balanced="" match="" pipelines.="" this="" not="" avoids="" stragglers="" but="" ensures="" gradients="" all="" equally="" weighted.="" 8.="" handling="" dynamical="" messaging="" double="" process="" groups="" (process="" 0-7="" belong="" machine="" 0,="" while="" 8-15="" 1)="" tackle="" these="" challenges,="" create="" communication="" ddp.="" example="" shown="" 8,="" message="" group="" (purple)="" responsible="" light-weight="" control="" messages="" covers="" processes,="" active="" (yellow)="" contains="" serves="" vehicle="" heavy-weight="" tensor="" remains="" static,="" whereas="" dismantled="" reconstructed="" processes.="" t0,="" 0="" 8="" active.="" transition="" t1,="" activates="" 9="" (newly="" added="" replicas)="" synchronizes="" necessary="" information="" mentioned="" above="" group.="" four="" then="" form="" group,="" allowing="" adaptive="" memberships.="" redistribute="" dataset,="" implement="" variant="" distributedsampler="" seamlessly="" adjust="" data="" samples="" replicas.="" design="" naturally="" helps="" reduce="" overhead.="" specifically,="" transitioning="" t0="" destroy="" instances,="" construct="" cached="" pipelined="" model="" (autopipe="" stores="" separately).="" following="" apis="" above.="" import="" torch.distributed="" dist="" torch.nn.parallel="" distributeddataparallel="" #="" initialize="" (this="" called="" initialization="" ddp)="" dist.init_process_group(init_method="tcp://" +="" str(self.config.master_addr)="" ':'="" str(self.config.master_port),="" backend="Backend.GLOO," rank="self.global_rank," world_size="self.world_size)" ...="" (yellow="" color)="" self.active_process_group="dist.new_group(ranks=self.active_ranks," timeout="timedelta(days=365))" self.comm_broadcast_group="dist.new_group(ranks=[i" i="" range(self.world_size)],="" ddp-enabled="" workers="" changed.="" note:="" 1.="" used="" distributed="" all-reduction.="" if="" none,="" default="" created="" torch.distributed.init_process_group,="" will="" used.="" our="" case,="" set="" 2.="" device_ids="" length="1" (the="" resides="" single="" cuda="" device).="" self.pipe_len="gpu_num_per_process" gpu_num_per_process="" &gt;="" 1:="" process_group="self.active_process_group," find_unused_parameters="True)" else:="" broadcast="" among="" dist.broadcast_object_list="" def="" dist_broadcast(object_list,="" src,="" group):="" """broadcasts="" object="" parties."""="" dist.broadcast_object_list(object_list,="" return="" object_list="" dp="" auto_dp.py.="" experiments="" section="" first="" summarizes="" experiment="" setups="" evaluates="" computer="" vision="" natural="" language="" processing="" tasks.="" hardware.="" were="" conducted="" 2="" identical="" machines="" connected="" infiniband="" cx353a="" (5gb="" s),="" equipped="" nvidia="" quadro="" rtx="" 5000="" (16gb="" memory).="" gpu-to-gpu="" bandwidth="" within="" (pci="" 3.0,="" 16="" lanes)="" 15.754gb="" s.="" implementation.="" building="" block.="" bert="" definition,="" configuration,="" related="" tokenizer="" huggingface="" 3.5.0.="" implemented="" transformer="" tensorflow="" details="" found="" code.="" models="" datasets.="" employ="" two="" representative="" transformers="" cv="" nlp:="" (vit)="" bert.="" vit="" was="" image="" classification="" task,="" initialized="" pre-trained="" imagenet21k="" fine-tuned="" imagenet="" cifar-100.="" tasks,="" text="" sst-2="" general="" understanding="" evaluation="" (glue)="" benchmark,="" question="" answering="" squad="" v1.1="" (stanford="" answering),="" collection="" 100k="" crowdsourced="" answer="" pairs.="" schemes.="" large="" normally="" would="" thousands="" gpu-days="" {\emph{e.g.},="" gpt-3)="" trained="" scratch,="" fine-tuning="" downstream="" tasks="" become="" trend="" nlp="" communities.="" complex="" system="" involves="" multiple="" core="" components.="" thus,="" version="" development="" algorithmic="" research,="" cost-efficient="" develop="" evaluate="" scratch="" large-scale="" pre-training.="" presented="" focuses="" models.="" note="" architectures="" pre-training="" same,="" serve="" both.="" discussed="" results="" appendix.="" baseline.="" compare="" state-of-the-art="" framework,="" scheme="" (pytorch’s="" implementation="" gpipe)="" paper="" studies="" accelerating="" freezing="" there="" no="" perfectly="" aligned="" counterpart="" solutions="" yet.="" hyper-parameters.="" vit-b="" (12="" input="" patch="" size)="" cifar-100,="" bert-large-uncased="" (24="" layers)="" 1.1,="" bert-base-uncased="" sst-2.="" pipetransformer,="" per-pipeline="" batch="" around="" 400="" 64,="" other="" hyperparameters="" epoch,="" rate)="" overall="" acceleration="" summarize="" experimental="" table="" speedup="" report="" based="" conservative="" \alpha="" \frac{1}{3}="" obtain="" comparable="" or="" even="" higher="" accuracy.="" aggressive="" (\frac{2}{5},="" \frac{1}{2})="" may="" slight="" loss="" larger="" than="" layers),="" thus="" takes="" time="" performance="" analysis="" breakdown="" presents="" analyzes="" different="" components="" \autopipe.="" 9.="" (vit="" imagenet)="" understand="" efficacy="" their="" impacts="" speed,="" experimented="" combinations="" sample="" throughput="" (samples="" second)="" ratio="" metrics.="" illustrated="" key="" takeaways="" are:="" main="" result="" elastic="" pipelining="" achieved="" joint="" autodp;="" autocache’s="" contribution="" amplified="" freeze="" alone="" without="" system-wise="" adjustment="" downgrades="" speed.="" tuning="" 10.="" ran="" show="" algorithms="" influences="" clearly="" demonstrates="" (excessive="" freeze)="" leads="" greater="" suffers="" degradation.="" case="" 10,="" outperforms="" normal="" obtains="" 2.04-fold="" speedup.="" provide="" chunks="" 11.="" chunk="" profiled="" lengths="" k.="" summarized="" see,="" m,="" gaps="" across="" (as="" confirms="" necessity="" anterior="" profiler="" pipelining.="" timing="" caching="" 12.="" autocache,="" compared="" autocache="" (blue)="" job="" (red).="" 12="" shows="" enabling="" too="" early="" slow="" down="" training,="" expensive="" propagation="" small="" layers.="" after="" layers="" frozen,="" activations="" outperform="" corresponding="" propagation.="" result,="" uses="" determine="" proper="" enable="" caching.="" system,="" starts="" 3="" 5="" detailed="" analysis,="" paper.="" summarization="" blog="" introduces="" holistic="" solution="" combines="" pipeline-parallel="" apis.="" incrementally="" freezes="" packs="" remaining="" forks="" evaluations="" baseline,="" attains="" 2.83×="" speedups="" accuracy="" loss.="" reference="" [1]="" li,="" s.,="" zhao,="" y.,="" varma,="" r.,="" salpekar,="" o.,="" noordhuis,="" p.,="" li,t.,="" paszke,="" a.,="" smith,="" j.,="" vaughan,="" b.,="" damania,="" et="" al.="" distributed:="" experiences="" dataparallel="" proceedings="" vldb="" endowment,13(12),="" 2020="" [2]="" devlin,="" chang,="" m.="" w.,="" lee,="" k.,="" toutanova,="" bert:="" deep="" bidirectional="" understanding.="" naacl-hlt,="" 2019="" [3]="" dosovitskiy,="" beyer,="" l.,="" kolesnikov,="" weissenborn,="" d.,="" zhai,="" x.,="" unterthiner,="" t.,="" dehghani,="" m.,="" minderer,="" heigold,="" g.,="" gelly,="" worth="" 16x16="" words:="" recognition="" at="" scale.="" [4]="" brown,="" t.="" mann,="" ryder,="" n.,="" subbiah,="" kaplan,="" dhariwal,="" neelakantan,="" shyam,="" sastry,="" askell,="" few-shot="" learners.="" [5]="" lepikhin,="" h.,="" xu,="" chen,="" firat,="" huang,="" krikun,="" shazeer,="" z.="" gshard:="" scaling="" giant="" conditional="" automatic="" sharding.="" [6]="" andersen,="" d.="" park,="" j.="" smola,="" a.="" ahmed,="" josifovski,="" v.,="" long,="" shekita,="" e.="" su,="" b.="" y.="" server.="" 11th="" {usenix}="" symposium="" operating="" ({osdi}="" 14),="" pp.="" 583–598,="" 2014.="" [7]="" jiang,="" zhu,="" lan,="" c.,="" yi,="" cui,="" guo,="" c.="" unified="" architecture="" dnn="" heterogeneous="" cpu="" clusters.="" 14th="" usenix="" (osdi="" 20),="" 463–479.="" association,="" november="" 2020.="" isbn="" 978-1-939133-19-="" [8]="" kim,="" yu,="" g.="" i.,="" cho,="" jeong,="" e.,="" ha,="" chun,="" parallax:="" sparsity-aware="" neural="" networks.="" fourteenth="" eurosys="" conference="" 2019,="" 1–15,="" 2019.="" [9]="" baek,="" yoon,="" lim,="" torchgpipe:="" on-the-fly="" parallelism="" [10]="" cheng,="" bapna,="" ngiam,="" le,="" q.="" wu,="" gpipe:="" efficient="" networks="" parallelism.="" [11]="" yun,="" nguyen,="" n.="" choi,="" noh,="" ri="" hetpipe:="" (whimpy)="" clusters="" integration="" annual="" technical="" (usenix="" atc="" 307–321.="" july="" 978-1-939133-="" 14-4.="" [12]="" narayanan,="" harlap,="" phanishayee,="" seshadri,="" devanur,="" ganger,="" gibbons,="" p.="" zaharia,="" pipedream:="" generalized="" 27th="" acm="" principles,="" sosp="" ’19,="" york,="" ny,="" usa,="" association="" computing="" machinery.="" 9781450368735.="" doi:="" 10.1145="" 3341301.3359646.="" [13]="" [14]="" parmar,="" tran,="" vaswani,="" koanantakool,="" hawkins,="" hong,="" young,="" sepassi,="" hechtman,="" mesh-tensorflow:="" supercomputers.="" bengio,="" wallach,="" larochelle,="" grauman,="" cesa-bianchi,="" garnett,="" r.="" (eds.),="" advances="" systems,="" volume="" 31,="" 10414–10423.="" curran="" associates,="" inc.,="" 2018.="" [15]="" shoeybi,="" patwary,="" puri,="" legresley,="" casper,="" catanzaro,="" megatron-lm:="" multi-billion="" [16]="" rajbhandari,="" rasley,="" ruwase,="" he,="" zero:="" memory="" optimization="" towards="" trillion="" [17]="" raghu,="" gilmer,="" yosinski,="" sohl="" dickstein,="" svcca:="" singular="" vector="" canonical="" correlation="" dynamics="" interpretability.="" nips,="" 2017.="" [18]="" morcos,="" insights="" representational="" similarity="" correlation.="" 5732–5741.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/pipetransformer_overview.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/pipetransformer_overview.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models">
+<meta property="og:description" content="In this blog post, we describe the first peer-reviewed research paper that explores accelerating the hybrid of PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline) - PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models (Transformers such as BERT [2]  and ViT [3]), published at ICML 2021.
+
+PipeTransformer leverages automated elastic pipelining for efficient distributed training of Transformer models. In PipeTransformer, we designed an adaptive on-the-fly freeze algorithm that can identify and freeze some layers gradually during training and an elastic pipelining system that can dynamically allocate resources to train the remaining active layers. More specifically, PipeTransformer automatically excludes frozen layers from the pipeline, packs active layers into fewer GPUs, and forks more replicas to increase data-parallel width. We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on SQuAD and GLUE datasets. Our results show that compared to the state-of-the-art baseline, PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+
+Next, we will introduce the background, motivation, our idea, design, and how we implement the algorithm and system with PyTorch Distributed APIs.
+
+
+  Paper: http://proceedings.mlr.press/v139/he21a.html
+  Source Code: https://DistML.ai.
+  Slides: https://docs.google.com/presentation/d/1t6HWL33KIQo2as0nSHeBpXYtTBcy0nXCoLiKd0EashY/edit?usp=sharing
+
+
+Introduction
+
+
+
+Figure 1: the Parameter Number of Transformer Models Increases Dramatically.
+
+
+Large Transformer models [4][5] have powered accuracy breakthroughs in both natural language processing and computer vision. GPT-3 [4] hit a new record high accuracy for nearly all NLP tasks. Vision Transformer (ViT) [3] also achieved 89\% top-1 accuracy in ImageNet, outperforming state-of-the-art convolutional networks ResNet-152 and EfficientNet. To tackle the growth in model sizes, researchers have proposed various distributed training techniques, including parameter servers [6][7][8], pipeline parallelism [9][10][11][12], intra-layer parallelism [13][14][15], and zero redundancy data-parallel [16].
+
+Existing distributed training solutions, however, only study scenarios where all model weights are required to be optimized throughout the training (i.e., computation and communication overhead remains relatively static over different iterations). Recent works on progressive training suggest that parameters in neural networks can be trained dynamically:
+
+
+  Freeze Training: Singular Vector Canonical Correlation Analysis for Deep Learning Dynamics and Interpretability. NeurIPS 2017
+  Efficient Training of BERT by Progressively Stacking. ICML 2019
+  Accelerating Training of Transformer-Based Language Models with Progressive Layer Dropping. NeurIPS 2020.
+  On the Transformer Growth for Progressive BERT Training. NACCL 2021
+
+
+
+
+
+
+Figure 2. Interpretable Freeze Training: DNNs converge bottom-up (Results on CIFAR10 using ResNet). Each pane shows layer-by-layer similarity using SVCCA [17][18]
+
+For example, in freeze training [17][18], neural networks usually converge from the bottom-up (i.e., not all layers need to be trained all the way through training). Figure 2 shows an example of how weights gradually stabilize during training in this approach. This observation motivates us to utilize freeze training for distributed training of Transformer models to accelerate training by dynamically allocating resources to focus on a shrinking set of active layers. Such a layer freezing strategy is especially pertinent to pipeline parallelism, as excluding consecutive bottom layers from the pipeline can reduce computation, memory, and communication overhead.
+
+
+
+
+Figure 3. The process of PipeTransformer’s automated and elastic pipelining to accelerate distributed training of Transformer models
+
+
+We propose PipeTransformer, an elastic pipelining training acceleration framework that automatically reacts to frozen layers by dynamically transforming the scope of the pipelined model and the number of pipeline replicas. To the best of our knowledge, this is the first paper that studies layer freezing in the context of both pipeline and data-parallel training. Figure 3 demonstrates the benefits of such a combination. First, by excluding frozen layers from the pipeline, the same model can be packed into fewer GPUs, leading to both fewer cross-GPU communications and smaller pipeline bubbles. Second, after packing the model into fewer GPUs, the same cluster can accommodate more pipeline replicas, increasing the width of data parallelism. More importantly, the speedups acquired from these two benefits are multiplicative rather than additive, further accelerating the training.
+
+The design of PipeTransformer faces four major challenges. First, the freeze algorithm must make on-the-fly and adaptive freezing decisions; however, existing work [17][18] only provides a posterior analysis tool. Second, the efficiency of pipeline re-partitioning results is influenced by multiple factors, including partition granularity, cross-partition activation size, and the chunking (the number of micro-batches) in mini-batches, which require reasoning and searching in a large solution space. Third, to dynamically introduce additional pipeline replicas, PipeTransformer must overcome the static nature of collective communications and avoid potentially complex cross-process messaging protocols when onboarding new processes (one pipeline is handled by one process). Finally, caching can save time for repeated forward propagation of frozen layers, but it must be shared between existing pipelines and newly added ones, as the system cannot afford to create and warm up a dedicated cache for each replica.
+
+
+
+
+Figure 4: An Animation to Show the Dynamics of PipeTransformer
+
+
+As shown in the animation (Figure 4), PipeTransformer is designed with four core building blocks to address the aforementioned challenges. First, we design a tunable and adaptive algorithm to generate signals that guide the selection of layers to freeze over different iterations (Freeze Algorithm). Once triggered by these signals, our elastic pipelining module (AutoPipe), then packs the remaining active layers into fewer GPUs by taking both activation sizes and variances of workloads across heterogeneous partitions (frozen layers and active layers) into account. It then splits a mini-batch into an optimal number of micro-batches based on prior profiling results for different pipeline lengths. Our next module, AutoDP, spawns additional pipeline replicas to occupy freed-up GPUs and maintains hierarchical communication process groups to attain dynamic membership for collective communications. Our final module, AutoCache, efficiently shares activations across existing and new data-parallel processes and automatically replaces stale caches during transitions.
+
+Overall, PipeTransformer combines the Freeze Algorithm, AutoPipe, AutoDP, and AutoCache modules to provide a significant training speedup.
+We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on GLUE and SQuAD datasets. Our results show that PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+Finally, we have also developed open-source flexible APIs for PipeTransformer, which offer a clean separation among the freeze algorithm, model definitions, and training accelerations, allowing for transferability to other algorithms that require similar freezing strategies.
+
+Overall Design
+
+Suppose we aim to train a massive model in a distributed training system where the hybrid of pipelined model parallelism and data parallelism is used to target scenarios where either the memory of a single GPU device cannot hold the model, or if loaded, the batch size is small enough to avoid running out of memory. More specifically, we define our settings as follows:
+
+Training task and model definition. We train Transformer models (e.g., Vision Transformer, BERT on large-scale image or text datasets. The Transformer model mathcal{F} has L layers, in which the i th layer is composed of a forward computation function f_i and a corresponding set of parameters.
+
+Training infrastructure. Assume the training infrastructure contains a GPU cluster that has N GPU servers (i.e. nodes). Each node has I GPUs. Our cluster is homogeneous, meaning that each GPU and server have the same hardware configuration. Each GPU’s memory capacity is M_\text{GPU}. Servers are connected by a high bandwidth network interface such as InfiniBand interconnect.
+
+Pipeline parallelism. In each machine, we load a model \mathcal{F} into a pipeline \mathcal{P} which has Kpartitions (K also represents the pipeline length). The kth partition p_k consists of consecutive layers. We assume each partition is handled by a single GPU device. 1 \leq K \leq I, meaning that we can build multiple pipelines for multiple model replicas in a single machine. We assume all GPU devices in a pipeline belonging to the same machine. Our pipeline is a synchronous pipeline, which does not involve stale gradients, and the number of micro-batches is M. In the Linux OS, each pipeline is handled by a single process. We refer the reader to GPipe [10] for more details.
+
+Data parallelism. DDP is a cross-machine distributed data-parallel process group within R parallel workers. Each worker is a pipeline replica (a single process). The rth worker’s index (ID) is rank r. For any two pipelines in DDP, they can belong to either the same GPU server or different GPU servers, and they can exchange gradients with the AllReduce algorithm.
+
+Under these settings, our goal is to accelerate training by leveraging freeze training, which does not require all layers to be trained throughout the duration of the training. Additionally, it may help save computation, communication, memory cost, and potentially prevent overfitting by consecutively freezing layers. However, these benefits can only be achieved by overcoming the four challenges of designing an adaptive freezing algorithm, dynamical pipeline re-partitioning, efficient resource reallocation, and cross-process caching, as discussed in the introduction.
+
+
+
+
+Figure 5. Overview of PipeTransformer Training System
+
+
+PipeTransformer co-designs an on-the-fly freeze algorithm and an automated elastic pipelining training system that can dynamically transform the scope of the pipelined model and the number of pipeline replicas. The overall system architecture is illustrated in Figure 5.  To support PipeTransformer’s elastic pipelining, we maintain a customized version of PyTorch Pipeline. For data parallelism, we use PyTorch DDP as a baseline. Other libraries are standard mechanisms of an operating system (e.g.,multi-processing) and thus avoid specialized software or hardware customization requirements. To ensure the generality of our framework, we have decoupled the training system into four core components: freeze algorithm, AutoPipe, AutoDP, and AutoCache. The freeze algorithm (grey) samples indicators from the training loop and makes layer-wise freezing decisions, which will be shared with AutoPipe (green). AutoPipe is an elastic pipeline module that speeds up training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs (pink), leading to both fewer cross-GPU communications and smaller pipeline bubbles. Subsequently, AutoPipe passes pipeline length information to AutoDP (purple), which then spawns more pipeline replicas to increase data-parallel width, if possible. The illustration also includes an example in which AutoDP introduces a new replica (purple). AutoCache (orange edges) is a cross-pipeline caching module, as illustrated by connections between pipelines. The source code architecture is aligned with Figure 5 for readability and generality.
+
+Implementation Using PyTorch APIs
+
+As can be seen from Figure 5, PipeTransformers contain four components: Freeze Algorithm, AutoPipe, AutoDP, and AutoCache. Among them, AutoPipe and AutoDP relies on PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline), respectively. In this blog, we only highlight the key implementation details of AutoPipe and AutoDP. For details of Freeze Algorithm and AutoCache, please refer to our paper.
+
+AutoPipe: Elastic Pipelining
+
+AutoPipe can accelerate training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs. This section elaborates on the key components of AutoPipe that dynamically 1) partition pipelines, 2) minimize the number of pipeline devices, and 3) optimize mini-batch chunk size accordingly.
+
+Basic Usage of PyTorch Pipeline
+
+Before diving into details of AutoPipe, let us warm up the basic usage of PyTorch Pipeline (torch.distributed.pipeline.sync.Pipe, see this tutorial). More specially, we present a simple example to understand the design of Pipeline in practice:
+
+# Step 1: build a model including two linear layers
+fc1 = nn.Linear(16, 8).cuda(0)
+fc2 = nn.Linear(8, 4).cuda(1)
+
+# Step 2: wrap the two layers with nn.Sequential
+model = nn.Sequential(fc1, fc2)
+
+# Step 3: build Pipe (torch.distributed.pipeline.sync.Pipe)
+model = Pipe(model, chunks=8)
+
+# do training/inference
+input = torch.rand(16, 16).cuda(0)
+output_rref = model(input)
+
+
+In this basic example, we can see that before initializing Pipe, we need to partition the model nn.Sequential into multiple GPU devices and set optimal chunk number (chunks). Balancing computation time across partitions is critical to pipeline training speed, as skewed workload distributions across stages can lead to stragglers and forcing devices with lighter workloads to wait. The chunk number may also have a non-trivial influence on the throughput of the pipeline.
+
+Balanced Pipeline Partitioning
+
+In dynamic training system such as PipeTransformer, maintaining optimally balanced partitions in terms of parameter numbers does not guarantee the fastest training speed because other factors also play a crucial role:
+
+
+
+
+Figure 6. The partition boundary is in the middle of a skip connection
+
+
+
+  
+    Cross-partition communication overhead. Placing a partition boundary in the middle of a skip connection leads to additional communications since tensors in the skip connection must now be copied to a different GPU. For example, with BERT partitions in Figure 6, partition k must take intermediate outputs from both partition k-2 and partition k-1. In contrast, if the boundary is placed after the addition layer, the communication overhead between partition k-1 and k is visibly smaller. Our measurements show that having cross-device communication is more expensive than having slightly imbalanced partitions (see the Appendix in our paper). Therefore, we do not consider breaking skip connections (highlighted separately as an entire attention layer and MLP layer in green color at line 7 in Algorithm 1.
+  
+  
+    Frozen layer memory footprint. During training, AutoPipe must recompute partition boundaries several times to balance two distinct types of layers: frozen layers and active layers. The frozen layer’s memory cost is a fraction of that inactive layer, given that the frozen layer does not need backward activation maps, optimizer states, and gradients. Instead of launching intrusive profilers to obtain thorough metrics on memory and computational cost, we define a tunable cost factor lambda_{\text{frozen}} to estimate the memory footprint ratio of a frozen layer over the same active layer. Based on empirical measurements in our experimental hardware, we set it to \frac{1}{6}.
+  
+
+
+
+
+
+
+
+Based on the above two considerations, AutoPipe balances pipeline partitions based on parameter sizes. More specifically, AutoPipe uses a greedy algorithm to allocate all frozen and active layers to evenly distribute partitioned sublayers into K GPU devices. Pseudocode is described as the load\_balance() function in Algorithm 1. The frozen layers are extracted from the original model and kept in a separate model instance \mathcal{F}_{\text{frozen}} in the first device of a pipeline.
+
+Note that the partition algorithm employed in this paper is not the only option; PipeTransformer is modularized to work with any alternatives.
+
+Pipeline Compression
+
+Pipeline compression helps to free up GPUs to accommodate more pipeline replicas and reduce the number of cross-device communications between partitions. To determine the timing of compression, we can estimate the memory cost of the largest partition after compression, and then compare it with that of the largest partition of a pipeline at timestep T=0. To avoid extensive memory profiling, the compression algorithm uses the parameter size as a proxy for the training memory footprint. Based on this simplification, the criterion of pipeline compression is as follows:
+
+
+
+
+
+
+Once the freeze notification is received, AutoPipe will always attempt to divide the pipeline length K by 2 (e.g., from 8 to 4, then 2). By using \frac{K}{2} as the input, the compression algorithm can verify if the result satisfies the criterion in Equation (1). Pseudocode is shown in lines 25-33 in Algorithm 1. Note that this compression makes the acceleration ratio exponentially increase during training, meaning that if a GPU server has a larger number of GPUs (e.g., more than 8), the acceleration ratio will be further amplified.
+
+
+
+
+Figure 7. Pipeline Bubble: F_{d,b}, and U_d" denote="" forward,="" backward,="" and="" the="" optimizer="" update="" of="" micro-batch="" b="" on="" device="" d,="" respectively.="" total="" bubble="" size="" in="" each="" iteration="" is="" k-1="" times="" per="" forward="" backward="" cost.="" additionally,="" such="" a="" technique="" can="" also="" speed="" up="" training="" by="" shrinking="" pipeline="" bubbles.="" to="" explain="" sizes="" pipeline,="" figure="" 7="" depicts="" how="" 4="" micro-batches="" run="" through="" 4-device="" k="4." general,="" (k-1)="" therefore,="" it="" clear="" that="" shorter="" pipelines="" have="" smaller="" sizes.="" dynamic="" number="" prior="" parallel="" systems="" use="" fixed="" mini-batch="" (m="" ).="" gpipe="" suggests="" m="" \geq="" \times="" k,="" where="" partitions="" (pipeline="" length).="" however,="" given="" pipetransformer="" dynamically="" configures="" we="" find="" be="" sub-optimal="" maintain="" static="" during="" training.="" moreover,="" when="" integrated="" with="" ddp,="" value="" has="" an="" impact="" efficiency="" ddp="" gradient="" synchronizations.="" since="" must="" wait="" for="" last="" finish="" its="" computation="" parameter="" before="" launching="" synchronization,="" finer="" lead="" overlap="" between="" communication.="" hence,="" instead="" using="" value,="" searches="" optimal="" fly="" hybrid="" environment="" enumerating="" values="" ranging="" from="" 6k.="" specific="" environment,="" profiling="" needs="" only="" done="" once="" (see="" algorithm="" 1="" line="" 35).="" complete="" source="" code,="" please="" refer="" https:="" github.com="" distributed-ai="" blob="" master="" pipe_transformer="" pipe="" auto_pipe.py.="" autodp:="" spawning="" more="" replicas="" as="" autopipe="" compresses="" same="" into="" fewer="" gpus,="" autodp="" automatically="" spawn="" new="" increase="" data-parallel="" width.="" despite="" conceptual="" simplicity,="" subtle="" dependencies="" communications="" states="" require="" careful="" design.="" challenges="" are="" threefold:="" communication:="" collective="" pytorch="" requires="" membership,="" which="" prevents="" connecting="" existing="" ones;="" state="" synchronization:="" newly="" activated="" processes="" consistent="" progress="" (e.g.,="" epoch="" learning="" rate),="" weights="" states,="" boundary="" frozen="" layers,="" gpu="" range;="" dataset="" redistribution:="" should="" re-balanced="" match="" pipelines.="" this="" not="" avoids="" stragglers="" but="" ensures="" gradients="" all="" equally="" weighted.="" 8.="" handling="" dynamical="" messaging="" double="" process="" groups="" (process="" 0-7="" belong="" machine="" 0,="" while="" 8-15="" 1)="" tackle="" these="" challenges,="" create="" communication="" ddp.="" example="" shown="" 8,="" message="" group="" (purple)="" responsible="" light-weight="" control="" messages="" covers="" processes,="" active="" (yellow)="" contains="" serves="" vehicle="" heavy-weight="" tensor="" remains="" static,="" whereas="" dismantled="" reconstructed="" processes.="" t0,="" 0="" 8="" active.="" transition="" t1,="" activates="" 9="" (newly="" added="" replicas)="" synchronizes="" necessary="" information="" mentioned="" above="" group.="" four="" then="" form="" group,="" allowing="" adaptive="" memberships.="" redistribute="" dataset,="" implement="" variant="" distributedsampler="" seamlessly="" adjust="" data="" samples="" replicas.="" design="" naturally="" helps="" reduce="" overhead.="" specifically,="" transitioning="" t0="" destroy="" instances,="" construct="" cached="" pipelined="" model="" (autopipe="" stores="" separately).="" following="" apis="" above.="" import="" torch.distributed="" dist="" torch.nn.parallel="" distributeddataparallel="" #="" initialize="" (this="" called="" initialization="" ddp)="" dist.init_process_group(init_method="tcp://" +="" str(self.config.master_addr)="" ':'="" str(self.config.master_port),="" backend="Backend.GLOO," rank="self.global_rank," world_size="self.world_size)" ...="" (yellow="" color)="" self.active_process_group="dist.new_group(ranks=self.active_ranks," timeout="timedelta(days=365))" self.comm_broadcast_group="dist.new_group(ranks=[i" i="" range(self.world_size)],="" ddp-enabled="" workers="" changed.="" note:="" 1.="" used="" distributed="" all-reduction.="" if="" none,="" default="" created="" torch.distributed.init_process_group,="" will="" used.="" our="" case,="" set="" 2.="" device_ids="" length="1" (the="" resides="" single="" cuda="" device).="" self.pipe_len="gpu_num_per_process" gpu_num_per_process="" &gt;="" 1:="" process_group="self.active_process_group," find_unused_parameters="True)" else:="" broadcast="" among="" dist.broadcast_object_list="" def="" dist_broadcast(object_list,="" src,="" group):="" """broadcasts="" object="" parties."""="" dist.broadcast_object_list(object_list,="" return="" object_list="" dp="" auto_dp.py.="" experiments="" section="" first="" summarizes="" experiment="" setups="" evaluates="" computer="" vision="" natural="" language="" processing="" tasks.="" hardware.="" were="" conducted="" 2="" identical="" machines="" connected="" infiniband="" cx353a="" (5gb="" s),="" equipped="" nvidia="" quadro="" rtx="" 5000="" (16gb="" memory).="" gpu-to-gpu="" bandwidth="" within="" (pci="" 3.0,="" 16="" lanes)="" 15.754gb="" s.="" implementation.="" building="" block.="" bert="" definition,="" configuration,="" related="" tokenizer="" huggingface="" 3.5.0.="" implemented="" transformer="" tensorflow="" details="" found="" code.="" models="" datasets.="" employ="" two="" representative="" transformers="" cv="" nlp:="" (vit)="" bert.="" vit="" was="" image="" classification="" task,="" initialized="" pre-trained="" imagenet21k="" fine-tuned="" imagenet="" cifar-100.="" tasks,="" text="" sst-2="" general="" understanding="" evaluation="" (glue)="" benchmark,="" question="" answering="" squad="" v1.1="" (stanford="" answering),="" collection="" 100k="" crowdsourced="" answer="" pairs.="" schemes.="" large="" normally="" would="" thousands="" gpu-days="" {\emph{e.g.},="" gpt-3)="" trained="" scratch,="" fine-tuning="" downstream="" tasks="" become="" trend="" nlp="" communities.="" complex="" system="" involves="" multiple="" core="" components.="" thus,="" version="" development="" algorithmic="" research,="" cost-efficient="" develop="" evaluate="" scratch="" large-scale="" pre-training.="" presented="" focuses="" models.="" note="" architectures="" pre-training="" same,="" serve="" both.="" discussed="" results="" appendix.="" baseline.="" compare="" state-of-the-art="" framework,="" scheme="" (pytorch’s="" implementation="" gpipe)="" paper="" studies="" accelerating="" freezing="" there="" no="" perfectly="" aligned="" counterpart="" solutions="" yet.="" hyper-parameters.="" vit-b="" (12="" input="" patch="" size)="" cifar-100,="" bert-large-uncased="" (24="" layers)="" 1.1,="" bert-base-uncased="" sst-2.="" pipetransformer,="" per-pipeline="" batch="" around="" 400="" 64,="" other="" hyperparameters="" epoch,="" rate)="" overall="" acceleration="" summarize="" experimental="" table="" speedup="" report="" based="" conservative="" \alpha="" \frac{1}{3}="" obtain="" comparable="" or="" even="" higher="" accuracy.="" aggressive="" (\frac{2}{5},="" \frac{1}{2})="" may="" slight="" loss="" larger="" than="" layers),="" thus="" takes="" time="" performance="" analysis="" breakdown="" presents="" analyzes="" different="" components="" \autopipe.="" 9.="" (vit="" imagenet)="" understand="" efficacy="" their="" impacts="" speed,="" experimented="" combinations="" sample="" throughput="" (samples="" second)="" ratio="" metrics.="" illustrated="" key="" takeaways="" are:="" main="" result="" elastic="" pipelining="" achieved="" joint="" autodp;="" autocache’s="" contribution="" amplified="" freeze="" alone="" without="" system-wise="" adjustment="" downgrades="" speed.="" tuning="" 10.="" ran="" show="" algorithms="" influences="" clearly="" demonstrates="" (excessive="" freeze)="" leads="" greater="" suffers="" degradation.="" case="" 10,="" outperforms="" normal="" obtains="" 2.04-fold="" speedup.="" provide="" chunks="" 11.="" chunk="" profiled="" lengths="" k.="" summarized="" see,="" m,="" gaps="" across="" (as="" confirms="" necessity="" anterior="" profiler="" pipelining.="" timing="" caching="" 12.="" autocache,="" compared="" autocache="" (blue)="" job="" (red).="" 12="" shows="" enabling="" too="" early="" slow="" down="" training,="" expensive="" propagation="" small="" layers.="" after="" layers="" frozen,="" activations="" outperform="" corresponding="" propagation.="" result,="" uses="" determine="" proper="" enable="" caching.="" system,="" starts="" 3="" 5="" detailed="" analysis,="" paper.="" summarization="" blog="" introduces="" holistic="" solution="" combines="" pipeline-parallel="" apis.="" incrementally="" freezes="" packs="" remaining="" forks="" evaluations="" baseline,="" attains="" 2.83×="" speedups="" accuracy="" loss.="" reference="" [1]="" li,="" s.,="" zhao,="" y.,="" varma,="" r.,="" salpekar,="" o.,="" noordhuis,="" p.,="" li,t.,="" paszke,="" a.,="" smith,="" j.,="" vaughan,="" b.,="" damania,="" et="" al.="" distributed:="" experiences="" dataparallel="" proceedings="" vldb="" endowment,13(12),="" 2020="" [2]="" devlin,="" chang,="" m.="" w.,="" lee,="" k.,="" toutanova,="" bert:="" deep="" bidirectional="" understanding.="" naacl-hlt,="" 2019="" [3]="" dosovitskiy,="" beyer,="" l.,="" kolesnikov,="" weissenborn,="" d.,="" zhai,="" x.,="" unterthiner,="" t.,="" dehghani,="" m.,="" minderer,="" heigold,="" g.,="" gelly,="" worth="" 16x16="" words:="" recognition="" at="" scale.="" [4]="" brown,="" t.="" mann,="" ryder,="" n.,="" subbiah,="" kaplan,="" dhariwal,="" neelakantan,="" shyam,="" sastry,="" askell,="" few-shot="" learners.="" [5]="" lepikhin,="" h.,="" xu,="" chen,="" firat,="" huang,="" krikun,="" shazeer,="" z.="" gshard:="" scaling="" giant="" conditional="" automatic="" sharding.="" [6]="" andersen,="" d.="" park,="" j.="" smola,="" a.="" ahmed,="" josifovski,="" v.,="" long,="" shekita,="" e.="" su,="" b.="" y.="" server.="" 11th="" {usenix}="" symposium="" operating="" ({osdi}="" 14),="" pp.="" 583–598,="" 2014.="" [7]="" jiang,="" zhu,="" lan,="" c.,="" yi,="" cui,="" guo,="" c.="" unified="" architecture="" dnn="" heterogeneous="" cpu="" clusters.="" 14th="" usenix="" (osdi="" 20),="" 463–479.="" association,="" november="" 2020.="" isbn="" 978-1-939133-19-="" [8]="" kim,="" yu,="" g.="" i.,="" cho,="" jeong,="" e.,="" ha,="" chun,="" parallax:="" sparsity-aware="" neural="" networks.="" fourteenth="" eurosys="" conference="" 2019,="" 1–15,="" 2019.="" [9]="" baek,="" yoon,="" lim,="" torchgpipe:="" on-the-fly="" parallelism="" [10]="" cheng,="" bapna,="" ngiam,="" le,="" q.="" wu,="" gpipe:="" efficient="" networks="" parallelism.="" [11]="" yun,="" nguyen,="" n.="" choi,="" noh,="" ri="" hetpipe:="" (whimpy)="" clusters="" integration="" annual="" technical="" (usenix="" atc="" 307–321.="" july="" 978-1-939133-="" 14-4.="" [12]="" narayanan,="" harlap,="" phanishayee,="" seshadri,="" devanur,="" ganger,="" gibbons,="" p.="" zaharia,="" pipedream:="" generalized="" 27th="" acm="" principles,="" sosp="" ’19,="" york,="" ny,="" usa,="" association="" computing="" machinery.="" 9781450368735.="" doi:="" 10.1145="" 3341301.3359646.="" [13]="" [14]="" parmar,="" tran,="" vaswani,="" koanantakool,="" hawkins,="" hong,="" young,="" sepassi,="" hechtman,="" mesh-tensorflow:="" supercomputers.="" bengio,="" wallach,="" larochelle,="" grauman,="" cesa-bianchi,="" garnett,="" r.="" (eds.),="" advances="" systems,="" volume="" 31,="" 10414–10423.="" curran="" associates,="" inc.,="" 2018.="" [15]="" shoeybi,="" patwary,="" puri,="" legresley,="" casper,="" catanzaro,="" megatron-lm:="" multi-billion="" [16]="" rajbhandari,="" rasley,="" ruwase,="" he,="" zero:="" memory="" optimization="" towards="" trillion="" [17]="" raghu,="" gilmer,="" yosinski,="" sohl="" dickstein,="" svcca:="" singular="" vector="" canonical="" correlation="" dynamics="" interpretability.="" nips,="" 2017.="" [18]="" morcos,="" insights="" representational="" similarity="" correlation.="" 5732–5741.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models">
+<meta name="twitter:description" content="In this blog post, we describe the first peer-reviewed research paper that explores accelerating the hybrid of PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline) - PipeTransformer: Automated Elastic Pipelining for Distributed Training of Large-scale Models (Transformers such as BERT [2]  and ViT [3]), published at ICML 2021.
+
+PipeTransformer leverages automated elastic pipelining for efficient distributed training of Transformer models. In PipeTransformer, we designed an adaptive on-the-fly freeze algorithm that can identify and freeze some layers gradually during training and an elastic pipelining system that can dynamically allocate resources to train the remaining active layers. More specifically, PipeTransformer automatically excludes frozen layers from the pipeline, packs active layers into fewer GPUs, and forks more replicas to increase data-parallel width. We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on SQuAD and GLUE datasets. Our results show that compared to the state-of-the-art baseline, PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+
+Next, we will introduce the background, motivation, our idea, design, and how we implement the algorithm and system with PyTorch Distributed APIs.
+
+
+  Paper: http://proceedings.mlr.press/v139/he21a.html
+  Source Code: https://DistML.ai.
+  Slides: https://docs.google.com/presentation/d/1t6HWL33KIQo2as0nSHeBpXYtTBcy0nXCoLiKd0EashY/edit?usp=sharing
+
+
+Introduction
+
+
+
+Figure 1: the Parameter Number of Transformer Models Increases Dramatically.
+
+
+Large Transformer models [4][5] have powered accuracy breakthroughs in both natural language processing and computer vision. GPT-3 [4] hit a new record high accuracy for nearly all NLP tasks. Vision Transformer (ViT) [3] also achieved 89\% top-1 accuracy in ImageNet, outperforming state-of-the-art convolutional networks ResNet-152 and EfficientNet. To tackle the growth in model sizes, researchers have proposed various distributed training techniques, including parameter servers [6][7][8], pipeline parallelism [9][10][11][12], intra-layer parallelism [13][14][15], and zero redundancy data-parallel [16].
+
+Existing distributed training solutions, however, only study scenarios where all model weights are required to be optimized throughout the training (i.e., computation and communication overhead remains relatively static over different iterations). Recent works on progressive training suggest that parameters in neural networks can be trained dynamically:
+
+
+  Freeze Training: Singular Vector Canonical Correlation Analysis for Deep Learning Dynamics and Interpretability. NeurIPS 2017
+  Efficient Training of BERT by Progressively Stacking. ICML 2019
+  Accelerating Training of Transformer-Based Language Models with Progressive Layer Dropping. NeurIPS 2020.
+  On the Transformer Growth for Progressive BERT Training. NACCL 2021
+
+
+
+
+
+
+Figure 2. Interpretable Freeze Training: DNNs converge bottom-up (Results on CIFAR10 using ResNet). Each pane shows layer-by-layer similarity using SVCCA [17][18]
+
+For example, in freeze training [17][18], neural networks usually converge from the bottom-up (i.e., not all layers need to be trained all the way through training). Figure 2 shows an example of how weights gradually stabilize during training in this approach. This observation motivates us to utilize freeze training for distributed training of Transformer models to accelerate training by dynamically allocating resources to focus on a shrinking set of active layers. Such a layer freezing strategy is especially pertinent to pipeline parallelism, as excluding consecutive bottom layers from the pipeline can reduce computation, memory, and communication overhead.
+
+
+
+
+Figure 3. The process of PipeTransformer’s automated and elastic pipelining to accelerate distributed training of Transformer models
+
+
+We propose PipeTransformer, an elastic pipelining training acceleration framework that automatically reacts to frozen layers by dynamically transforming the scope of the pipelined model and the number of pipeline replicas. To the best of our knowledge, this is the first paper that studies layer freezing in the context of both pipeline and data-parallel training. Figure 3 demonstrates the benefits of such a combination. First, by excluding frozen layers from the pipeline, the same model can be packed into fewer GPUs, leading to both fewer cross-GPU communications and smaller pipeline bubbles. Second, after packing the model into fewer GPUs, the same cluster can accommodate more pipeline replicas, increasing the width of data parallelism. More importantly, the speedups acquired from these two benefits are multiplicative rather than additive, further accelerating the training.
+
+The design of PipeTransformer faces four major challenges. First, the freeze algorithm must make on-the-fly and adaptive freezing decisions; however, existing work [17][18] only provides a posterior analysis tool. Second, the efficiency of pipeline re-partitioning results is influenced by multiple factors, including partition granularity, cross-partition activation size, and the chunking (the number of micro-batches) in mini-batches, which require reasoning and searching in a large solution space. Third, to dynamically introduce additional pipeline replicas, PipeTransformer must overcome the static nature of collective communications and avoid potentially complex cross-process messaging protocols when onboarding new processes (one pipeline is handled by one process). Finally, caching can save time for repeated forward propagation of frozen layers, but it must be shared between existing pipelines and newly added ones, as the system cannot afford to create and warm up a dedicated cache for each replica.
+
+
+
+
+Figure 4: An Animation to Show the Dynamics of PipeTransformer
+
+
+As shown in the animation (Figure 4), PipeTransformer is designed with four core building blocks to address the aforementioned challenges. First, we design a tunable and adaptive algorithm to generate signals that guide the selection of layers to freeze over different iterations (Freeze Algorithm). Once triggered by these signals, our elastic pipelining module (AutoPipe), then packs the remaining active layers into fewer GPUs by taking both activation sizes and variances of workloads across heterogeneous partitions (frozen layers and active layers) into account. It then splits a mini-batch into an optimal number of micro-batches based on prior profiling results for different pipeline lengths. Our next module, AutoDP, spawns additional pipeline replicas to occupy freed-up GPUs and maintains hierarchical communication process groups to attain dynamic membership for collective communications. Our final module, AutoCache, efficiently shares activations across existing and new data-parallel processes and automatically replaces stale caches during transitions.
+
+Overall, PipeTransformer combines the Freeze Algorithm, AutoPipe, AutoDP, and AutoCache modules to provide a significant training speedup.
+We evaluate PipeTransformer using Vision Transformer (ViT) on ImageNet and BERT on GLUE and SQuAD datasets. Our results show that PipeTransformer attains up to 2.83-fold speedup without losing accuracy. We also provide various performance analyses for a more comprehensive understanding of our algorithmic and system-wise design.
+Finally, we have also developed open-source flexible APIs for PipeTransformer, which offer a clean separation among the freeze algorithm, model definitions, and training accelerations, allowing for transferability to other algorithms that require similar freezing strategies.
+
+Overall Design
+
+Suppose we aim to train a massive model in a distributed training system where the hybrid of pipelined model parallelism and data parallelism is used to target scenarios where either the memory of a single GPU device cannot hold the model, or if loaded, the batch size is small enough to avoid running out of memory. More specifically, we define our settings as follows:
+
+Training task and model definition. We train Transformer models (e.g., Vision Transformer, BERT on large-scale image or text datasets. The Transformer model mathcal{F} has L layers, in which the i th layer is composed of a forward computation function f_i and a corresponding set of parameters.
+
+Training infrastructure. Assume the training infrastructure contains a GPU cluster that has N GPU servers (i.e. nodes). Each node has I GPUs. Our cluster is homogeneous, meaning that each GPU and server have the same hardware configuration. Each GPU’s memory capacity is M_\text{GPU}. Servers are connected by a high bandwidth network interface such as InfiniBand interconnect.
+
+Pipeline parallelism. In each machine, we load a model \mathcal{F} into a pipeline \mathcal{P} which has Kpartitions (K also represents the pipeline length). The kth partition p_k consists of consecutive layers. We assume each partition is handled by a single GPU device. 1 \leq K \leq I, meaning that we can build multiple pipelines for multiple model replicas in a single machine. We assume all GPU devices in a pipeline belonging to the same machine. Our pipeline is a synchronous pipeline, which does not involve stale gradients, and the number of micro-batches is M. In the Linux OS, each pipeline is handled by a single process. We refer the reader to GPipe [10] for more details.
+
+Data parallelism. DDP is a cross-machine distributed data-parallel process group within R parallel workers. Each worker is a pipeline replica (a single process). The rth worker’s index (ID) is rank r. For any two pipelines in DDP, they can belong to either the same GPU server or different GPU servers, and they can exchange gradients with the AllReduce algorithm.
+
+Under these settings, our goal is to accelerate training by leveraging freeze training, which does not require all layers to be trained throughout the duration of the training. Additionally, it may help save computation, communication, memory cost, and potentially prevent overfitting by consecutively freezing layers. However, these benefits can only be achieved by overcoming the four challenges of designing an adaptive freezing algorithm, dynamical pipeline re-partitioning, efficient resource reallocation, and cross-process caching, as discussed in the introduction.
+
+
+
+
+Figure 5. Overview of PipeTransformer Training System
+
+
+PipeTransformer co-designs an on-the-fly freeze algorithm and an automated elastic pipelining training system that can dynamically transform the scope of the pipelined model and the number of pipeline replicas. The overall system architecture is illustrated in Figure 5.  To support PipeTransformer’s elastic pipelining, we maintain a customized version of PyTorch Pipeline. For data parallelism, we use PyTorch DDP as a baseline. Other libraries are standard mechanisms of an operating system (e.g.,multi-processing) and thus avoid specialized software or hardware customization requirements. To ensure the generality of our framework, we have decoupled the training system into four core components: freeze algorithm, AutoPipe, AutoDP, and AutoCache. The freeze algorithm (grey) samples indicators from the training loop and makes layer-wise freezing decisions, which will be shared with AutoPipe (green). AutoPipe is an elastic pipeline module that speeds up training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs (pink), leading to both fewer cross-GPU communications and smaller pipeline bubbles. Subsequently, AutoPipe passes pipeline length information to AutoDP (purple), which then spawns more pipeline replicas to increase data-parallel width, if possible. The illustration also includes an example in which AutoDP introduces a new replica (purple). AutoCache (orange edges) is a cross-pipeline caching module, as illustrated by connections between pipelines. The source code architecture is aligned with Figure 5 for readability and generality.
+
+Implementation Using PyTorch APIs
+
+As can be seen from Figure 5, PipeTransformers contain four components: Freeze Algorithm, AutoPipe, AutoDP, and AutoCache. Among them, AutoPipe and AutoDP relies on PyTorch DDP (torch.nn.parallel.DistributedDataParallel) [1] and Pipeline (torch.distributed.pipeline), respectively. In this blog, we only highlight the key implementation details of AutoPipe and AutoDP. For details of Freeze Algorithm and AutoCache, please refer to our paper.
+
+AutoPipe: Elastic Pipelining
+
+AutoPipe can accelerate training by excluding frozen layers from the pipeline and packing the active layers into fewer GPUs. This section elaborates on the key components of AutoPipe that dynamically 1) partition pipelines, 2) minimize the number of pipeline devices, and 3) optimize mini-batch chunk size accordingly.
+
+Basic Usage of PyTorch Pipeline
+
+Before diving into details of AutoPipe, let us warm up the basic usage of PyTorch Pipeline (torch.distributed.pipeline.sync.Pipe, see this tutorial). More specially, we present a simple example to understand the design of Pipeline in practice:
+
+# Step 1: build a model including two linear layers
+fc1 = nn.Linear(16, 8).cuda(0)
+fc2 = nn.Linear(8, 4).cuda(1)
+
+# Step 2: wrap the two layers with nn.Sequential
+model = nn.Sequential(fc1, fc2)
+
+# Step 3: build Pipe (torch.distributed.pipeline.sync.Pipe)
+model = Pipe(model, chunks=8)
+
+# do training/inference
+input = torch.rand(16, 16).cuda(0)
+output_rref = model(input)
+
+
+In this basic example, we can see that before initializing Pipe, we need to partition the model nn.Sequential into multiple GPU devices and set optimal chunk number (chunks). Balancing computation time across partitions is critical to pipeline training speed, as skewed workload distributions across stages can lead to stragglers and forcing devices with lighter workloads to wait. The chunk number may also have a non-trivial influence on the throughput of the pipeline.
+
+Balanced Pipeline Partitioning
+
+In dynamic training system such as PipeTransformer, maintaining optimally balanced partitions in terms of parameter numbers does not guarantee the fastest training speed because other factors also play a crucial role:
+
+
+
+
+Figure 6. The partition boundary is in the middle of a skip connection
+
+
+
+  
+    Cross-partition communication overhead. Placing a partition boundary in the middle of a skip connection leads to additional communications since tensors in the skip connection must now be copied to a different GPU. For example, with BERT partitions in Figure 6, partition k must take intermediate outputs from both partition k-2 and partition k-1. In contrast, if the boundary is placed after the addition layer, the communication overhead between partition k-1 and k is visibly smaller. Our measurements show that having cross-device communication is more expensive than having slightly imbalanced partitions (see the Appendix in our paper). Therefore, we do not consider breaking skip connections (highlighted separately as an entire attention layer and MLP layer in green color at line 7 in Algorithm 1.
+  
+  
+    Frozen layer memory footprint. During training, AutoPipe must recompute partition boundaries several times to balance two distinct types of layers: frozen layers and active layers. The frozen layer’s memory cost is a fraction of that inactive layer, given that the frozen layer does not need backward activation maps, optimizer states, and gradients. Instead of launching intrusive profilers to obtain thorough metrics on memory and computational cost, we define a tunable cost factor lambda_{\text{frozen}} to estimate the memory footprint ratio of a frozen layer over the same active layer. Based on empirical measurements in our experimental hardware, we set it to \frac{1}{6}.
+  
+
+
+
+
+
+
+
+Based on the above two considerations, AutoPipe balances pipeline partitions based on parameter sizes. More specifically, AutoPipe uses a greedy algorithm to allocate all frozen and active layers to evenly distribute partitioned sublayers into K GPU devices. Pseudocode is described as the load\_balance() function in Algorithm 1. The frozen layers are extracted from the original model and kept in a separate model instance \mathcal{F}_{\text{frozen}} in the first device of a pipeline.
+
+Note that the partition algorithm employed in this paper is not the only option; PipeTransformer is modularized to work with any alternatives.
+
+Pipeline Compression
+
+Pipeline compression helps to free up GPUs to accommodate more pipeline replicas and reduce the number of cross-device communications between partitions. To determine the timing of compression, we can estimate the memory cost of the largest partition after compression, and then compare it with that of the largest partition of a pipeline at timestep T=0. To avoid extensive memory profiling, the compression algorithm uses the parameter size as a proxy for the training memory footprint. Based on this simplification, the criterion of pipeline compression is as follows:
+
+
+
+
+
+
+Once the freeze notification is received, AutoPipe will always attempt to divide the pipeline length K by 2 (e.g., from 8 to 4, then 2). By using \frac{K}{2} as the input, the compression algorithm can verify if the result satisfies the criterion in Equation (1). Pseudocode is shown in lines 25-33 in Algorithm 1. Note that this compression makes the acceleration ratio exponentially increase during training, meaning that if a GPU server has a larger number of GPUs (e.g., more than 8), the acceleration ratio will be further amplified.
+
+
+
+
+Figure 7. Pipeline Bubble: F_{d,b}, and U_d" denote="" forward,="" backward,="" and="" the="" optimizer="" update="" of="" micro-batch="" b="" on="" device="" d,="" respectively.="" total="" bubble="" size="" in="" each="" iteration="" is="" k-1="" times="" per="" forward="" backward="" cost.="" additionally,="" such="" a="" technique="" can="" also="" speed="" up="" training="" by="" shrinking="" pipeline="" bubbles.="" to="" explain="" sizes="" pipeline,="" figure="" 7="" depicts="" how="" 4="" micro-batches="" run="" through="" 4-device="" k="4." general,="" (k-1)="" therefore,="" it="" clear="" that="" shorter="" pipelines="" have="" smaller="" sizes.="" dynamic="" number="" prior="" parallel="" systems="" use="" fixed="" mini-batch="" (m="" ).="" gpipe="" suggests="" m="" \geq="" \times="" k,="" where="" partitions="" (pipeline="" length).="" however,="" given="" pipetransformer="" dynamically="" configures="" we="" find="" be="" sub-optimal="" maintain="" static="" during="" training.="" moreover,="" when="" integrated="" with="" ddp,="" value="" has="" an="" impact="" efficiency="" ddp="" gradient="" synchronizations.="" since="" must="" wait="" for="" last="" finish="" its="" computation="" parameter="" before="" launching="" synchronization,="" finer="" lead="" overlap="" between="" communication.="" hence,="" instead="" using="" value,="" searches="" optimal="" fly="" hybrid="" environment="" enumerating="" values="" ranging="" from="" 6k.="" specific="" environment,="" profiling="" needs="" only="" done="" once="" (see="" algorithm="" 1="" line="" 35).="" complete="" source="" code,="" please="" refer="" https:="" github.com="" distributed-ai="" blob="" master="" pipe_transformer="" pipe="" auto_pipe.py.="" autodp:="" spawning="" more="" replicas="" as="" autopipe="" compresses="" same="" into="" fewer="" gpus,="" autodp="" automatically="" spawn="" new="" increase="" data-parallel="" width.="" despite="" conceptual="" simplicity,="" subtle="" dependencies="" communications="" states="" require="" careful="" design.="" challenges="" are="" threefold:="" communication:="" collective="" pytorch="" requires="" membership,="" which="" prevents="" connecting="" existing="" ones;="" state="" synchronization:="" newly="" activated="" processes="" consistent="" progress="" (e.g.,="" epoch="" learning="" rate),="" weights="" states,="" boundary="" frozen="" layers,="" gpu="" range;="" dataset="" redistribution:="" should="" re-balanced="" match="" pipelines.="" this="" not="" avoids="" stragglers="" but="" ensures="" gradients="" all="" equally="" weighted.="" 8.="" handling="" dynamical="" messaging="" double="" process="" groups="" (process="" 0-7="" belong="" machine="" 0,="" while="" 8-15="" 1)="" tackle="" these="" challenges,="" create="" communication="" ddp.="" example="" shown="" 8,="" message="" group="" (purple)="" responsible="" light-weight="" control="" messages="" covers="" processes,="" active="" (yellow)="" contains="" serves="" vehicle="" heavy-weight="" tensor="" remains="" static,="" whereas="" dismantled="" reconstructed="" processes.="" t0,="" 0="" 8="" active.="" transition="" t1,="" activates="" 9="" (newly="" added="" replicas)="" synchronizes="" necessary="" information="" mentioned="" above="" group.="" four="" then="" form="" group,="" allowing="" adaptive="" memberships.="" redistribute="" dataset,="" implement="" variant="" distributedsampler="" seamlessly="" adjust="" data="" samples="" replicas.="" design="" naturally="" helps="" reduce="" overhead.="" specifically,="" transitioning="" t0="" destroy="" instances,="" construct="" cached="" pipelined="" model="" (autopipe="" stores="" separately).="" following="" apis="" above.="" import="" torch.distributed="" dist="" torch.nn.parallel="" distributeddataparallel="" #="" initialize="" (this="" called="" initialization="" ddp)="" dist.init_process_group(init_method="tcp://" +="" str(self.config.master_addr)="" ':'="" str(self.config.master_port),="" backend="Backend.GLOO," rank="self.global_rank," world_size="self.world_size)" ...="" (yellow="" color)="" self.active_process_group="dist.new_group(ranks=self.active_ranks," timeout="timedelta(days=365))" self.comm_broadcast_group="dist.new_group(ranks=[i" i="" range(self.world_size)],="" ddp-enabled="" workers="" changed.="" note:="" 1.="" used="" distributed="" all-reduction.="" if="" none,="" default="" created="" torch.distributed.init_process_group,="" will="" used.="" our="" case,="" set="" 2.="" device_ids="" length="1" (the="" resides="" single="" cuda="" device).="" self.pipe_len="gpu_num_per_process" gpu_num_per_process="" &gt;="" 1:="" process_group="self.active_process_group," find_unused_parameters="True)" else:="" broadcast="" among="" dist.broadcast_object_list="" def="" dist_broadcast(object_list,="" src,="" group):="" """broadcasts="" object="" parties."""="" dist.broadcast_object_list(object_list,="" return="" object_list="" dp="" auto_dp.py.="" experiments="" section="" first="" summarizes="" experiment="" setups="" evaluates="" computer="" vision="" natural="" language="" processing="" tasks.="" hardware.="" were="" conducted="" 2="" identical="" machines="" connected="" infiniband="" cx353a="" (5gb="" s),="" equipped="" nvidia="" quadro="" rtx="" 5000="" (16gb="" memory).="" gpu-to-gpu="" bandwidth="" within="" (pci="" 3.0,="" 16="" lanes)="" 15.754gb="" s.="" implementation.="" building="" block.="" bert="" definition,="" configuration,="" related="" tokenizer="" huggingface="" 3.5.0.="" implemented="" transformer="" tensorflow="" details="" found="" code.="" models="" datasets.="" employ="" two="" representative="" transformers="" cv="" nlp:="" (vit)="" bert.="" vit="" was="" image="" classification="" task,="" initialized="" pre-trained="" imagenet21k="" fine-tuned="" imagenet="" cifar-100.="" tasks,="" text="" sst-2="" general="" understanding="" evaluation="" (glue)="" benchmark,="" question="" answering="" squad="" v1.1="" (stanford="" answering),="" collection="" 100k="" crowdsourced="" answer="" pairs.="" schemes.="" large="" normally="" would="" thousands="" gpu-days="" {\emph{e.g.},="" gpt-3)="" trained="" scratch,="" fine-tuning="" downstream="" tasks="" become="" trend="" nlp="" communities.="" complex="" system="" involves="" multiple="" core="" components.="" thus,="" version="" development="" algorithmic="" research,="" cost-efficient="" develop="" evaluate="" scratch="" large-scale="" pre-training.="" presented="" focuses="" models.="" note="" architectures="" pre-training="" same,="" serve="" both.="" discussed="" results="" appendix.="" baseline.="" compare="" state-of-the-art="" framework,="" scheme="" (pytorch’s="" implementation="" gpipe)="" paper="" studies="" accelerating="" freezing="" there="" no="" perfectly="" aligned="" counterpart="" solutions="" yet.="" hyper-parameters.="" vit-b="" (12="" input="" patch="" size)="" cifar-100,="" bert-large-uncased="" (24="" layers)="" 1.1,="" bert-base-uncased="" sst-2.="" pipetransformer,="" per-pipeline="" batch="" around="" 400="" 64,="" other="" hyperparameters="" epoch,="" rate)="" overall="" acceleration="" summarize="" experimental="" table="" speedup="" report="" based="" conservative="" \alpha="" \frac{1}{3}="" obtain="" comparable="" or="" even="" higher="" accuracy.="" aggressive="" (\frac{2}{5},="" \frac{1}{2})="" may="" slight="" loss="" larger="" than="" layers),="" thus="" takes="" time="" performance="" analysis="" breakdown="" presents="" analyzes="" different="" components="" \autopipe.="" 9.="" (vit="" imagenet)="" understand="" efficacy="" their="" impacts="" speed,="" experimented="" combinations="" sample="" throughput="" (samples="" second)="" ratio="" metrics.="" illustrated="" key="" takeaways="" are:="" main="" result="" elastic="" pipelining="" achieved="" joint="" autodp;="" autocache’s="" contribution="" amplified="" freeze="" alone="" without="" system-wise="" adjustment="" downgrades="" speed.="" tuning="" 10.="" ran="" show="" algorithms="" influences="" clearly="" demonstrates="" (excessive="" freeze)="" leads="" greater="" suffers="" degradation.="" case="" 10,="" outperforms="" normal="" obtains="" 2.04-fold="" speedup.="" provide="" chunks="" 11.="" chunk="" profiled="" lengths="" k.="" summarized="" see,="" m,="" gaps="" across="" (as="" confirms="" necessity="" anterior="" profiler="" pipelining.="" timing="" caching="" 12.="" autocache,="" compared="" autocache="" (blue)="" job="" (red).="" 12="" shows="" enabling="" too="" early="" slow="" down="" training,="" expensive="" propagation="" small="" layers.="" after="" layers="" frozen,="" activations="" outperform="" corresponding="" propagation.="" result,="" uses="" determine="" proper="" enable="" caching.="" system,="" starts="" 3="" 5="" detailed="" analysis,="" paper.="" summarization="" blog="" introduces="" holistic="" solution="" combines="" pipeline-parallel="" apis.="" incrementally="" freezes="" packs="" remaining="" forks="" evaluations="" baseline,="" attains="" 2.83×="" speedups="" accuracy="" loss.="" reference="" [1]="" li,="" s.,="" zhao,="" y.,="" varma,="" r.,="" salpekar,="" o.,="" noordhuis,="" p.,="" li,t.,="" paszke,="" a.,="" smith,="" j.,="" vaughan,="" b.,="" damania,="" et="" al.="" distributed:="" experiences="" dataparallel="" proceedings="" vldb="" endowment,13(12),="" 2020="" [2]="" devlin,="" chang,="" m.="" w.,="" lee,="" k.,="" toutanova,="" bert:="" deep="" bidirectional="" understanding.="" naacl-hlt,="" 2019="" [3]="" dosovitskiy,="" beyer,="" l.,="" kolesnikov,="" weissenborn,="" d.,="" zhai,="" x.,="" unterthiner,="" t.,="" dehghani,="" m.,="" minderer,="" heigold,="" g.,="" gelly,="" worth="" 16x16="" words:="" recognition="" at="" scale.="" [4]="" brown,="" t.="" mann,="" ryder,="" n.,="" subbiah,="" kaplan,="" dhariwal,="" neelakantan,="" shyam,="" sastry,="" askell,="" few-shot="" learners.="" [5]="" lepikhin,="" h.,="" xu,="" chen,="" firat,="" huang,="" krikun,="" shazeer,="" z.="" gshard:="" scaling="" giant="" conditional="" automatic="" sharding.="" [6]="" andersen,="" d.="" park,="" j.="" smola,="" a.="" ahmed,="" josifovski,="" v.,="" long,="" shekita,="" e.="" su,="" b.="" y.="" server.="" 11th="" {usenix}="" symposium="" operating="" ({osdi}="" 14),="" pp.="" 583–598,="" 2014.="" [7]="" jiang,="" zhu,="" lan,="" c.,="" yi,="" cui,="" guo,="" c.="" unified="" architecture="" dnn="" heterogeneous="" cpu="" clusters.="" 14th="" usenix="" (osdi="" 20),="" 463–479.="" association,="" november="" 2020.="" isbn="" 978-1-939133-19-="" [8]="" kim,="" yu,="" g.="" i.,="" cho,="" jeong,="" e.,="" ha,="" chun,="" parallax:="" sparsity-aware="" neural="" networks.="" fourteenth="" eurosys="" conference="" 2019,="" 1–15,="" 2019.="" [9]="" baek,="" yoon,="" lim,="" torchgpipe:="" on-the-fly="" parallelism="" [10]="" cheng,="" bapna,="" ngiam,="" le,="" q.="" wu,="" gpipe:="" efficient="" networks="" parallelism.="" [11]="" yun,="" nguyen,="" n.="" choi,="" noh,="" ri="" hetpipe:="" (whimpy)="" clusters="" integration="" annual="" technical="" (usenix="" atc="" 307–321.="" july="" 978-1-939133-="" 14-4.="" [12]="" narayanan,="" harlap,="" phanishayee,="" seshadri,="" devanur,="" ganger,="" gibbons,="" p.="" zaharia,="" pipedream:="" generalized="" 27th="" acm="" principles,="" sosp="" ’19,="" york,="" ny,="" usa,="" association="" computing="" machinery.="" 9781450368735.="" doi:="" 10.1145="" 3341301.3359646.="" [13]="" [14]="" parmar,="" tran,="" vaswani,="" koanantakool,="" hawkins,="" hong,="" young,="" sepassi,="" hechtman,="" mesh-tensorflow:="" supercomputers.="" bengio,="" wallach,="" larochelle,="" grauman,="" cesa-bianchi,="" garnett,="" r.="" (eds.),="" advances="" systems,="" volume="" 31,="" 10414–10423.="" curran="" associates,="" inc.,="" 2018.="" [15]="" shoeybi,="" patwary,="" puri,="" legresley,="" casper,="" catanzaro,="" megatron-lm:="" multi-billion="" [16]="" rajbhandari,="" rasley,="" ruwase,="" he,="" zero:="" memory="" optimization="" towards="" trillion="" [17]="" raghu,="" gilmer,="" yosinski,="" sohl="" dickstein,="" svcca:="" singular="" vector="" canonical="" correlation="" dynamics="" interpretability.="" nips,="" 2017.="" [18]="" morcos,="" insights="" representational="" similarity="" correlation.="" 5732–5741.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年8月18日</p>
+            <h1>
+                <a class="blog-title">PipeTransformer：用于大规模模型分布式训练的自动弹性管道</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由朝阳河、李申、马赫迪·索尔坦奥利科塔比和萨曼·阿维斯提梅尔所著</p>
+                    <p>在这篇博客文章中，我们描述了第一篇经过同行评审的研究论文，该论文探讨了加速 PyTorch DDP（ <code class="language-plaintext highlighter-rouge">torch.nn.parallel.DistributedDataParallel</code> ）[1]和 Pipeline（<code class="language-plaintext highlighter-rouge">torch.distributed.pipeline</code>）的混合 - <a href="http://proceedings.mlr.press/v139/he21a.html">PipeTransformer：用于大规模模型分布式训练的自动弹性管道 </a>（如 BERT [2]和 ViT [3]等 Transformer），该论文发表于 ICML 2021。</p>
+
+<p>PipeTransformer 利用自动弹性管道化，以高效地分布式训练 Transformer 模型。在 PipeTransformer 中，我们设计了一种自适应的即时冻结算法，可以在训练过程中逐步识别并冻结一些层，以及一个弹性管道化系统，可以动态分配资源以训练剩余的活跃层。更具体地说，PipeTransformer 会自动将冻结层排除在管道之外，将活跃层打包到更少的 GPU 中，并通过更多副本来增加数据并行宽度。我们使用 Vision Transformer (ViT)在 ImageNet 上以及 BERT 在 SQuAD 和 GLUE 数据集上评估 PipeTransformer。我们的结果表明，与最先进的基线相比，PipeTransformer 在保持准确性的同时，速度提高了高达 2.83 倍。我们还提供了各种性能分析，以更全面地理解我们的算法和系统设计。</p>
+
+<p>接下来，我们将介绍背景、动机、我们的想法、设计以及如何使用 PyTorch 分布式 API 实现算法和系统。</p>
+
+<ul>
+  <li>论文：[链接](http://proceedings.mlr.press/v139/he21a.html)</li>
+  <li>源代码：[链接](https://DistML.ai)</li>
+  <li>演示文稿: <a href="https://docs.google.com/presentation/d/1t6HWL33KIQo2as0nSHeBpXYtTBcy0nXCoLiKd0EashY/edit?usp=sharing">https://docs.google.com/presentation/d/1t6HWL33KIQo2as0nSHeBpXYtTBcy0nXCoLiKd0EashY/edit?usp=sharing</a></li>
+</ul>
+
+<h1 id="introduction">简介</h1>
+<p align="center">
+<img src="http://localhost:4000/assets/images/model_size.png" alt="Model Size" width="500">
+<br>图 1：Transformer 模型的参数数量急剧增加。</p>
+
+<p>大型 Transformer 模型[4][5]推动了自然语言处理和计算机视觉领域的精度突破。GPT-3[4]在几乎所有 NLP 任务上达到了新的记录高精度。视觉 Transformer（ViT）[3]在 ImageNet 上也实现了 89%的 top-1 精度，超过了最先进的卷积网络 ResNet-152 和 EfficientNet。为了应对模型尺寸的增长，研究人员提出了各种分布式训练技术，包括参数服务器[6][7][8]、管道并行[9][10][11][12]、层内并行[13][14][15]和零冗余数据并行[16]。</p>
+
+<p>然而，现有的分布式训练解决方案仅研究了在整个训练过程中需要优化所有模型权重的场景（即，计算和通信开销在不同迭代中相对静态）。最近关于<em>渐进式训练</em>的研究表明，神经网络中的参数可以动态训练：</p>
+
+<ul>
+  <li>冻结训练：用于深度学习动态和可解释性的单向量正交相关分析。NeurIPS 2017</li>
+  <li>通过逐步堆叠高效训练 BERT。ICML 2019</li>
+  <li>使用渐进层丢弃加速基于 Transformer 的语言模型训练。NeurIPS 2020.</li>
+  <li>关于 Transformer 增长对渐进 BERT 训练的影响。NACCL 2021</li>
+</ul>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/freeze_training.png" alt="Freeze Training" width="560">
+<br>
+</p>
+<p>图 2. 可解释的冻结训练：DNN 自下而上收敛（使用 ResNet 在 CIFAR10 上的结果）。每个面板展示了使用 SVCCA [17][18]逐层相似度</p>
+
+<p>例如，在冻结训练 [17][18] 中，神经网络通常自下而上收敛（即并非所有层都需要在整个训练过程中进行训练）。图 2 展示了在这种方法中权重如何逐渐稳定。这一观察结果促使我们利用冻结训练来加速 Transformer 模型的分布式训练，通过动态分配资源以关注不断缩小的活动层集来加速训练。这种层冻结策略对于管道并行特别相关，因为排除连续的底层层可以减少计算、内存和通信开销。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/PipeTransformer.png" width="100%">
+<br>图 3. PipeTransformer 的自动化和弹性管道过程，以加速 Transformer 模型的分布式训练</p>
+
+<p>我们提出 PipeTransformer，一个弹性管道训练加速框架，该框架能够通过动态调整管道模型范围和管道副本数量来自动响应冻结层。据我们所知，这是第一篇研究在管道和数据并行训练背景下层冻结的论文。图 3 展示了这种组合的好处。首先，通过将冻结层排除在管道之外，相同的模型可以打包到更少的 GPU 中，从而减少跨 GPU 通信和更小的管道气泡。其次，将模型打包到更少的 GPU 后，相同的集群可以容纳更多的管道副本，增加数据并行的宽度。更重要的是，从这两个好处中获得的速度提升是乘法而非加法，进一步加速了训练。</p>
+
+<p>管道转换器的设计面临四大挑战。首先，冻结算法必须实时且自适应地进行冻结决策；然而，现有工作[17][18]仅提供后验分析工具。其次，管道重新分区结果的效率受多种因素影响，包括分区粒度、跨分区激活大小以及微批处理中的分块（微批处理的微批次数量），这需要在庞大的解决方案空间中进行推理和搜索。第三，为了动态引入额外的管道副本，PipeTransformer 必须克服集体通信的静态性质，并在添加新进程时避免可能复杂的跨进程消息协议（一个管道由一个进程处理）。最后，缓存可以节省冻结层重复前向传播的时间，但必须共享现有管道和新添加的管道，因为系统无法为每个副本创建和预热专用缓存。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/PipeTransformer-Animation.gif" alt="Freeze Training">
+<br>图 4：展示 PipeTransformer 动态的动画</p>
+
+<p>如图动画（图 4）所示，PipeTransformer 设计有四个核心构建块来解决上述挑战。首先，我们设计了一种可调自适应算法来生成信号，引导在不同迭代中选择冻结的层（冻结算法）。一旦被这些信号触发，我们的弹性管道模块（AutoPipe）就会通过考虑不同分区（冻结层和活动层）的工作负载的激活大小和方差，将剩余的活动层打包到更少的 GPU 上。然后，根据不同管道长度的先前分析结果，将一个迷你批次分割成最佳数量的微批次。我们的下一个模块 AutoDP 会启动额外的管道副本以占用释放的 GPU，并维护分层通信进程组以实现集体通信的动态成员资格。我们的最后一个模块 AutoCache，在现有和新数据并行进程之间有效地共享激活，并在转换期间自动替换过时的缓存。</p>
+
+<p>总体而言，PipeTransformer 结合了冻结算法、AutoPipe、AutoDP 和 AutoCache 模块，以提供显著的训练速度提升。我们使用 Vision Transformer（ViT）在 ImageNet 上以及 BERT 在 GLUE 和 SQuAD 数据集上评估 PipeTransformer。我们的结果表明，PipeTransformer 在不损失精度的前提下，实现了高达 2.83 倍的加速。我们还提供了各种性能分析，以更全面地理解我们的算法和系统设计。最后，我们还开发了针对 PipeTransformer 的开源灵活 API，这些 API 在冻结算法、模型定义和训练加速之间提供了清晰的分离，允许将其转移到需要类似冻结策略的其他算法。</p>
+
+<h1 id="overall-design">总体设计</h1>
+
+<p>假设我们旨在在一个分布式训练系统中训练一个大型模型，其中混合了流水线模型并行和数据并行，以针对以下场景：单个 GPU 设备的内存无法容纳模型，或者如果加载，批次大小足够小，以至于不会耗尽内存。更具体地说，我们定义我们的设置如下：</p>
+
+<p><strong>训练任务和模型定义。</strong> 我们训练 Transformer 模型（例如，视觉 Transformer、BERT 在大规模图像或文本数据集上。Transformer 模型 \(\mathcal{F}\) 有 L 层，其中第 i 层由前向计算函数 \(f_i\) 和相应的参数集组成。</p>
+
+<p><strong>训练基础设施。</strong> 假设训练基础设施包含一个具有 N 个 GPU 服务器的 GPU 集群（即节点）。每个节点有 I 个 GPU。我们的集群是同构的，意味着每个 GPU 和服务器都有相同的硬件配置。每个 GPU 的内存容量为 \(M_{\text{GPU}}\)。服务器通过高速网络接口（如 InfiniBand 互连）连接。</p>
+
+<p><strong>管道并行。</strong> 在每台机器中，我们将模型 \mathcal{F} 装载到管道 \mathcal{P} 中，该管道有 K 个分区（K 也代表管道长度）。第 k 个分区 p_k 由连续的层组成。我们假设每个分区由单个 GPU 设备处理。1 \leq K \leq I，这意味着我们可以在一台机器中为多个模型副本构建多个管道。我们假设同一机器中的管道属于同一 GPU 设备。我们的管道是同步管道，不涉及过时的梯度，并且微批次的数量为 M。在 Linux 操作系统中，每个管道由单个进程处理。我们建议读者参考 GPipe [10] 以获取更多详细信息。</p>
+
+<p><strong>数据并行。</strong> DDP 是 R 并行工作员内的跨机分布式数据并行进程组。每个工作员是一个管道副本（单个进程）。第 r 个工作员的索引（ID）是 rank r。对于 DDP 中的任何两个管道，它们可以属于同一 GPU 服务器或不同的 GPU 服务器，并且可以使用 AllReduce 算法交换梯度。</p>
+
+<p>在这些设置下，我们的目标是利用冻结训练来加速训练，这种训练不需要在整个训练过程中训练所有层。此外，它还可能有助于节省计算、通信、内存成本，并通过连续冻结层来防止过拟合。然而，只有克服设计自适应冻结算法、动态管道重新分区、高效资源重新分配和跨进程缓存这四个挑战，才能实现这些好处，正如引言中所讨论的。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/pipetransformer_overview.png" alt="Overview" width="560">
+<br>图 5. PipeTransformer 训练系统概述</p>
+
+<p>PipeTransformer 共同设计了一种即时冻结算法和自动弹性管道训练系统，该系统能够动态地转换管道模型的范围和管道副本的数量。整体系统架构如图 5 所示。为了支持 PipeTransformer 的弹性管道，我们维护了一个定制的 PyTorch Pipeline 版本。对于数据并行性，我们使用 PyTorch DDP 作为基线。其他库是操作系统的标准机制（例如，多进程）因此避免了专用软件或硬件定制需求。为了确保我们框架的通用性，我们将训练系统解耦为四个核心组件：<strong> 冻结算法 </strong>、<strong>AutoPipe</strong>、<strong>AutoDP</strong> 和 <strong>AutoCache</strong>。该<strong>冻结算法 </strong>（灰色）从训练循环中采样指标并做出逐层冻结决策，这些决策将与 <strong>AutoPipe</strong>（绿色）共享。 AutoPipe 是一个弹性管道模块，通过排除管道中的冻结层并将活动层打包到更少的 GPU（粉色）中来加速训练，从而减少跨 GPU 通信和更小的管道气泡。随后，<strong>AutoPipe</strong> 将管道长度信息传递给 <strong>AutoDP</strong>（紫色），然后如果可能的话，AutoDP 会生成更多的管道副本以增加数据并行宽度。插图还包括 AutoDP 引入新副本（紫色）的示例。<strong>AutoCache</strong>（橙色边缘）是一个跨管道缓存模块，如图中管道之间的连接所示。源代码架构与图 5 对齐，以提高可读性和通用性。</p>
+
+<h1 id="implementation-using-pytorch-apis">使用 PyTorch API 实现</h1>
+
+<p>如图 5 所示，PipeTransformers 包含四个组件：冻结算法、AutoPipe、AutoDP 和 AutoCache。其中，AutoPipe 和 AutoDP 分别依赖于 PyTorch DDP（ <code class="language-plaintext highlighter-rouge">torch.nn.parallel.DistributedDataParallel</code> ）[1]和 Pipeline（<code class="language-plaintext highlighter-rouge">torch.distributed.pipeline</code>）。在本博客中，我们仅突出 AutoPipe 和 AutoDP 的关键实现细节。有关冻结算法和 AutoCache 的详细信息，请参阅我们的论文。</p>
+
+<h2 id="autopipe-elastic-pipelining">AutoPipe：弹性管道</h2>
+
+<p>AutoPipe 可以通过排除冻结层从管道中，并将活动层打包到更少的 GPU 中来加速训练。本节详细阐述了 AutoPipe 的关键组件，这些组件可以动态地 1）划分管道，2）最小化管道设备数量，以及 3）相应地优化小批量块大小。</p>
+
+<h3 id="basic-usage-of-pytorch-pipeline">PyTorch Pipeline 的基本用法</h3>
+
+<p>在深入了解 AutoPipe 的细节之前，让我们先熟悉一下 PyTorch Pipeline 的基本用法（ <code class="language-plaintext highlighter-rouge">torch.distributed.pipeline.sync.Pipe</code> ，请参阅<a href="https://pytorch.org/docs/stable/pipeline.html">这篇教程 </a>）。更具体地说，我们提供了一个简单的示例来理解 Pipeline 在实际中的设计：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Step 1: build a model including two linear layers
+</span><span class="n">fc1</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">8</span><span class="p">).</span><span class="n">cuda</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">fc2</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">).</span><span class="n">cuda</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="c1"># Step 2: wrap the two layers with nn.Sequential
+</span><span class="n">model</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">fc1</span><span class="p">,</span> <span class="n">fc2</span><span class="p">)</span>
+
+<span class="c1"># Step 3: build Pipe (torch.distributed.pipeline.sync.Pipe)
+</span><span class="n">model</span> <span class="o">=</span> <span class="n">Pipe</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+
+<span class="c1"># do training/inference
+</span><span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">16</span><span class="p">).</span><span class="n">cuda</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">output_rref</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>在这个基本示例中，我们可以看到在初始化 <code class="language-plaintext highlighter-rouge">Pipe</code> 之前，我们需要将模型 <code class="language-plaintext highlighter-rouge">nn.Sequential</code> 分割到多个 GPU 设备上，并设置最优的块数（<code class="language-plaintext highlighter-rouge">chunks</code>）。平衡各个分区之间的计算时间对于提高 pipeline 训练速度至关重要，因为工作负载分布不均可能导致延迟，并迫使负载较轻的设备等待。块数也可能对 pipeline 的吞吐量产生重要影响。</p>
+
+<h3 id="balanced-pipeline-partitioning">平衡的 Pipeline 分区</h3>
+
+<p>在 PipeTransformer 这样的动态训练系统中，仅从参数数量上保持最优平衡的分区并不能保证最快的训练速度，因为其他因素也起着至关重要的作用：</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/balancing_partition.png" width="560">
+<br>图6.分区边界位于跳跃连接的中间</p>
+
+<ol>
+  <li>
+    <p><strong>跨分区通信开销。</strong> 将分区边界放置在跳跃连接的中间会导致额外的通信，因为跳跃连接中的张量现在必须复制到不同的 GPU。例如，在图 6 中的 BERT 分区，分区 k 必须从分区 k-2 和分区 k-1 获取中间输出。相比之下，如果边界放置在加法层之后，分区 k-1 和 k 之间的通信开销明显较小。我们的测量结果表明，跨设备通信的成本比略微不平衡的分区更高（参见我们论文的附录）。因此，我们不考虑打断跳跃连接（在算法 1 的第 7 行以绿色突出显示作为一个完整的注意力层和 MLP 层）。</p>
+  </li>
+  <li>
+    <p>冻结层内存占用。在训练过程中，AutoPipe 必须多次重新计算分区边界，以平衡两种不同类型的层：冻结层和活动层。由于冻结层不需要反向激活图、优化器状态和梯度，其内存成本仅为不活动层的一小部分。为了获取关于内存和计算成本的详细指标，我们定义了一个可调的成本因子λ_{\text{冻结}}来估计冻结层与相同活动层之间的内存占用比率。根据我们在实验硬件上的经验测量，我们将其设置为 1/6。</p>
+  </li>
+</ol>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/AutoPipe_algorithm.png" width="100%">
+<br>
+</p>
+
+<p>基于上述两个考虑，AutoPipe 根据参数大小平衡管道分区。更具体地说，AutoPipe 使用贪婪算法将所有冻结和活动层分配到 K 个 GPU 设备，以均匀分配分区子层。伪代码在算法 1 中的 <code class="language-plaintext highlighter-rouge">load_balance()</code> 函数中描述。冻结层从原始模型中提取出来，并保存在管道的第一个设备中的单独模型实例 \mathcal{F}_{\text{frozen}} 中。</p>
+
+<p>注意，本文中采用的分区算法并非唯一选择；PipeTransformer 模块化设计，可以与任何其他替代方案一起使用。</p>
+
+<h3 id="pipeline-compression">管道压缩</h3>
+
+<p>管道压缩有助于释放 GPU 资源，以便容纳更多的管道副本并减少分区之间的跨设备通信次数。为了确定压缩时机，我们可以估算压缩后最大分区的内存成本，并将其与时间步长 T=0 时管道的最大分区内存成本进行比较。为了避免进行广泛的内存分析，压缩算法使用参数大小作为训练内存占用的代理。基于这种简化，管道压缩的标准如下：</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/memory_reduction.png" width="320">
+<br>
+</p>
+
+<p>一旦接收到冻结通知，AutoPipe 将始终尝试将管道长度 K 除以 2（例如，从 8 变为 4，然后变为 2）。使用\frac{K}{2}作为输入，压缩算法可以验证结果是否满足方程（1）中的标准。伪代码在算法 1 的第 25-33 行中给出。请注意，这种压缩在训练过程中会指数级增加加速比，这意味着如果 GPU 服务器有更多的 GPU（例如，超过 8 个），加速比将进一步放大。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/pipe_buble.png" width="560">
+<br>图 7. 管道气泡：F_{d,b}、U_d"分别表示微批 b 在设备 d 上的正向、反向和优化器更新。每个迭代中每个微批正向和反向的总气泡大小为 K-1 倍。</p>
+
+<p>此外，这种技术还可以通过缩小管道气泡的大小来加速训练。为了解释管道中的气泡大小，图 7 展示了 4 个微批如何在 4 设备管道 K=4 中运行。一般来说，每个微批正向和反向的总气泡大小为(K-1)倍。因此，很明显，较短的管道具有更小的气泡大小。</p>
+
+<h3 id="dynamic-number-of-micro-batches">动态微批数量</h3>
+
+<p>之前的流水线并行系统使用每个小批量（M）固定的微批量数。GPipe 建议 M≥4×K，其中 K 是分区数（流水线长度）。然而，鉴于 PipeTransformer 动态配置 K，我们发现保持静态的 M 在训练过程中是不理想的。此外，当与 DDP 集成时，M 的值也会影响 DDP 梯度同步的效率。由于 DDP 必须在启动梯度同步之前等待最后一个微批量完成对参数的反向计算，因此更细的微批量会导致计算和通信之间的重叠更小。因此，PipeTransformer 在 DDP 环境的混合中动态搜索最佳 M 值，M 值范围从 K 到 6K。对于特定的训练环境，只需要进行一次配置（见算法 1 的第 35 行）。</p>
+
+<p>完整的源代码请参考 <code class="language-plaintext highlighter-rouge">https://github.com/Distributed-AI/PipeTransformer/blob/master/pipe_transformer/pipe/auto_pipe.py</code> 。</p>
+
+<h2 id="autodp-spawning-more-pipeline-replicas">AutoDP：启动更多流水线副本</h2>
+<p>由于 AutoPipe 将相同的流水线压缩到更少的 GPU 上，AutoDP 可以自动启动新的流水线副本以增加数据并行宽度。</p>
+
+<p>尽管概念上简单，但通信和状态上的微妙依赖关系需要精心设计。挑战有三：</p>
+
+<ol>
+  <li>
+    <p><strong>DDP 通信 </strong>：PyTorch DDP 中的集体通信需要静态成员资格，这阻止了新管道与现有管道连接；</p>
+  </li>
+  <li>
+    <p><strong>状态同步 </strong>：新激活的进程必须与现有管道的训练进度（例如，epoch 数量和学习率）、权重和优化器状态、冻结层的边界以及管道 GPU 范围保持一致；</p>
+  </li>
+  <li>
+    <p><strong>数据集重新分配 </strong>：数据集应重新平衡以匹配动态数量的管道。这不仅避免了落后者，还确保了所有 DDP 进程的梯度权重相等。</p>
+  </li>
+</ol>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/AutoDP.png" width="560">
+<br>图 8. AutoDP：通过双进程组之间的消息处理动态数据并行（0-7 号进程属于机器 0，而 8-15 号进程属于机器 1）</p>
+
+<p>为了应对这些挑战，我们为 DDP 创建了双通信进程组。如图 8 所示，消息进程组（紫色）负责轻量级控制消息，覆盖所有进程，而活跃训练进程组（黄色）仅包含活跃进程，在训练期间作为重型张量通信的载体。消息组保持静态，而训练组则根据活跃进程进行拆解和重建。在 T0 阶段，只有 0 号和 8 号进程活跃。在过渡到 T1 阶段时，0 号进程激活 1 号和 9 号进程（新添加的管道副本）并使用消息组同步上述必要信息。这四个活跃进程随后形成一个新训练组，允许静态集体通信适应动态成员。为了重新分配数据集，我们实现了一种 DistributedSampler 的变体，可以无缝调整数据样本以匹配活跃管道副本的数量。</p>
+
+<p>上述设计也有助于自然地减少 DDP 通信开销。更具体地说，当从 T0 过渡到 T1 时，进程 0 和 1 销毁现有的 DDP 实例，而活跃进程使用缓存的流水线模型（AutoPipe 分别存储冻结模型和缓存模型）构建一个新的 DDP 训练组。</p>
+
+<p>我们使用以下 API 来实现上述设计。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch.distributed</span> <span class="k">as</span> <span class="n">dist</span>
+<span class="kn">from</span> <span class="nn">torch.nn.parallel</span> <span class="kn">import</span> <span class="n">DistributedDataParallel</span> <span class="k">as</span> <span class="n">DDP</span>
+
+<span class="c1"># initialize the process group (this must be called in the initialization of PyTorch DDP)
+</span><span class="n">dist</span><span class="p">.</span><span class="n">init_process_group</span><span class="p">(</span><span class="n">init_method</span><span class="o">=</span><span class="s">'tcp://'</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">config</span><span class="p">.</span><span class="n">master_addr</span><span class="p">)</span> <span class="o">+</span> <span class="s">':'</span> <span class="o">+</span>
+<span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">config</span><span class="p">.</span><span class="n">master_port</span><span class="p">),</span> <span class="n">backend</span><span class="o">=</span><span class="n">Backend</span><span class="p">.</span><span class="n">GLOO</span><span class="p">,</span> <span class="n">rank</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">global_rank</span><span class="p">,</span> <span class="n">world_size</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">world_size</span><span class="p">)</span>
+<span class="p">...</span>
+
+<span class="c1"># create active process group (yellow color)
+</span><span class="bp">self</span><span class="p">.</span><span class="n">active_process_group</span> <span class="o">=</span> <span class="n">dist</span><span class="p">.</span><span class="n">new_group</span><span class="p">(</span><span class="n">ranks</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">active_ranks</span><span class="p">,</span> <span class="n">backend</span><span class="o">=</span><span class="n">Backend</span><span class="p">.</span><span class="n">NCCL</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">365</span><span class="p">))</span>
+<span class="p">...</span>
+
+<span class="c1"># create message process group (yellow color)
+</span><span class="bp">self</span><span class="p">.</span><span class="n">comm_broadcast_group</span> <span class="o">=</span> <span class="n">dist</span><span class="p">.</span><span class="n">new_group</span><span class="p">(</span><span class="n">ranks</span><span class="o">=</span><span class="p">[</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">world_size</span><span class="p">)],</span> <span class="n">backend</span><span class="o">=</span><span class="n">Backend</span><span class="p">.</span><span class="n">GLOO</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">365</span><span class="p">))</span>
+<span class="p">...</span>
+
+<span class="c1"># create DDP-enabled model when the number of data-parallel workers is changed. Note:
+# 1. The process group to be used for distributed data all-reduction.
+</span><span class="n">If</span> <span class="bp">None</span><span class="p">,</span> <span class="n">the</span> <span class="n">default</span> <span class="n">process</span> <span class="n">group</span><span class="p">,</span> <span class="n">which</span> <span class="ow">is</span> <span class="n">created</span> <span class="n">by</span> <span class="n">torch</span><span class="p">.</span><span class="n">distributed</span><span class="p">.</span><span class="n">init_process_group</span><span class="p">,</span> <span class="n">will</span> <span class="n">be</span> <span class="n">used</span><span class="p">.</span>
+<span class="n">In</span> <span class="n">our</span> <span class="n">case</span><span class="p">,</span> <span class="n">we</span> <span class="nb">set</span> <span class="n">it</span> <span class="k">as</span> <span class="bp">self</span><span class="p">.</span><span class="n">active_process_group</span>
+<span class="c1"># 2. device_ids should be set when the pipeline length = 1 (the model resides on a single CUDA device).
+</span>
+<span class="bp">self</span><span class="p">.</span><span class="n">pipe_len</span> <span class="o">=</span> <span class="n">gpu_num_per_process</span>
+<span class="k">if</span> <span class="n">gpu_num_per_process</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">DDP</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">process_group</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">active_process_group</span><span class="p">,</span> <span class="n">find_unused_parameters</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">DDP</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">device_ids</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="p">.</span><span class="n">local_rank</span><span class="p">],</span> <span class="n">process_group</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">active_process_group</span><span class="p">,</span> <span class="n">find_unused_parameters</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+<span class="c1"># to broadcast message among processes, we use dist.broadcast_object_list
+</span><span class="k">def</span> <span class="nf">dist_broadcast</span><span class="p">(</span><span class="n">object_list</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">group</span><span class="p">):</span>
+    <span class="s">"""Broadcasts a given object to all parties."""</span>
+    <span class="n">dist</span><span class="p">.</span><span class="n">broadcast_object_list</span><span class="p">(</span><span class="n">object_list</span><span class="p">,</span> <span class="n">src</span><span class="p">,</span> <span class="n">group</span><span class="o">=</span><span class="n">group</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">object_list</span>
+</code></pre></div></div>
+<p>完整的源代码请参考 <code class="language-plaintext highlighter-rouge">https://github.com/Distributed-AI/PipeTransformer/blob/master/pipe_transformer/dp/auto_dp.py</code> 。</p>
+
+<h1 id="experiments">实验</h1>
+
+<p>本节首先总结实验设置，然后使用计算机视觉和自然语言处理任务评估 PipeTransformer。</p>
+
+<p><strong>硬件。</strong> 实验在通过 InfiniBand CX353A（5GB/s）连接的 2 台相同机器上进行，每台机器配备 8 块 NVIDIA Quadro RTX 5000（16GB GPU 内存）。机器内部的 GPU 到 GPU 带宽（PCI 3.0，16 条通道）为 15.754GB/s。</p>
+
+<p><strong>实现。</strong> 我们使用 PyTorch Pipe 作为构建块。BERT 模型定义、配置和相关分词器来自 HuggingFace 3.5.0。我们通过遵循其 TensorFlow 实现来使用 PyTorch 实现 Vision Transformer。更多详细信息请参阅我们的源代码。</p>
+
+<p>模型和数据集。实验采用了 CV 和 NLP 中的两个代表性 Transformer：视觉 Transformer（ViT）和 BERT。ViT 在图像分类任务上运行，使用 ImageNet21K 上的预训练权重初始化，并在 ImageNet 和 CIFAR-100 上进行微调。BERT 在两个任务上运行，在 GLUE 基准的 SST-2 数据集上进行文本分类，以及在 SQuAD v1.1 数据集（斯坦福问答）上进行问答，这是一个包含 10 万个众包问答对的集合。</p>
+
+<p><strong>训练方案。</strong> 鉴于大型模型通常需要数千个 GPU 天（例如，GPT-3）从头开始训练，因此使用预训练模型进行下游任务的微调在计算机视觉和自然语言处理领域已成为一种趋势。此外，PipeTransformer 是一个复杂的训练系统，涉及多个核心组件。因此，对于 PipeTransformer 系统开发的第一版和算法研究，从头开始使用大规模预训练进行开发和评估并不经济。因此，本节中展示的实验专注于预训练模型。请注意，由于预训练和微调中的模型架构相同，PipeTransformer 可以同时服务于两者。我们已在附录中讨论了预训练结果。</p>
+
+<p><strong>基线。</strong> 本节中的实验将 PipeTransformer 与最先进的框架进行了比较，该框架是 PyTorch Pipeline（PyTorch 对 GPipe 的实现）和 PyTorch DDP 的混合方案。由于这是第一篇研究通过冻结层加速分布式训练的论文，目前还没有完全对齐的对应解决方案。</p>
+
+<p><strong>超参数。</strong> 实验使用 ViT-B/16（12 个 Transformer 层，16 × 16 输入块大小）进行 ImageNet 和 CIFAR-100 的测试，使用 BERT-large-uncased（24 层）进行 SQuAD 1.1 测试，使用 BERT-base-uncased（12 层）进行 SST-2 测试。使用 PipeTransformer，ViT 和 BERT 的训练可以将每个管道的批处理大小设置为约 400 和 64。所有实验的其他超参数（例如，epoch、学习率）请参见附录。</p>
+
+<h2 id="overall-training-acceleration">总体训练加速</h2>
+<p align="center">
+<img src="http://localhost:4000/assets/images/experiments_table1.png" width="560">
+<br>
+</p>
+
+<p>我们在上表中总结了整体实验结果。请注意，我们报告的加速是基于保守的α 1/3 值，可以获得相当甚至更高的精度。更激进的α（2/5、1/2）可以获得更高的加速，但可能会导致精度略有下降。请注意，BERT（24 层）的模型大小大于 ViT-B/16（12 层），因此通信所需时间更长。</p>
+
+<h2 id="performance-analysis">性能分析</h2>
+
+<h3 id="speedup-breakdown">加速分解</h3>
+
+<p>本节展示了评估结果，并分析了\autopipe 中不同组件的性能。更多实验结果可在附录中找到。</p>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/experiments_throughput.png" width="560">
+<br>图 9.速度提升分解（ViT 在 ImageNet 上的应用）</p>
+
+<p>为了理解所有四个组件的有效性和它们对训练速度的影响，我们进行了不同的组合实验，并使用它们的训练样本吞吐量（样本/秒）和加速比作为指标。结果如图9所示。这些实验结果的关键要点是：</p>
+
+<ol>
+  <li>主要的加速是弹性管道的结果，这是通过联合使用 AutoPipe 和 AutoDP 实现的。</li>
+  <li>AutoCache 的贡献通过 AutoDP 得到放大；</li>
+  <li>即使没有系统性的调整，冻结训练本身也会降低训练速度。</li>
+</ol>
+
+<h3 id="tuning-alpha-in-freezing-algorithm">调整冻结算法中的α值</h3>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/experiments_tuning_alpha.png" width="460">
+<br>图10. 调整冻结算法中的α值</p>
+
+<p>我们进行了实验，以展示冻结算法中的 \alpha 对训练速度的影响。结果表明，较大的 \alpha（过度冻结）会导致更大的加速，但会略微降低性能。在图 10 所示的情况下，当 \alpha=1/5 时，冻结训练优于正常训练，实现了 2.04 倍的加速。我们将在附录中提供更多结果。</p>
+
+<h3 id="optimal-chunks-in-the-elastic-pipeline">弹性管道中的最佳块大小</h3>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/experiments_optimal_k.png" width="450">
+<br>图11. 弹性管道中的最佳块数量</p>
+
+<p>我们对不同管道长度 K 下的最佳微批大小 M 进行了分析。结果总结在图 11 中。如图所示，不同的 K 值会导致不同的最佳 M 值，不同 M 值之间的吞吐量差距很大（如图 K=8 时所示），这证实了在弹性管道中需要一个前置分析器的必要性。</p>
+
+<h3 id="understanding-the-timing-of-caching">理解缓存时机</h3>
+
+<p align="center">
+<img src="http://localhost:4000/assets/images/experiment_autocache.png" width="320">
+<br>图12. 缓存时机</p>
+
+<p>为了评估 AutoCache，我们比较了从第 0 个 epoch 激活 AutoCache 的训练样本吞吐量（蓝色）与没有 AutoCache 的训练作业（红色）。图 12 显示，过早启用缓存可能会减慢训练速度，因为缓存在小批冻结层上的成本可能高于前向传播。随着更多层被冻结，缓存激活明显优于相应的前向传播。因此，AutoCache 使用分析器来确定启用缓存的正确时机。在我们的系统中，对于 ViT（12 层），缓存从第 3 个冻结层开始，而对于 BERT（24 层），缓存从第 5 个冻结层开始。</p>
+
+<p>如需更详细的实验分析，请参阅我们的论文。</p>
+
+<h1 id="summarization">摘要</h1>
+<p>本博客介绍了 PipeTransformer，这是一个结合弹性管道并行和数据并行的整体解决方案，用于使用 PyTorch 分布式 API 进行分布式训练。更具体地说，PipeTransformer 会逐步冻结管道中的层，将剩余的活跃层打包到更少的 GPU 中，并通过更多管道副本来增加数据并行宽度。在 ViT 和 Bert 模型上的评估表明，与最先进的基线相比，PipeTransformer 在不损失精度的前提下，速度提升了高达 2.83 倍。</p>
+
+<h1 id="reference">参考文献</h1>
+
+<p>[1] 李，S.，赵，Y.，瓦拉，R.，萨尔帕卡尔，O.，诺德豪斯，P.，李，T.，帕斯克，A.，史密斯，J.，沃恩，B.，达米尼亚，P.等. Pytorch 分布式：加速数据并行训练的经验。VLDB Endowment，13(12)，2020</p>
+
+<p>[2] 德夫林，J.，张，M. W.，李，K.，和图托瓦诺娃，K. BERT：用于语言理解的深度双向 Transformer 的预训练。NAACL-HLT，2019</p>
+
+<p>[3] Dosovitskiy, A.，Beyer, L.，Kolesnikov, A.，Weissenborn, D.，Zhai, X.，Unterthiner, T.，Dehghani, M.，Minderer, M.，Heigold, G.，Gelly, S.，等. 一张图片胜过 16x16 个单词：大规模图像识别的 Transformer。</p>
+
+<p>[4] Brown, T. B.，Mann, B.，Ryder, N.，Subbiah, M.，Kaplan, J.，Dhariwal, P.，Neelakantan, A.，Shyam, P.，Sastry, G.，Askell, A.，等. 语言模型是少样本学习者。</p>
+
+<p>[5] Lepikhin, D.，Lee, H.，Xu, Y.，Chen, D.，Firat, O.，Huang, Y.，Krikun, M.，Shazeer, N.，Chen, Z. Gshard：通过条件计算和自动分片扩展巨型模型。</p>
+
+<p>[6] Li, M.，Andersen, D. G.，Park, J. W.，Smola, A. J.，Ahmed, A.，Josifovski, V.，Long, J.，Shekita, E. J.，Su, B. Y. 通过参数服务器扩展分布式机器学习。在 11 届{USENIX}操作系统设计与实现研讨会({OSDI} 14)，第 583–598 页，2014 年。</p>
+
+<p>[7] 姜毅，朱宇，蓝晨，易波，崔宇，郭晨。针对异构 GPU/CPU 集群的分布式深度神经网络加速统一架构。在第十四届 USENIX 操作系统设计与实现研讨会（OSDI 20），第 463-479 页。USENIX 协会，2020 年 11 月。ISBN 978-1-939133-19-9。</p>
+
+<p>[8] 金善，余国义，朴亨，赵锡，郑硕，韩浩，李硕，郑钟秀，崔正国。Parallax：深度神经网络稀疏感知数据并行训练。在第十四届 EuroSys 会议论文集，第 1-15 页，2019 年。</p>
+
+<p>[9] 金成，李河，郑明，白完，尹钟，金伊，林硕，金善。TorchGPipe：训练巨型模型的即时管道并行。</p>
+
+<p>[10] 黄宇，程宇，阿帕纳，菲拉特，陈明轩，陈德，李浩，吴恩达，等。Gpipe：使用管道并行高效训练巨型神经网络。</p>
+
+<p>[11] 帕克，J. H.，云，G.，尹，C. M.，阮，N. T.，李，S.，崔，J.，吴，S. H.，和崔，Y. Hetpipe：通过集成流水线模型并行和数据并行，在（瘦弱）异构 GPU 集群上实现大型深度神经网络训练。在 2020 年 USENIX 年度技术会议（USENIX ATC 20），第 307-321 页。USENIX 协会，2020 年 7 月。ISBN 978-1-939133-14-4。</p>
+
+<p>[12] 纳拉亚南，D.，哈拉普，A.，潘尼沙耶，A.，塞沙德里，V.，德瓦努尔，N. R.，甘格尔，G. R.，吉本斯，P. B.，和扎哈里亚，M. Pipedream：用于深度神经网络训练的通用管道并行。在 2019 年第 27 届 ACM 操作系统原理研讨会（SOSP '19）论文集中，第 1-15 页，纽约，纽约，美国。ACM 协会。ISBN 9781450368735。doi: 10.1145/3341301.3359646。</p>
+
+<p>[13] 列皮欣，D.，李，H.，徐，Y.，陈，D.，菲拉特，O.，黄，Y.，克里库恩，M.，沙泽尔，N.，和陈，Z. Gshard：通过条件计算和自动分片扩展巨型模型。</p>
+
+<p>[14] Shazeer, N.，Cheng, Y.，Parmar, N.，Tran, D.，Vaswani, A.，Koanantakool, P.，Hawkins, P.，Lee, H.，Hong, M.，Young, C.，Sepassi, R.，和 Hechtman, B. Mesh-Tensorflow：超级计算机的深度学习。在 Bengio, S.，Wallach, H.，Larochelle, H.，Grauman, K.，Cesa-Bianchi, N.，和 Garnett, R. (编者)，神经信息处理系统进展，第 31 卷，第 10414–10423 页。Curran Associates, Inc.，2018 年。</p>
+
+<p>[15] Shoeybi, M.，Patwary, M.，Puri, R.，LeGresley, P.，Casper, J.，和 Catanzaro, B. Megatron-LM：使用模型并行训练数十亿参数的语言模型。</p>
+
+<p>[16] Rajbhandari, S.，Rasley, J.，Ruwase, O.，和 He, Y. ZERO：训练万亿参数模型时的内存优化。</p>
+
+<p>[17] Raghu, M.，Gilmer, J.，Yosinski, J.，和 Sohl Dickstein, J. Svcca：用于深度学习动态和可解释性的奇异向量典型相关分析。在 NIPS，2017 年。</p>
+
+<p>[18] Morcos, A.，Raghu, M.，和 Bengio, S. 在神经网络中关于表示相似性的见解。在 Bengio, S.，Wallach, H.，Larochelle, H.，Grauman, K.，Cesa-Bianchi, N.，和 Garnett, R.（编者），《神经网络信息处理系统 31 进展》，第 5732-5741 页。Curran Associates, Inc.，2018 年。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

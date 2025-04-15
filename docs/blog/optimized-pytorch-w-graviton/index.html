@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Optimized PyTorch 2.0 Inference with AWS Graviton processors | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="New generations of CPUs offer significant performance improvement in machine learning (ML) inference due to specialized built-in instructions. Combined with their flexibility, high speed of development, and low operating cost, these general-purpose processors offer an alternative ML inference solution to other existing hardware solutions.
+
+AWS, Arm, Meta, and others helped optimize the performance of PyTorch 2.0 inference for Arm-based processors. As a result, we are delighted to announce that Arm-based AWS Graviton instance inference performance for PyTorch 2.0 is up to 3.5 times the speed for ResNet-50 compared to the previous PyTorch release, and up to 1.4 times the speed for BERT, making Graviton-based instances the fastest compute optimized instances on AWS for these models (see the following graph).
+
+
+
+Image 1: Relative speed improvement achieved by upgrading from PyTorch version 1.13 to 2.0 (higher is better). The performance is measured on c7g.4xlarge instances.
+
+As shown in the next graph, we measured up to 50% cost savings for PyTorch inference with Graviton3-based c7g instances across Torch Hub ResNet-50 and multiple Hugging Face models compared to comparable x86-based compute optimized Amazon EC2 instances. For that graph, we first measured the cost per million inference for the five instance types. Then, we normalized the cost per million inference results to a c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart.
+
+
+
+Image 2: Relative cost of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Similar to the preceding inference cost comparison graph, the following graph shows the model p90 latency for the same five instance types. We normalized the latency results to the c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart. The c7g.4xlarge (AWS Graviton3) model inference latency is up to 50% better than the latencies measured on c5.4xlarge, c6i.4xlarge, and c6a.4xlarge. \
+
+
+
+Image 3: Relative latency (p90) of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Optimization details
+
+PyTorch supports Compute Library for the Arm® Architecture (ACL) GEMM kernels via the oneDNN backend (previously called “MKL-DNN”) for AArch64 platforms. The optimizations are primarily for PyTorch ATen CPU BLAS, ACL kernels for fp32 and bfloat16, and oneDNN primitive caching. There are no frontend API changes, so no changes are required at the application level to get these optimizations working on Graviton3-based instances.
+
+PyTorch level optimizations
+
+We extended the ATen CPU BLAS interface to accelerate more operators and tensor configurations via oneDNN backend for aarch64 platform. The following diagram highlights (in orange) the optimized components that improved the PyTorch inference performance on aarch64 platform.
+
+
+
+Image 4: PyTorch software stack highlighting (in orange) the components optimized for inference performance improvement on AArch64 platform
+
+ACL kernels and BFloat16 FPmath mode
+
+The ACL library provides Neon and SVE optimized GEMM kernels for both fp32 and bfloat16 formats: These kernels improve the SIMD hardware utilization and reduce the end to end inference latencies. The bfloat16 support in Graviton3 allows efficient deployment of models trained using bfloat16, fp32 and Automatic Mixed Precision (AMP). The standard fp32 models use bfloat16 kernels via oneDNN FPmath mode without model quantization. They provide up to two times faster performance compared to existing fp32 model inference without bfloat16 FPmath support. For more details on ACL GEMM kernel support, refer to Arm Compute Library github.
+
+Primitive Caching
+
+The following call sequence diagram shows how ACL operators are integrated into oneDNN backend. As shown in the diagram, ACL objects are handled as oneDNN resources instead of the primitive objects. This is because the ACL objects are stateful and mutable. Since the ACL objects are handled as resource objects, they are not cacheable with the default primitive caching feature supported in oneDNN. We implemented primitive caching at ideep operator level for “convolution”, “matmul” and “inner product” operators to avoid redundant GEMM kernel initialization and tensor allocation overhead.
+
+
+
+Image 5: Call sequence diagram showing how the Compute Library for the Arm® Architecture (ACL) GEMM kernels are integrated into oneDNN backend
+
+How to take advantage of the optimizations
+
+Install the PyTorch 2.0 wheel from the official repo and set environment variables to enable the additional optimizations.
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch
+python3 -m pip install torchvision torchaudio torchtext
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+Running an inference
+
+You can use PyTorch torchbench to measure the CPU inference performance improvements, or to compare different instance types.
+
+# Pre-requisite:
+# pip install PyTorch2.0 wheels and set the above mentioned environment variables
+
+# Clone PyTorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+
+# Setup ResNet-50 benchmark
+cd benchmark
+python3 install.py resnet50
+
+# Install the dependent wheels
+python3 -m pip install numba
+
+# Run ResNet-50 inference in jit mode. On successful completion of the inference runs,
+# the script prints the inference latency and accuracy results
+python3 run.py resnet50 -d cpu -m jit -t eval --use_cosine_similarity
+
+
+Performance Analysis
+
+Now, we will analyze the inference performance of ResNet-50 on Graviton3-based c7g instance using PyTorch profiler. We run the code below with PyTorch 1.13 and PyTorch 2.0 and run the inference for a few iterations as a warmup before measuring the performance.
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+import torch
+from torchvision import models
+sample_input = [torch.rand(1, 3, 224, 224)]
+eager_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+model = torch.jit.script(eager_model, example_inputs=[sample_input, ])
+
+model = model.eval()
+model = torch.jit.optimize_for_inference(model)
+
+with torch.no_grad():
+    # warmup runs
+    for i in range(10):
+        model(*sample_input)
+    prof = torch.profiler.profile(
+      on_trace_ready=torch.profiler.tensorboard_trace_handler('./logs'), record_shapes=True, with_stack=True)
+    # profile after warmup
+    prof.start()
+    model(*sample_input)
+    prof.stop()
+
+
+We use tensorboard to view results of the profiler and analyze model performance.
+
+Install PyTorch Profiler Tensorboard plugin as follows
+
+pip install torch_tb_profiler
+
+
+Launch the tensorboard using
+
+tensorboard --logdir=./logs
+
+
+Launch the following in the browser to view the profiler output. The profiler supports ‘Overview’, ‘Operator’, ‘Trace’ and ‘Module’ views to get insight into the inference execution.
+
+http://localhost:6006/#pytorch_profiler
+
+
+The following diagram is the profiler ‘Trace’ view which shows the call stack along with the execution time of each function. In the profiler, we selected the forward() function to get the overall inference time. As shown in the diagram, the inference time for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 6: Profiler Trace view: Forward pass wall duration on PyTorch 1.13 and PyTorch 2.0
+
+The next diagram is the ‘Operator’ view which shows the list of PyTorch operators and their execution time. Similar to the preceding Trace view, the Operator view shows that the operator host duration for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 7: Profiler Operator view: Forward operator Host duration on PyTorch 1.13 and PyTorch 2.0
+
+Benchmarking Hugging Face models
+
+You can use the Amazon SageMaker Inference Recommender utility to automate performance benchmarking across different instances. With Inference Recommender, you can find the real-time inference endpoint that delivers the best performance at the lowest cost for a given ML model. We collected the preceding data using the Inference Recommender notebooks by deploying the models on production endpoints. For more details on Inference Recommender, refer to the amazon-sagemaker-examples GitHub repo. We benchmarked the following models for this post: ResNet50 image classification, DistilBERT sentiment analysis, RoBERTa fill mask, and RoBERTa sentiment analysis.
+
+Conclusion
+
+For PyTorch 2.0, the Graviton3-based C7g instance is the most cost-effective compute optimized Amazon EC2 instance for inference. These instances are available on SageMaker and Amazon EC2. The AWS Graviton Technical Guide provides the list of optimized libraries and best practices that will help you achieve cost benefit with Graviton instances across different workloads.
+
+If you find use cases where similar performance gains are not observed on Graviton, please open an issue on the aws-graviton-getting-started github to let us know about it. We will continue to add more performance improvements to make AWS Graviton-based instances the most cost-effective and efficient general purpose processor for inference using PyTorch.
+
+Acknowledgments
+
+We would like to thank Ali Saidi (Sr. Principal Engineer) and Csaba Csoma (Sr. Manager, Software Development) from AWS, Ashok Bhat (Sr. Product Manager), Nathan Sircombe (Sr. Engineering Manager) and Milos Puzovic (Principal Software Engineer) from Arm for their support during the Graviton PyTorch inference optimization work. We would also like to thank Geeta Chauhan (Engineering Leader, Applied AI) from Meta for her guidance on this blog.
+
+About the authors
+
+Sunita Nadampalli is a ML Engineer and Software Development Manager at AWS.
+
+Ankith Gunapal is an AI Partner Engineer at Meta(PyTorch).
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Optimized PyTorch 2.0 Inference with AWS Graviton processors">
+<meta property="og:description" content="New generations of CPUs offer significant performance improvement in machine learning (ML) inference due to specialized built-in instructions. Combined with their flexibility, high speed of development, and low operating cost, these general-purpose processors offer an alternative ML inference solution to other existing hardware solutions.
+
+AWS, Arm, Meta, and others helped optimize the performance of PyTorch 2.0 inference for Arm-based processors. As a result, we are delighted to announce that Arm-based AWS Graviton instance inference performance for PyTorch 2.0 is up to 3.5 times the speed for ResNet-50 compared to the previous PyTorch release, and up to 1.4 times the speed for BERT, making Graviton-based instances the fastest compute optimized instances on AWS for these models (see the following graph).
+
+
+
+Image 1: Relative speed improvement achieved by upgrading from PyTorch version 1.13 to 2.0 (higher is better). The performance is measured on c7g.4xlarge instances.
+
+As shown in the next graph, we measured up to 50% cost savings for PyTorch inference with Graviton3-based c7g instances across Torch Hub ResNet-50 and multiple Hugging Face models compared to comparable x86-based compute optimized Amazon EC2 instances. For that graph, we first measured the cost per million inference for the five instance types. Then, we normalized the cost per million inference results to a c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart.
+
+
+
+Image 2: Relative cost of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Similar to the preceding inference cost comparison graph, the following graph shows the model p90 latency for the same five instance types. We normalized the latency results to the c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart. The c7g.4xlarge (AWS Graviton3) model inference latency is up to 50% better than the latencies measured on c5.4xlarge, c6i.4xlarge, and c6a.4xlarge. \
+
+
+
+Image 3: Relative latency (p90) of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Optimization details
+
+PyTorch supports Compute Library for the Arm® Architecture (ACL) GEMM kernels via the oneDNN backend (previously called “MKL-DNN”) for AArch64 platforms. The optimizations are primarily for PyTorch ATen CPU BLAS, ACL kernels for fp32 and bfloat16, and oneDNN primitive caching. There are no frontend API changes, so no changes are required at the application level to get these optimizations working on Graviton3-based instances.
+
+PyTorch level optimizations
+
+We extended the ATen CPU BLAS interface to accelerate more operators and tensor configurations via oneDNN backend for aarch64 platform. The following diagram highlights (in orange) the optimized components that improved the PyTorch inference performance on aarch64 platform.
+
+
+
+Image 4: PyTorch software stack highlighting (in orange) the components optimized for inference performance improvement on AArch64 platform
+
+ACL kernels and BFloat16 FPmath mode
+
+The ACL library provides Neon and SVE optimized GEMM kernels for both fp32 and bfloat16 formats: These kernels improve the SIMD hardware utilization and reduce the end to end inference latencies. The bfloat16 support in Graviton3 allows efficient deployment of models trained using bfloat16, fp32 and Automatic Mixed Precision (AMP). The standard fp32 models use bfloat16 kernels via oneDNN FPmath mode without model quantization. They provide up to two times faster performance compared to existing fp32 model inference without bfloat16 FPmath support. For more details on ACL GEMM kernel support, refer to Arm Compute Library github.
+
+Primitive Caching
+
+The following call sequence diagram shows how ACL operators are integrated into oneDNN backend. As shown in the diagram, ACL objects are handled as oneDNN resources instead of the primitive objects. This is because the ACL objects are stateful and mutable. Since the ACL objects are handled as resource objects, they are not cacheable with the default primitive caching feature supported in oneDNN. We implemented primitive caching at ideep operator level for “convolution”, “matmul” and “inner product” operators to avoid redundant GEMM kernel initialization and tensor allocation overhead.
+
+
+
+Image 5: Call sequence diagram showing how the Compute Library for the Arm® Architecture (ACL) GEMM kernels are integrated into oneDNN backend
+
+How to take advantage of the optimizations
+
+Install the PyTorch 2.0 wheel from the official repo and set environment variables to enable the additional optimizations.
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch
+python3 -m pip install torchvision torchaudio torchtext
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+Running an inference
+
+You can use PyTorch torchbench to measure the CPU inference performance improvements, or to compare different instance types.
+
+# Pre-requisite:
+# pip install PyTorch2.0 wheels and set the above mentioned environment variables
+
+# Clone PyTorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+
+# Setup ResNet-50 benchmark
+cd benchmark
+python3 install.py resnet50
+
+# Install the dependent wheels
+python3 -m pip install numba
+
+# Run ResNet-50 inference in jit mode. On successful completion of the inference runs,
+# the script prints the inference latency and accuracy results
+python3 run.py resnet50 -d cpu -m jit -t eval --use_cosine_similarity
+
+
+Performance Analysis
+
+Now, we will analyze the inference performance of ResNet-50 on Graviton3-based c7g instance using PyTorch profiler. We run the code below with PyTorch 1.13 and PyTorch 2.0 and run the inference for a few iterations as a warmup before measuring the performance.
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+import torch
+from torchvision import models
+sample_input = [torch.rand(1, 3, 224, 224)]
+eager_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+model = torch.jit.script(eager_model, example_inputs=[sample_input, ])
+
+model = model.eval()
+model = torch.jit.optimize_for_inference(model)
+
+with torch.no_grad():
+    # warmup runs
+    for i in range(10):
+        model(*sample_input)
+    prof = torch.profiler.profile(
+      on_trace_ready=torch.profiler.tensorboard_trace_handler('./logs'), record_shapes=True, with_stack=True)
+    # profile after warmup
+    prof.start()
+    model(*sample_input)
+    prof.stop()
+
+
+We use tensorboard to view results of the profiler and analyze model performance.
+
+Install PyTorch Profiler Tensorboard plugin as follows
+
+pip install torch_tb_profiler
+
+
+Launch the tensorboard using
+
+tensorboard --logdir=./logs
+
+
+Launch the following in the browser to view the profiler output. The profiler supports ‘Overview’, ‘Operator’, ‘Trace’ and ‘Module’ views to get insight into the inference execution.
+
+http://localhost:6006/#pytorch_profiler
+
+
+The following diagram is the profiler ‘Trace’ view which shows the call stack along with the execution time of each function. In the profiler, we selected the forward() function to get the overall inference time. As shown in the diagram, the inference time for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 6: Profiler Trace view: Forward pass wall duration on PyTorch 1.13 and PyTorch 2.0
+
+The next diagram is the ‘Operator’ view which shows the list of PyTorch operators and their execution time. Similar to the preceding Trace view, the Operator view shows that the operator host duration for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 7: Profiler Operator view: Forward operator Host duration on PyTorch 1.13 and PyTorch 2.0
+
+Benchmarking Hugging Face models
+
+You can use the Amazon SageMaker Inference Recommender utility to automate performance benchmarking across different instances. With Inference Recommender, you can find the real-time inference endpoint that delivers the best performance at the lowest cost for a given ML model. We collected the preceding data using the Inference Recommender notebooks by deploying the models on production endpoints. For more details on Inference Recommender, refer to the amazon-sagemaker-examples GitHub repo. We benchmarked the following models for this post: ResNet50 image classification, DistilBERT sentiment analysis, RoBERTa fill mask, and RoBERTa sentiment analysis.
+
+Conclusion
+
+For PyTorch 2.0, the Graviton3-based C7g instance is the most cost-effective compute optimized Amazon EC2 instance for inference. These instances are available on SageMaker and Amazon EC2. The AWS Graviton Technical Guide provides the list of optimized libraries and best practices that will help you achieve cost benefit with Graviton instances across different workloads.
+
+If you find use cases where similar performance gains are not observed on Graviton, please open an issue on the aws-graviton-getting-started github to let us know about it. We will continue to add more performance improvements to make AWS Graviton-based instances the most cost-effective and efficient general purpose processor for inference using PyTorch.
+
+Acknowledgments
+
+We would like to thank Ali Saidi (Sr. Principal Engineer) and Csaba Csoma (Sr. Manager, Software Development) from AWS, Ashok Bhat (Sr. Product Manager), Nathan Sircombe (Sr. Engineering Manager) and Milos Puzovic (Principal Software Engineer) from Arm for their support during the Graviton PyTorch inference optimization work. We would also like to thank Geeta Chauhan (Engineering Leader, Applied AI) from Meta for her guidance on this blog.
+
+About the authors
+
+Sunita Nadampalli is a ML Engineer and Software Development Manager at AWS.
+
+Ankith Gunapal is an AI Partner Engineer at Meta(PyTorch).
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Optimized PyTorch 2.0 Inference with AWS Graviton processors">
+<meta name="twitter:description" content="New generations of CPUs offer significant performance improvement in machine learning (ML) inference due to specialized built-in instructions. Combined with their flexibility, high speed of development, and low operating cost, these general-purpose processors offer an alternative ML inference solution to other existing hardware solutions.
+
+AWS, Arm, Meta, and others helped optimize the performance of PyTorch 2.0 inference for Arm-based processors. As a result, we are delighted to announce that Arm-based AWS Graviton instance inference performance for PyTorch 2.0 is up to 3.5 times the speed for ResNet-50 compared to the previous PyTorch release, and up to 1.4 times the speed for BERT, making Graviton-based instances the fastest compute optimized instances on AWS for these models (see the following graph).
+
+
+
+Image 1: Relative speed improvement achieved by upgrading from PyTorch version 1.13 to 2.0 (higher is better). The performance is measured on c7g.4xlarge instances.
+
+As shown in the next graph, we measured up to 50% cost savings for PyTorch inference with Graviton3-based c7g instances across Torch Hub ResNet-50 and multiple Hugging Face models compared to comparable x86-based compute optimized Amazon EC2 instances. For that graph, we first measured the cost per million inference for the five instance types. Then, we normalized the cost per million inference results to a c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart.
+
+
+
+Image 2: Relative cost of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Similar to the preceding inference cost comparison graph, the following graph shows the model p90 latency for the same five instance types. We normalized the latency results to the c5.4xlarge instance, which is the baseline measure of “1” on the Y-axis of the chart. The c7g.4xlarge (AWS Graviton3) model inference latency is up to 50% better than the latencies measured on c5.4xlarge, c6i.4xlarge, and c6a.4xlarge. \
+
+
+
+Image 3: Relative latency (p90) of PyTorch inference running on different AWS instances (lower is better). Source: AWS ML Blog on Graviton PyTorch2.0 inference performance.
+
+Optimization details
+
+PyTorch supports Compute Library for the Arm® Architecture (ACL) GEMM kernels via the oneDNN backend (previously called “MKL-DNN”) for AArch64 platforms. The optimizations are primarily for PyTorch ATen CPU BLAS, ACL kernels for fp32 and bfloat16, and oneDNN primitive caching. There are no frontend API changes, so no changes are required at the application level to get these optimizations working on Graviton3-based instances.
+
+PyTorch level optimizations
+
+We extended the ATen CPU BLAS interface to accelerate more operators and tensor configurations via oneDNN backend for aarch64 platform. The following diagram highlights (in orange) the optimized components that improved the PyTorch inference performance on aarch64 platform.
+
+
+
+Image 4: PyTorch software stack highlighting (in orange) the components optimized for inference performance improvement on AArch64 platform
+
+ACL kernels and BFloat16 FPmath mode
+
+The ACL library provides Neon and SVE optimized GEMM kernels for both fp32 and bfloat16 formats: These kernels improve the SIMD hardware utilization and reduce the end to end inference latencies. The bfloat16 support in Graviton3 allows efficient deployment of models trained using bfloat16, fp32 and Automatic Mixed Precision (AMP). The standard fp32 models use bfloat16 kernels via oneDNN FPmath mode without model quantization. They provide up to two times faster performance compared to existing fp32 model inference without bfloat16 FPmath support. For more details on ACL GEMM kernel support, refer to Arm Compute Library github.
+
+Primitive Caching
+
+The following call sequence diagram shows how ACL operators are integrated into oneDNN backend. As shown in the diagram, ACL objects are handled as oneDNN resources instead of the primitive objects. This is because the ACL objects are stateful and mutable. Since the ACL objects are handled as resource objects, they are not cacheable with the default primitive caching feature supported in oneDNN. We implemented primitive caching at ideep operator level for “convolution”, “matmul” and “inner product” operators to avoid redundant GEMM kernel initialization and tensor allocation overhead.
+
+
+
+Image 5: Call sequence diagram showing how the Compute Library for the Arm® Architecture (ACL) GEMM kernels are integrated into oneDNN backend
+
+How to take advantage of the optimizations
+
+Install the PyTorch 2.0 wheel from the official repo and set environment variables to enable the additional optimizations.
+
+# Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch
+python3 -m pip install torchvision torchaudio torchtext
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+Running an inference
+
+You can use PyTorch torchbench to measure the CPU inference performance improvements, or to compare different instance types.
+
+# Pre-requisite:
+# pip install PyTorch2.0 wheels and set the above mentioned environment variables
+
+# Clone PyTorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+
+# Setup ResNet-50 benchmark
+cd benchmark
+python3 install.py resnet50
+
+# Install the dependent wheels
+python3 -m pip install numba
+
+# Run ResNet-50 inference in jit mode. On successful completion of the inference runs,
+# the script prints the inference latency and accuracy results
+python3 run.py resnet50 -d cpu -m jit -t eval --use_cosine_similarity
+
+
+Performance Analysis
+
+Now, we will analyze the inference performance of ResNet-50 on Graviton3-based c7g instance using PyTorch profiler. We run the code below with PyTorch 1.13 and PyTorch 2.0 and run the inference for a few iterations as a warmup before measuring the performance.
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+
+
+import torch
+from torchvision import models
+sample_input = [torch.rand(1, 3, 224, 224)]
+eager_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+model = torch.jit.script(eager_model, example_inputs=[sample_input, ])
+
+model = model.eval()
+model = torch.jit.optimize_for_inference(model)
+
+with torch.no_grad():
+    # warmup runs
+    for i in range(10):
+        model(*sample_input)
+    prof = torch.profiler.profile(
+      on_trace_ready=torch.profiler.tensorboard_trace_handler('./logs'), record_shapes=True, with_stack=True)
+    # profile after warmup
+    prof.start()
+    model(*sample_input)
+    prof.stop()
+
+
+We use tensorboard to view results of the profiler and analyze model performance.
+
+Install PyTorch Profiler Tensorboard plugin as follows
+
+pip install torch_tb_profiler
+
+
+Launch the tensorboard using
+
+tensorboard --logdir=./logs
+
+
+Launch the following in the browser to view the profiler output. The profiler supports ‘Overview’, ‘Operator’, ‘Trace’ and ‘Module’ views to get insight into the inference execution.
+
+http://localhost:6006/#pytorch_profiler
+
+
+The following diagram is the profiler ‘Trace’ view which shows the call stack along with the execution time of each function. In the profiler, we selected the forward() function to get the overall inference time. As shown in the diagram, the inference time for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 6: Profiler Trace view: Forward pass wall duration on PyTorch 1.13 and PyTorch 2.0
+
+The next diagram is the ‘Operator’ view which shows the list of PyTorch operators and their execution time. Similar to the preceding Trace view, the Operator view shows that the operator host duration for the ResNet-50 model on Graviton3-based c7g instance is around 3 times faster in PyTorch 2.0 compared to PyTorch 1.13.
+
+
+
+Image 7: Profiler Operator view: Forward operator Host duration on PyTorch 1.13 and PyTorch 2.0
+
+Benchmarking Hugging Face models
+
+You can use the Amazon SageMaker Inference Recommender utility to automate performance benchmarking across different instances. With Inference Recommender, you can find the real-time inference endpoint that delivers the best performance at the lowest cost for a given ML model. We collected the preceding data using the Inference Recommender notebooks by deploying the models on production endpoints. For more details on Inference Recommender, refer to the amazon-sagemaker-examples GitHub repo. We benchmarked the following models for this post: ResNet50 image classification, DistilBERT sentiment analysis, RoBERTa fill mask, and RoBERTa sentiment analysis.
+
+Conclusion
+
+For PyTorch 2.0, the Graviton3-based C7g instance is the most cost-effective compute optimized Amazon EC2 instance for inference. These instances are available on SageMaker and Amazon EC2. The AWS Graviton Technical Guide provides the list of optimized libraries and best practices that will help you achieve cost benefit with Graviton instances across different workloads.
+
+If you find use cases where similar performance gains are not observed on Graviton, please open an issue on the aws-graviton-getting-started github to let us know about it. We will continue to add more performance improvements to make AWS Graviton-based instances the most cost-effective and efficient general purpose processor for inference using PyTorch.
+
+Acknowledgments
+
+We would like to thank Ali Saidi (Sr. Principal Engineer) and Csaba Csoma (Sr. Manager, Software Development) from AWS, Ashok Bhat (Sr. Product Manager), Nathan Sircombe (Sr. Engineering Manager) and Milos Puzovic (Principal Software Engineer) from Arm for their support during the Graviton PyTorch inference optimization work. We would also like to thank Geeta Chauhan (Engineering Leader, Applied AI) from Meta for her guidance on this blog.
+
+About the authors
+
+Sunita Nadampalli is a ML Engineer and Software Development Manager at AWS.
+
+Ankith Gunapal is an AI Partner Engineer at Meta(PyTorch).
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年6月22日</p>
+            <h1>
+                <a class="blog-title">优化后的 PyTorch 2.0 在 AWS Graviton 处理器上的推理</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 AWS 的 Sunita Nadampalli 和 Meta 的 Ankith Gunapal 贡献</p>
+                    <p>新一代 CPU 通过内置的专用指令在机器学习（ML）推理方面提供了显著的性能提升。结合其灵活性、高速的开发速度和低运营成本，这些通用处理器为其他现有硬件解决方案提供了一种替代的 ML 推理解决方案。</p>
+
+<p>AWS、Arm、Meta 等公司帮助优化了 PyTorch 2.0 在 Arm 架构处理器上的推理性能。因此，我们很高兴地宣布，与之前 PyTorch 版本相比，基于 Arm 的 AWS Graviton 实例的 PyTorch 2.0 推理性能在 ResNet-50 上提高了 3.5 倍，在 BERT 上提高了 1.4 倍，使基于 Graviton 的实例成为 AWS 上这些模型最快的计算优化实例（见下图）。</p>
+
+<p><img src="/assets/images/optimized/im1.png" alt="Relative speed improvement achieved by upgrading PyTorch to 2.0" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 1</strong>：从 PyTorch 版本 1.13 升级到 2.0 所实现的相对速度提升（数值越高越好）。性能是在 c7g.4xlarge 实例上测量的。</em></small></p>
+
+<p>如下图中所示，我们在 Torch Hub ResNet-50 和多个 Hugging Face 模型上，与基于 x86 的同类计算优化型 Amazon EC2 实例相比，使用基于 Graviton3 的 c7g 实例进行 PyTorch 推理，实现了高达 50%的成本节省。对于该图，我们首先测量了五种实例类型的每百万次推理成本。然后，我们将每百万次推理成本结果归一化到 c5.4xlarge 实例，这是图表 Y 轴上“1”的基准度量。</p>
+
+<p><img src="/assets/images/optimized/im2.png" alt="Relative cost of PyTorch inference running on different AWS instances" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 2</strong>：在 AWS 不同实例上运行 PyTorch 推理的相对成本（越低越好）。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">来源：AWS ML 博客关于 <a href="https://aws.amazon.com/blogs/machine-learning/optimized-pytorch-2-0-inference-with-aws-graviton-processors/">Graviton PyTorch2.0 推理性能 </a>。</em></small></p>
+
+<p>与前面的推理成本比较图类似，以下图表显示了相同五种实例类型的模型 p90 延迟。我们将延迟结果归一化到 c5.4xlarge 实例，这是图表 Y 轴上“1”的基准度量。c7g.4xlarge（AWS Graviton3）模型推理延迟比在 c5.4xlarge、c6i.4xlarge 和 c6a.4xlarge 上测量的延迟提高了高达 50%。</p>
+
+<p><img src="/assets/images/optimized/im3.png" alt="Relative latency (p90) of PyTorch inference running on different AWS instances" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图像 3</strong>：在不同 AWS 实例上运行 PyTorch 推理的相对延迟（p90）（越低越好）。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">来源：AWS ML 博客关于 <a href="https://aws.amazon.com/blogs/machine-learning/optimized-pytorch-2-0-inference-with-aws-graviton-processors/">Graviton PyTorch2.0 推理性能 </a>。</em></small></p>
+
+<h2 id="optimization-details">优化细节</h2>
+
+<p>PyTorch 通过 oneDNN 后端（之前称为“MKL-DNN”）支持 Arm® 架构的 Compute Library for the Arm® Architecture (ACL) GEMM 内核，用于 AArch64 平台。优化主要针对 PyTorch ATen CPU BLAS、ACL 内核的 fp32 和 bfloat16，以及 oneDNN 原语缓存。没有前端 API 变更，因此无需在应用程序级别进行任何更改即可在基于 Graviton3 的实例上启用这些优化。</p>
+
+<h3 id="pytorch-level-optimizations">PyTorch 级别优化</h3>
+
+<p>我们扩展了 ATen CPU BLAS 接口，通过 oneDNN 后端加速更多算子和张量配置，以加速 aarch64 平台。以下图表（橙色部分）突出了优化组件，这些组件提高了 aarch64 平台上的 PyTorch 推理性能。</p>
+
+<p><img src="/assets/images/optimized/im4.png" alt="PyTorch software stack highlighting (in orange) the components optimized for inference performance improvement on AArch64 platform" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 4</strong>：PyTorch 软件栈，突出显示（橙色）针对 AArch64 平台推理性能优化而优化的组件</em></small></p>
+
+<h3 id="acl-kernels-and-bfloat16-fpmath-mode">ACL 内核和 BFloat16 FPmath 模式</h3>
+
+<p>ACL 库为 Neon 和 SVE 优化了 GEMM 内核，支持 fp32 和 bfloat16 格式：这些内核提高了 SIMD 硬件利用率，并减少了端到端推理延迟。Graviton3 对 bfloat16 的支持允许高效部署使用 bfloat16、fp32 和自动混合精度（AMP）训练的模型。标准 fp32 模型通过 oneDNN FPmath 模式使用 bfloat16 内核，无需模型量化。它们相比现有无 bfloat16 FPmath 支持的 fp32 模型推理，性能可提升至两倍。有关 ACL GEMM 内核支持的更多详细信息，请参阅 <a href="https://github.com/ARM-software/ComputeLibrary">Arm Compute Library github</a>。</p>
+
+<h3 id="primitive-caching">原语缓存</h3>
+
+<p>以下调用序列图显示了 ACL 运算符如何集成到 oneDNN 后端。如图所示，ACL 对象被处理为 oneDNN 资源，而不是原始对象。这是因为 ACL 对象是状态性和可变的。由于 ACL 对象被处理为资源对象，它们不能与 oneDNN 中支持的默认原始缓存功能一起缓存。我们在“卷积”、“矩阵乘法”和“内积”运算符的 ideep 运算符级别实现了原始缓存，以避免冗余的 GEMM 内核初始化和张量分配开销。</p>
+
+<p><img src="/assets/images/optimized/im5.png" alt="Call sequence diagram showing how the Compute Library for the Arm® Architecture (ACL) GEMM kernels are integrated into oneDNN backend" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em>图像 5：展示 Arm®架构计算库（ACL）GEMM 内核如何集成到 oneDNN 后端的调用序列图</em></small></p>
+
+<h2 id="how-to-take-advantage-of-the-optimizations">如何利用优化</h2>
+
+<p>安装来自官方仓库的 PyTorch 2.0 轮子，并设置环境变量以启用额外的优化。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Install Python
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip
+
+# Upgrade pip3 to the latest version
+python3 -m pip install --upgrade pip
+
+# Install PyTorch and extensions
+python3 -m pip install torch
+python3 -m pip install torchvision torchaudio torchtext
+
+# Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+</code></pre></div></div>
+
+<h2 id="running-an-inference">运行推理</h2>
+
+<p>您可以使用 PyTorch <a href="https://github.com/pytorch/benchmark">torchbench</a> 来衡量 CPU 推理性能的提升，或者比较不同的实例类型。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Pre-requisite:
+# pip install PyTorch2.0 wheels and set the above mentioned environment variables
+
+# Clone PyTorch benchmark repo
+git clone https://github.com/pytorch/benchmark.git
+
+# Setup ResNet-50 benchmark
+cd benchmark
+python3 install.py resnet50
+
+# Install the dependent wheels
+python3 -m pip install numba
+
+# Run ResNet-50 inference in jit mode. On successful completion of the inference runs,
+# the script prints the inference latency and accuracy results
+python3 run.py resnet50 -d cpu -m jit -t eval --use_cosine_similarity
+</code></pre></div></div>
+
+<h2 id="performance-analysis">性能分析</h2>
+
+<p>现在，我们将使用 PyTorch profiler 分析基于 Graviton3 的 c7g 实例上 ResNet-50 的推理性能。我们使用 PyTorch 1.13 和 PyTorch 2.0 运行以下代码，并在测量性能之前进行几次迭代作为预热。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Turn on Graviton3 optimization
+export DNNL_DEFAULT_FPMATH_MODE=BF16
+export LRU_CACHE_CAPACITY=1024
+</code></pre></div></div>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
+from torchvision import models
+sample_input = [torch.rand(1, 3, 224, 224)]
+eager_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+model = torch.jit.script(eager_model, example_inputs=[sample_input, ])
+
+model = model.eval()
+model = torch.jit.optimize_for_inference(model)
+
+with torch.no_grad():
+    # warmup runs
+    for i in range(10):
+        model(*sample_input)
+    prof = torch.profiler.profile(
+      on_trace_ready=torch.profiler.tensorboard_trace_handler('./logs'), record_shapes=True, with_stack=True)
+    # profile after warmup
+    prof.start()
+    model(*sample_input)
+    prof.stop()
+</code></pre></div></div>
+
+<p>我们使用 tensorboard 查看 profiler 的结果并分析模型性能。</p>
+
+<p>按以下步骤安装 PyTorch Profiler Tensorboard 插件</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip install torch_tb_profiler
+</code></pre></div></div>
+
+<p>使用以下命令启动 tensorboard</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>tensorboard --logdir=./logs</code>
+</font></font></font></pre></div></div>
+
+<p>在浏览器中启动以下内容以查看分析器输出。分析器支持“概览”、“操作员”、“跟踪”和“模块”视图，以深入了解推理执行。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>http://localhost:6006/#pytorch_profiler
+</code></pre></div></div>
+
+<p>下图是分析器的“跟踪”视图，显示了调用栈以及每个函数的执行时间。在分析器中，我们选择了 forward()函数以获取整体推理时间。如图所示，在 Graviton3-based c7g 实例上，ResNet-50 模型的推理时间在 PyTorch 2.0 中比 PyTorch 1.13 快约 3 倍。</p>
+
+<p><img src="/assets/images/optimized/im6.png" alt="Profiler Trace view: Forward pass wall duration on PyTorch 1.13 and PyTorch 2.0" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 6</strong>：分析器跟踪视图：PyTorch 1.13 和 PyTorch 2.0 的前向传递墙时持续时间</em></small></p>
+
+<p>下一个图是“操作员”视图，显示了 PyTorch 操作员及其执行时间列表。与前面的跟踪视图类似，操作员视图显示，在 Graviton3-based c7g 实例上，ResNet-50 模型的操作员主机持续时间在 PyTorch 2.0 中比 PyTorch 1.13 快约 3 倍。</p>
+
+<p><img src="/assets/images/optimized/im7.png" alt="Profiler Operator view: Forward operator Host duration on PyTorch 1.13 and PyTorch 2.0" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图像 7</strong>：Profiler 操作员视图：PyTorch 1.13 和 PyTorch 2.0 上的前向操作主机持续时间</em></small></p>
+
+<h2 id="benchmarking-hugging-face-models">Hugging Face 模型基准测试</h2>
+
+<p>您可以使用 <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/inference-recommender.html">Amazon SageMaker 推荐推理</a>实用程序来自动化跨不同实例的性能基准测试。使用推荐推理，您可以找到为给定 ML 模型提供最佳性能且成本最低的实时推理端点。我们使用推荐推理笔记本收集了前面的数据，通过在生产端点部署模型来实现。有关推荐推理的更多详细信息，请参阅 <a href="https://github.com/aws/amazon-sagemaker-examples/blob/main/sagemaker-inference-recommender/huggingface-inference-recommender/huggingface-inference-recommender.ipynb">amazon-sagemaker-examples</a> GitHub 仓库。为此篇博客，我们基准测试了以下模型：<a href="https://pytorch.org/hub/pytorch_vision_resnet/">ResNet50 图像分类 </a>、<a href="https://huggingface.co/distilbert-base-uncased-finetuned-sst-2-english">DistilBERT 情感分析 </a>、<a href="https://huggingface.co/roberta-base">RoBERTa 填充掩码</a>和 <a href="https://huggingface.co/cardiffnlp/twitter-roberta-base-sentiment">RoBERTa 情感分析 </a>。</p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>对于 PyTorch 2.0，基于 Graviton3 的 C7g 实例是用于推理的最具成本效益的计算优化型 Amazon EC2 实例。这些实例可在 <a href="https://aws.amazon.com/about-aws/whats-new/2022/10/amazon-sagemaker-adds-new-graviton-based-instances-model-deployment/"> SageMaker</a> 和 <a href="https://aws.amazon.com/ec2/instance-types/c7g/"> Amazon EC2</a> 上使用。《AWS Graviton 技术指南 <a href="https://github.com/aws/aws-graviton-getting-started"></a>》提供了优化库和最佳实践列表，这些将帮助您在 Graviton 实例的不同工作负载中实现成本效益。</p>
+
+<p>如果您发现某些用例在 Graviton 上没有观察到类似性能提升，请在 <a href="https://github.com/aws/aws-graviton-getting-started">aws-graviton-getting-started</a> github 上提交问题，让我们了解情况。我们将继续添加更多性能改进，使 AWS Graviton 基于的实例成为使用 PyTorch 进行推理的最具成本效益和高效的通用处理器。</p>
+
+<h2 id="acknowledgments">致谢</h2>
+
+<p>我们要感谢来自 AWS 的 Ali Saidi（高级首席工程师）和 Csaba Csoma（软件开发高级经理），以及来自 Arm 的 Ashok Bhat（高级产品经理）、Nathan Sircombe（高级工程经理）和 Milos Puzovic（高级软件工程师）在 Graviton PyTorch 推理优化工作中的支持。我们还要感谢来自 Meta 的 Geeta Chauhan（应用 AI 工程领导）在撰写这篇博客时的指导。</p>
+
+<h2 id="about-the-authors">关于作者</h2>
+
+<p><strong>Sunita Nadampalli</strong> 是 AWS 的机器学习工程师和软件开发经理。</p>
+
+<p><strong>Ankith Gunapal</strong> 是 Meta 的 AI 合作伙伴工程师（PyTorch）。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

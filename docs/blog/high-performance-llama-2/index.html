@@ -1,0 +1,2414 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      High-Performance Llama 2 Training and Inference with PyTorch/XLA on Cloud TPUs | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="In a landscape where AI innovation is accelerating at an unprecedented pace, Meta’s Llama family of open sourced large language models (LLMs) stands out as a notable breakthrough. Llama marked a significant step forward for LLMs, demonstrating the power of pre-trained architectures for a wide range of applications. Llama 2 further pushed the boundaries of scale and capabilities, inspiring advancements in language understanding, generation, and beyond.
+
+Shortly after the announcement of Llama, we published a blog post showcasing ultra-low inference latency for Llama using PyTorch/XLA on Cloud TPU v4. Building on these results, today, we are proud to share Llama 2 training and inference performance using PyTorch/XLA on Cloud TPU v4 and our newest AI supercomputer, Cloud TPU v5e.
+
+In this blog post, we use Llama 2 as an example model to demonstrate the power of PyTorch/XLA on Cloud TPUs for LLM training and inference. We discuss the computation techniques and optimizations used to improve inference throughput and training model FLOPs utilization (MFU). For Llama 2 70B parameters, we deliver 53% training MFU, 17 ms/token inference latency, 42 tokens/s/chip throughput powered by PyTorch/XLA on Google Cloud TPU. We offer a training user guide and an inference user guide for reproducing the results in this article. Additionally, you may find our Google Next 2023 presentation here.
+
+Model Overview
+
+Llama 2 comes in various sizes, ranging from 7B to 70B parameters, catering to different needs, computational resources, and training / inference budgets. Whether it’s small-scale projects or large-scale deployments, Llama models offer versatility and scalability to accommodate a wide range of applications.
+
+Llama 2 is an auto-regressive language model that uses an optimized transformer architecture. The largest, 70B model, uses grouped-query attention, which speeds up inference without sacrificing quality. Llama 2 is trained on 2 trillion tokens (40% more data than Llama) and has the context length of 4,096 tokens for inference (double the context length of Llama), which enables more accuracy, fluency, and creativity for the model.
+
+Llama 2 is a state-of-the-art LLM that outperforms many other open source language models on many benchmarks, including reasoning, coding, proficiency, and knowledge tests. The model’s scale and complexity place many demands on AI accelerators, making it an ideal benchmark for LLM training and inference performance of PyTorch/XLA on Cloud TPUs.
+
+Performance Challenge of LLMs
+
+Large-scale distributed training for LLMs such as Llama 2 introduces technical challenges that require practical solutions to make the most efficient use of TPUs. Llama’s size can strain both memory and processing resources of TPUs. To address this, we use model sharding, which involves breaking down the model into smaller segments, each fitting within the capacity of a single TPU core. This enables parallelism across multiple TPUs, improving training speed while reducing communication overhead.
+
+Another challenge is managing the large datasets required for training Llama 2 efficiently, which requires effective data distribution and synchronization methods. Additionally, optimizing factors like learning rate schedules, gradient aggregation, and weight synchronization across distributed TPUs is crucial for achieving convergence.
+
+After pretraining or fine-tuning Llama 2, running inference on the model checkpoint creates additional technical challenges. All of the challenges discussed in our previous blog post, such as autoregressive decoding, variable input prompt lengths, and the need for model sharding and quantization still apply for Llama 2. In addition, Llama 2 introduced two new capabilities: grouped-query attention and early stopping. We discuss how PyTorch/XLA handles these challenges to enable high-performance, cost-efficient training and inference of Llama 2 on Cloud TPU v4 and v5e.
+
+Large-Scale Distributed Training
+
+PyTorch/XLA offers two major ways of doing large-scale distributed training: SPMD, which utilizes the XLA compiler to transform and partition a single-device program into a multi-device distributed program; and FSDP, which implements the widely-adopted Fully Sharded Data Parallel algorithm.
+
+In this blog post, we show how to use the SPMD API to annotate the HuggingFace (HF) Llama 2 implementation to maximize performance. For comparison, we also show our FSDP results with the same configurations; read about PyTorch/XLA FSDP API here.
+
+SPMD Overview
+
+Let’s briefly review the fundamentals of SPMD. For details, please refer to our blog post and user guide.
+
+Mesh
+
+A multidimensional array that describes the logical topology of the TPU devices:
+
+# Assuming you are running on a TPU host that has 8 devices attached
+num_devices = xr.global_runtime_device_count()
+# mesh shape will be (4,2) in this example
+mesh_shape = (num_devices // 2, 2)
+device_ids = np.array(range(num_devices))
+# axis_names 'x' and 'y' are optional
+mesh = Mesh(device_ids, mesh_shape, ('x', 'y'))
+
+
+Partition Spec
+
+A tuple that describes how the corresponding tensor’s dimensions are sharded across the mesh:
+
+partition_spec = ('x', 'y')
+
+
+Mark Sharding
+
+An API that takes a mesh and a partition_spec, and then generates a sharding annotation for the XLA compiler.
+
+tensor = torch.randn(4, 4).to('xla')
+# Let's resue the above mesh and partition_spec.
+# It means the tensor's 0th dim is sharded 4 way and 1th dim is sharded 2 way.
+xs.mark_sharding(tensor, mesh, partition_spec)
+
+
+2D Sharding with SPMD
+
+In our SPMD blog post, we demonstrated using 1D FSDP style sharding. Here, we introduce a more powerful sharding strategy, called 2D sharding, where both the parameters and activations are sharded. This new sharding strategy not only allows fitting a larger model but also boosts the MFU to up to 54.3%. For more details, read the Benchmarks section.
+
+This section introduces a set of general rules that applies to most LLMs, and for convenience we directly reference the variable names and configuration names from HF Llama.
+
+First, let’s create a 2D Mesh with corresponding axis names: data and model. The data axis is usually where we distribute the input data, and the model axis is where we further distribute the model.
+
+mesh = Mesh(device_ids, mesh_shape, ('data', 'model'))
+
+
+The mesh_shape can be a hyper-parameter that is tuned for different model sizes and hardware configurations. The same mesh will be reused in all following sharding annotations. In the next few sections, we will cover how to use the mesh to shard parameters, activations and input data.
+
+Parameter Sharding
+
+Below is a table that summarizes all parameters of HF Llama 2 and corresponding partition specifications. Example HF code can be found here.
+
+
+  
+   Parameter Name
+   
+   Explanation
+   
+   Parameter Shape
+   
+   Partition Spec
+   
+  
+  
+   embed_tokens
+   
+   embedding layer
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   q_proj
+   
+   attention weights
+   
+   (num_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   k_proj / v_proj
+   
+   attention weights
+   
+   (num_key_value_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   o_proj
+   
+   attention weights
+   
+   (hidden_size, num_heads x head_dim)
+   
+   (model, data)
+   
+  
+  
+   gate_proj / up_proj
+   
+   MLP weights
+   
+   (intermediate_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   down_proj
+   
+   MLP weights
+   
+   (hidden_size, intermediate_size)
+   
+   (data, model)
+   
+  
+  
+   lm_head
+   
+   HF output embedding 
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+
+
+Table 1: SPMD 2D Sharding Parameter Partition Spec
+
+The rule is to shard the hidden_size dim of any weights except QKVO projections according to the data axis of the mesh, then shard the other dim with the remaining model axis. For QKVO, do the opposite. This model-data axis rotation methodology is similar to that of Megatron-LM to reduce communication overhead. For layernorm weights, we implicitly mark them as replicated across different devices given they are 1D tensors.
+
+Activation Sharding
+
+In order to better utilize the device memory, very often we need to annotate the output of some memory bound ops. That way the compiler is forced to only keep partial output on devices instead of the full output. In Llama 2, we explicitly annotate all torch.matmul and nn.Linear outputs. Table 2 summarizes the corresponding annotations; the example HF code can be found here.
+
+
+  
+   Output Name
+   
+   Explanation
+   
+   Output Shape
+   
+   Partition Spec
+   
+  
+  
+   inputs_embeds
+   
+   embedding layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   query_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   key_states / value_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_key_value_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   attn_weights
+   
+   attention weights
+   
+   (batch_size, num_attention_heads, sequence_length, sequence_length)
+   
+   (data, model, None, None)
+   
+  
+  
+   attn_output
+   
+   attention layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   up_proj / gate_proj / down_proj
+   
+   MLP nn.Linear outputs
+   
+   (batch_size, sequence_length, intermediate_size)
+   
+   (data, None, model)
+   
+  
+  
+   logits
+   
+   HF output embedding output 
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+
+
+Table 2: SPMD 2D Sharding Activation Partition Spec
+
+The rule is to shard the batch_size dim of any outputs according to the data axis of the mesh, then replicate the length dims of any outputs, and finally shard the last dim along the model axis.
+
+Input Sharding
+
+For input sharding, the rule is to shard the batch dim along the data axis of the mesh, and replicate the sequence_length dim. Below is the example code, and the corresponding HF change may be found here.
+
+partition_spec = ('data', None)
+sharding_spec = xs.ShardingSpec(mesh, partition_spec)
+# MpDeviceLoader will shard the input data before sending to the device.
+pl.MpDeviceLoader(dataloader, self.args.device, input_sharding=sharding_spec, ...)
+
+
+Now, all the data and model tensors that require sharding are covered!
+
+Optimizer States &amp; Gradients
+
+You may be wondering whether it is necessary to shard the optimizer states and gradients as well. Great news: the sharding propagation feature of the XLA compiler automates the sharding annotation in these two scenarios, without needing more hints to improve performance.
+
+It is important to note that optimizer states are typically initialized within the first iteration of the training loop. From the standpoint of the XLA compiler, the optimizer states are the outputs of the first graph, and therefore have the sharding annotation propagated. For subsequent iterations, the optimizer states become inputs to the second graph, with the sharding annotation propagated from the first one. This is also why PyTorch/XLA typically produces two graphs for the training loops. If the optimizer states are somehow initialized before the first iteration, users will have to manually annotate them, just like the model weights.
+
+Again, all concrete examples of the above sharding annotation can be found in our fork of HF Transformers here. The repo also contains code for our experimental feature MultiSlice, including HybridMesh and dcn axis, which follows the same principles mentioned above.
+
+Caveats
+
+While using SPMD for training, there are a few important things to pay attention to:
+
+
+  Use torch.einsum instead of torch.matmul; torch.matmul usually flattens tensors and does a torch.mm at the end, and that’s bad for SPMD when the combined axes are sharded. The XLA compiler will have a hard time determining how to propagate the sharding.
+  PyTorch/XLA provides patched [nn.Linear](https://github.com/pytorch/xla/blob/master/torch_xla/experimental/xla_sharding.py#L570) to overcome the above constraint:
+
+
+import torch_xla.experimental.xla_sharding as xs
+from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
+
+ model = apply_xla_patch_to_nn_linear(model, xs.xla_patched_nn_linear_forward)
+
+
+
+  Always reuse the same mesh across all shardings
+  Always specify --dataloader_drop_last yes. The last smaller data is hard to annotate.
+  Large models which are initialized on the host can induce host-side OOM. One way to avoid this issue is to initialize parameters on the meta device, then create and shard real tensors layer-by-layer.
+
+
+Infrastructure Improvements
+
+Besides the above modeling techniques, we have developed additional features and improvements to maximize performance, including:
+
+
+  We enable asynchronous collective communication. This requires enhancements on the XLA compiler’s latency hiding scheduler to better optimize for the Llama 2 PyTorch code.
+  We now allow sharding annotations in the middle of the IR graph, just like JAX’s jax.lax.with_sharding_constraint. Previously, only graph inputs were annotated.
+  We also propagate replicated sharding spec from the compiler to the graph outputs. This allows us to shard the optimizer states automatically.
+
+
+Inference Optimizations
+
+All the PyTorch/XLA optimizations implemented for Llama inference are applied to Llama 2 as well. That includes Tensor Parallelism + Dynamo (torch.compile) using torch-xla collective ops, autoregressive decoding logic improvement to avoid recompilation, bucketized prompt length, KV-cache with compilation friendly index ops. Llama 2 introduces two new changes: Grouped Query Attention, and Early Stopping when eos is reached for all prompts. We applied corresponding changes to promote better performance and flexibility with PyTorch/XLA.
+
+Grouped Query Attention
+
+Llama 2 enables Grouped Query Attention for the 70B models. It allows the number of Key and Value heads to be smaller than the number of Query heads, while still supporting KV-cache sharding up to the number of KV heads. For the 70B models, the n_kv_heads is 8, which limits the tensor parallelism to be less or equal to 8. In order to shard the model checkpoint to run on more devices, the K, V projection weights need to be replicated first, and then split into multiple pieces. For example, to shard the 70B model checkpoint from 8 pieces to 16 pieces, the K, V projection weights are duplicated and split into 2 pieces for each shard. We provide a reshard_checkpoints.py script to handle that, and to make sure the sharded checkpoint performs mathematically identical to the original checkpoint.
+
+EOS Early Stopping
+
+The Llama 2 generation code added the early stopping logic. A eos_reached tensor is used to track the completion of all the prompt generations, and if the eos token is reached for all the prompts in the batch, the generation would stop early. The similar change is incorporated in the PyTorch/XLA optimized version as well, with some minor tweaks.
+
+In PyTorch/XLA, checking the value of a tensor like eos_reached as part of the control flow condition would invoke a blocking device-to-host transfer. The tensor would be transferred from device memory to CPU memory to evaluate its value, while all other logics are waiting. This introduced a delay on the scale of ms after every new token generation. As a trade-off, we reduce the rate of checking the eos_reached value to be once every 10 new token generations. With this change, the impact of the blocking device-to-host transfer would be reduced by 10x, while the early stopping would still be effective, and at most 9 unnecessary tokens would be generated after each sequence reaches the eos token.
+
+Model Serving
+
+PyTorch/XLA is working on a serving strategy to enable the PyTorch community to serve their deep learning applications via Torch.Export, StableHLO, and SavedModel. PyTorch/XLA Serving is an experimental feature in PyTorch/XLA 2.1 release; for details visit our serving user guide. Users can take advantage of TorchServe to run their single-host workloads.
+
+Benchmarks
+
+Metrics
+
+To measure training performance, we use the industry-standard metric: Model FLOPS Utilization (MFU). Model FLOPS are the floating point operations required to perform a single forward and backward pass. Model FLOPs are hardware and implementation independent and only depend on the underlying model. MFU measures how effectively the model is using the actual hardware during training. Achieving 100% MFU means that the model is using the hardware perfectly.
+
+To measure inference performance, we use the industry-standard metric of throughput. First, we measure latency per token when the model has been compiled and loaded. Then, we calculate throughput by dividing batch size (BS) over latency per chip. As a result, throughput measures how the model is performing in production environments regardless of how many chips are used.
+
+Results
+
+Training Evaluation
+
+Figure 1 shows Llama 2 SPMD 2D sharding training results on a range of Google TPU v4 hardware with PyTorch/XLA FSDP as the baseline. We increased MFU by 28% across all sizes of Llama 2 compared to FSDP running on the same hardware configuration. This performance improvement is largely due to: 1) 2D Sharding has less communication overhead than FSDP, and 2) asynchronous collective communication is enabled in SPMD which allows communication and computation overlapping. Also note that as the model size scales, we maintain the high MFU. Table 3 shows all the hardware configurations plus some hyperparameters used in the training benchmarks.
+
+
+
+Fig. 1: Llama 2 Training MFU on TPU v4 Hardware
+
+The results in Figure 1 are produced with sequence length 1,024. Figure 2 shows how the performance behaves with larger sequence lengths. It shows our performance also scales linearly with sequence lengths. The MFU is expected to decrease a little as a smaller per device batch size is needed to accommodate the additional memory pressure introduced by the larger sequence length since the sequence length axis is not sharded in 2D sharding. And TPU is very sensitive to batch size. For Llama 2, 70B parameters, the performance decrease is as low as 4%. At the time of preparing these results, Hugging Face Llama 2 tokenizer limits the max model input to 2,048, preventing us from evaluating larger sequence lengths.
+
+
+
+Fig. 2: Llama 2 SPMD Training MFU on TPU v4 with Different Sequence Lengths
+
+
+  
+   Model Size
+   
+   7B
+   
+   13B
+   
+   70B
+   
+  
+  
+   TPU NumCores
+   
+   V4-32
+   
+   V4-64
+   
+   V4-256
+   
+  
+  
+   Mesh Shape
+   
+   (16, 1)
+   
+   (32, 1)
+   
+   (32, 4)
+   
+  
+  
+   Seq Len
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+  
+  
+   Global Batch
+   
+   256
+   
+   128
+   
+   256
+   
+   128
+   
+   512
+   
+   256
+   
+  
+  
+   Per Device Batch
+   
+   16
+   
+   8
+   
+   8
+   
+   4
+   
+   16
+   
+   8
+   
+  
+
+
+Table 3: Llama 2 SPMD Training Benchmark TPU Configurations and Hyperparameters
+
+One last thing to call out is that we use adafactor as the optimizer for better memory utilization. And once again, here is the user guide to reproduce the benchmark results listed above.
+
+Inference Evaluation
+
+In this section, we extend our previous evaluation of Llama on Cloud v4 TPU. Here, we demonstrate the performance properties of TPU v5e for inference applications.
+
+We define inference throughput as the number of tokens produced by a model per second per TPU chip. Figure 3 shows Llama 2 70B throughput on a v5e-16 TPU node. Given Llama is a memory bound application, we see that applying weight-only quantization unblocks extending the model batch size to 32. Higher throughput results would be possible on larger TPU v5e hardware up to the point where the ICI network bandwidth between chips throttle the TPU slice from delivering higher throughput. Exploring the upper bound limits of TPU v5e on Llama 2 was outside of the scope of this work. Notice, to make the Llama 2 70B model run on v5e-16, we replicated the attention heads to have one head per chip as discussed in the Inference section above. As discussed previously, with increasing model batch size, per-token latency grows proportionally; quantization improves overall latency by reducing memory I/O demand.
+
+
+
+Fig. 3: Llama 2 70B Inference Per-Chip Throughput on TPU v5e vs. Batch Size
+
+Figure 4 shows inference throughput results across different model sizes. These results highlight the largest throughput given the hardware configuration when using bf16 precision. With weight only quantization, this throughput reaches 42 on the 70B model. As mentioned above, increasing hardware resources may lead to performance gains.
+
+
+
+Fig. 4: Llama 2 Inference Per-Chip Throughput on TPU v5e
+
+Figure 5 shows the cost of serving Llama 2 models (from Figure 4) on Cloud TPU v5e. We report the TPU v5e per-chip cost based on the 3-year commitment (reserved) price in the us-west4 region. All model sizes use maximum sequence length of 2,048 and maximum generation length of 1,000 tokens. Note that with quantization, the cost for the 70B model drops to $0.0036 per 1,000 tokens.
+
+
+
+Fig. 5: Llama 2 Inference Per-Chip Cost on TPU v5e
+
+Figure 6 summarizes our best Llama 2 inference latency results on TPU v5e. Llama 2 7B results are obtained from our non-quantized configuration (BF16 Weight, BF16 Activation) while the 13B and 70B results are from the quantized (INT8 Weight, BF16 Activation) configuration. We attribute this observation to the inherent memory saving vs. compute overhead tradeoff of quantization; as a result, for smaller models, quantization may not lead to lower inference latency.
+
+Additionally, prompt length has a strong effect on the memory requirements of LLMs. For instance, we observe a latency of 1.2ms / token (i.e. 201 tokens / second / chip) when max_seq_len=256 at batch size of 1 with no quantization on v5e-4 running Llama2 7B.
+
+
+
+Fig. 6: Llama 2 Inference Latency on TPU v5e
+
+Final Thoughts
+
+The recent wave of AI innovation has been nothing short of transformative, with breakthroughs in LLMs at the forefront. Meta’s Llama and Llama 2 models stand as notable milestones in this wave of progress. PyTorch/XLA uniquely enables high-performance, cost-efficient training and inference for Llama 2 and other LLMs and generative AI models on Cloud TPUs, including the new Cloud TPU v5e. Looking forward, PyTorch/XLA will continue to push the performance limits on Cloud TPUs in both throughput and scalability and at the same time maintain the same PyTorch user experience.
+
+We are ecstatic about what’s ahead for PyTorch/XLA and invite the community to join us. PyTorch/XLA is developed fully in open source. So, please file issues, submit pull requests, and send RFCs to GitHub so that we can openly collaborate. You can also try out PyTorch/XLA for yourself on various XLA devices including TPUs and GPUs.
+
+We would like to extend our special thanks to Marcello Maggioni, Tongfei Guo, Andy Davis, Berkin Ilbeyi for their support and collaboration in this effort.
+
+Cheers,
+The PyTorch/XLA Team at Google
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="High-Performance Llama 2 Training and Inference with PyTorch/XLA on Cloud TPUs">
+<meta property="og:description" content="In a landscape where AI innovation is accelerating at an unprecedented pace, Meta’s Llama family of open sourced large language models (LLMs) stands out as a notable breakthrough. Llama marked a significant step forward for LLMs, demonstrating the power of pre-trained architectures for a wide range of applications. Llama 2 further pushed the boundaries of scale and capabilities, inspiring advancements in language understanding, generation, and beyond.
+
+Shortly after the announcement of Llama, we published a blog post showcasing ultra-low inference latency for Llama using PyTorch/XLA on Cloud TPU v4. Building on these results, today, we are proud to share Llama 2 training and inference performance using PyTorch/XLA on Cloud TPU v4 and our newest AI supercomputer, Cloud TPU v5e.
+
+In this blog post, we use Llama 2 as an example model to demonstrate the power of PyTorch/XLA on Cloud TPUs for LLM training and inference. We discuss the computation techniques and optimizations used to improve inference throughput and training model FLOPs utilization (MFU). For Llama 2 70B parameters, we deliver 53% training MFU, 17 ms/token inference latency, 42 tokens/s/chip throughput powered by PyTorch/XLA on Google Cloud TPU. We offer a training user guide and an inference user guide for reproducing the results in this article. Additionally, you may find our Google Next 2023 presentation here.
+
+Model Overview
+
+Llama 2 comes in various sizes, ranging from 7B to 70B parameters, catering to different needs, computational resources, and training / inference budgets. Whether it’s small-scale projects or large-scale deployments, Llama models offer versatility and scalability to accommodate a wide range of applications.
+
+Llama 2 is an auto-regressive language model that uses an optimized transformer architecture. The largest, 70B model, uses grouped-query attention, which speeds up inference without sacrificing quality. Llama 2 is trained on 2 trillion tokens (40% more data than Llama) and has the context length of 4,096 tokens for inference (double the context length of Llama), which enables more accuracy, fluency, and creativity for the model.
+
+Llama 2 is a state-of-the-art LLM that outperforms many other open source language models on many benchmarks, including reasoning, coding, proficiency, and knowledge tests. The model’s scale and complexity place many demands on AI accelerators, making it an ideal benchmark for LLM training and inference performance of PyTorch/XLA on Cloud TPUs.
+
+Performance Challenge of LLMs
+
+Large-scale distributed training for LLMs such as Llama 2 introduces technical challenges that require practical solutions to make the most efficient use of TPUs. Llama’s size can strain both memory and processing resources of TPUs. To address this, we use model sharding, which involves breaking down the model into smaller segments, each fitting within the capacity of a single TPU core. This enables parallelism across multiple TPUs, improving training speed while reducing communication overhead.
+
+Another challenge is managing the large datasets required for training Llama 2 efficiently, which requires effective data distribution and synchronization methods. Additionally, optimizing factors like learning rate schedules, gradient aggregation, and weight synchronization across distributed TPUs is crucial for achieving convergence.
+
+After pretraining or fine-tuning Llama 2, running inference on the model checkpoint creates additional technical challenges. All of the challenges discussed in our previous blog post, such as autoregressive decoding, variable input prompt lengths, and the need for model sharding and quantization still apply for Llama 2. In addition, Llama 2 introduced two new capabilities: grouped-query attention and early stopping. We discuss how PyTorch/XLA handles these challenges to enable high-performance, cost-efficient training and inference of Llama 2 on Cloud TPU v4 and v5e.
+
+Large-Scale Distributed Training
+
+PyTorch/XLA offers two major ways of doing large-scale distributed training: SPMD, which utilizes the XLA compiler to transform and partition a single-device program into a multi-device distributed program; and FSDP, which implements the widely-adopted Fully Sharded Data Parallel algorithm.
+
+In this blog post, we show how to use the SPMD API to annotate the HuggingFace (HF) Llama 2 implementation to maximize performance. For comparison, we also show our FSDP results with the same configurations; read about PyTorch/XLA FSDP API here.
+
+SPMD Overview
+
+Let’s briefly review the fundamentals of SPMD. For details, please refer to our blog post and user guide.
+
+Mesh
+
+A multidimensional array that describes the logical topology of the TPU devices:
+
+# Assuming you are running on a TPU host that has 8 devices attached
+num_devices = xr.global_runtime_device_count()
+# mesh shape will be (4,2) in this example
+mesh_shape = (num_devices // 2, 2)
+device_ids = np.array(range(num_devices))
+# axis_names 'x' and 'y' are optional
+mesh = Mesh(device_ids, mesh_shape, ('x', 'y'))
+
+
+Partition Spec
+
+A tuple that describes how the corresponding tensor’s dimensions are sharded across the mesh:
+
+partition_spec = ('x', 'y')
+
+
+Mark Sharding
+
+An API that takes a mesh and a partition_spec, and then generates a sharding annotation for the XLA compiler.
+
+tensor = torch.randn(4, 4).to('xla')
+# Let's resue the above mesh and partition_spec.
+# It means the tensor's 0th dim is sharded 4 way and 1th dim is sharded 2 way.
+xs.mark_sharding(tensor, mesh, partition_spec)
+
+
+2D Sharding with SPMD
+
+In our SPMD blog post, we demonstrated using 1D FSDP style sharding. Here, we introduce a more powerful sharding strategy, called 2D sharding, where both the parameters and activations are sharded. This new sharding strategy not only allows fitting a larger model but also boosts the MFU to up to 54.3%. For more details, read the Benchmarks section.
+
+This section introduces a set of general rules that applies to most LLMs, and for convenience we directly reference the variable names and configuration names from HF Llama.
+
+First, let’s create a 2D Mesh with corresponding axis names: data and model. The data axis is usually where we distribute the input data, and the model axis is where we further distribute the model.
+
+mesh = Mesh(device_ids, mesh_shape, ('data', 'model'))
+
+
+The mesh_shape can be a hyper-parameter that is tuned for different model sizes and hardware configurations. The same mesh will be reused in all following sharding annotations. In the next few sections, we will cover how to use the mesh to shard parameters, activations and input data.
+
+Parameter Sharding
+
+Below is a table that summarizes all parameters of HF Llama 2 and corresponding partition specifications. Example HF code can be found here.
+
+
+  
+   Parameter Name
+   
+   Explanation
+   
+   Parameter Shape
+   
+   Partition Spec
+   
+  
+  
+   embed_tokens
+   
+   embedding layer
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   q_proj
+   
+   attention weights
+   
+   (num_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   k_proj / v_proj
+   
+   attention weights
+   
+   (num_key_value_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   o_proj
+   
+   attention weights
+   
+   (hidden_size, num_heads x head_dim)
+   
+   (model, data)
+   
+  
+  
+   gate_proj / up_proj
+   
+   MLP weights
+   
+   (intermediate_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   down_proj
+   
+   MLP weights
+   
+   (hidden_size, intermediate_size)
+   
+   (data, model)
+   
+  
+  
+   lm_head
+   
+   HF output embedding 
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+
+
+Table 1: SPMD 2D Sharding Parameter Partition Spec
+
+The rule is to shard the hidden_size dim of any weights except QKVO projections according to the data axis of the mesh, then shard the other dim with the remaining model axis. For QKVO, do the opposite. This model-data axis rotation methodology is similar to that of Megatron-LM to reduce communication overhead. For layernorm weights, we implicitly mark them as replicated across different devices given they are 1D tensors.
+
+Activation Sharding
+
+In order to better utilize the device memory, very often we need to annotate the output of some memory bound ops. That way the compiler is forced to only keep partial output on devices instead of the full output. In Llama 2, we explicitly annotate all torch.matmul and nn.Linear outputs. Table 2 summarizes the corresponding annotations; the example HF code can be found here.
+
+
+  
+   Output Name
+   
+   Explanation
+   
+   Output Shape
+   
+   Partition Spec
+   
+  
+  
+   inputs_embeds
+   
+   embedding layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   query_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   key_states / value_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_key_value_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   attn_weights
+   
+   attention weights
+   
+   (batch_size, num_attention_heads, sequence_length, sequence_length)
+   
+   (data, model, None, None)
+   
+  
+  
+   attn_output
+   
+   attention layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   up_proj / gate_proj / down_proj
+   
+   MLP nn.Linear outputs
+   
+   (batch_size, sequence_length, intermediate_size)
+   
+   (data, None, model)
+   
+  
+  
+   logits
+   
+   HF output embedding output 
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+
+
+Table 2: SPMD 2D Sharding Activation Partition Spec
+
+The rule is to shard the batch_size dim of any outputs according to the data axis of the mesh, then replicate the length dims of any outputs, and finally shard the last dim along the model axis.
+
+Input Sharding
+
+For input sharding, the rule is to shard the batch dim along the data axis of the mesh, and replicate the sequence_length dim. Below is the example code, and the corresponding HF change may be found here.
+
+partition_spec = ('data', None)
+sharding_spec = xs.ShardingSpec(mesh, partition_spec)
+# MpDeviceLoader will shard the input data before sending to the device.
+pl.MpDeviceLoader(dataloader, self.args.device, input_sharding=sharding_spec, ...)
+
+
+Now, all the data and model tensors that require sharding are covered!
+
+Optimizer States &amp; Gradients
+
+You may be wondering whether it is necessary to shard the optimizer states and gradients as well. Great news: the sharding propagation feature of the XLA compiler automates the sharding annotation in these two scenarios, without needing more hints to improve performance.
+
+It is important to note that optimizer states are typically initialized within the first iteration of the training loop. From the standpoint of the XLA compiler, the optimizer states are the outputs of the first graph, and therefore have the sharding annotation propagated. For subsequent iterations, the optimizer states become inputs to the second graph, with the sharding annotation propagated from the first one. This is also why PyTorch/XLA typically produces two graphs for the training loops. If the optimizer states are somehow initialized before the first iteration, users will have to manually annotate them, just like the model weights.
+
+Again, all concrete examples of the above sharding annotation can be found in our fork of HF Transformers here. The repo also contains code for our experimental feature MultiSlice, including HybridMesh and dcn axis, which follows the same principles mentioned above.
+
+Caveats
+
+While using SPMD for training, there are a few important things to pay attention to:
+
+
+  Use torch.einsum instead of torch.matmul; torch.matmul usually flattens tensors and does a torch.mm at the end, and that’s bad for SPMD when the combined axes are sharded. The XLA compiler will have a hard time determining how to propagate the sharding.
+  PyTorch/XLA provides patched [nn.Linear](https://github.com/pytorch/xla/blob/master/torch_xla/experimental/xla_sharding.py#L570) to overcome the above constraint:
+
+
+import torch_xla.experimental.xla_sharding as xs
+from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
+
+ model = apply_xla_patch_to_nn_linear(model, xs.xla_patched_nn_linear_forward)
+
+
+
+  Always reuse the same mesh across all shardings
+  Always specify --dataloader_drop_last yes. The last smaller data is hard to annotate.
+  Large models which are initialized on the host can induce host-side OOM. One way to avoid this issue is to initialize parameters on the meta device, then create and shard real tensors layer-by-layer.
+
+
+Infrastructure Improvements
+
+Besides the above modeling techniques, we have developed additional features and improvements to maximize performance, including:
+
+
+  We enable asynchronous collective communication. This requires enhancements on the XLA compiler’s latency hiding scheduler to better optimize for the Llama 2 PyTorch code.
+  We now allow sharding annotations in the middle of the IR graph, just like JAX’s jax.lax.with_sharding_constraint. Previously, only graph inputs were annotated.
+  We also propagate replicated sharding spec from the compiler to the graph outputs. This allows us to shard the optimizer states automatically.
+
+
+Inference Optimizations
+
+All the PyTorch/XLA optimizations implemented for Llama inference are applied to Llama 2 as well. That includes Tensor Parallelism + Dynamo (torch.compile) using torch-xla collective ops, autoregressive decoding logic improvement to avoid recompilation, bucketized prompt length, KV-cache with compilation friendly index ops. Llama 2 introduces two new changes: Grouped Query Attention, and Early Stopping when eos is reached for all prompts. We applied corresponding changes to promote better performance and flexibility with PyTorch/XLA.
+
+Grouped Query Attention
+
+Llama 2 enables Grouped Query Attention for the 70B models. It allows the number of Key and Value heads to be smaller than the number of Query heads, while still supporting KV-cache sharding up to the number of KV heads. For the 70B models, the n_kv_heads is 8, which limits the tensor parallelism to be less or equal to 8. In order to shard the model checkpoint to run on more devices, the K, V projection weights need to be replicated first, and then split into multiple pieces. For example, to shard the 70B model checkpoint from 8 pieces to 16 pieces, the K, V projection weights are duplicated and split into 2 pieces for each shard. We provide a reshard_checkpoints.py script to handle that, and to make sure the sharded checkpoint performs mathematically identical to the original checkpoint.
+
+EOS Early Stopping
+
+The Llama 2 generation code added the early stopping logic. A eos_reached tensor is used to track the completion of all the prompt generations, and if the eos token is reached for all the prompts in the batch, the generation would stop early. The similar change is incorporated in the PyTorch/XLA optimized version as well, with some minor tweaks.
+
+In PyTorch/XLA, checking the value of a tensor like eos_reached as part of the control flow condition would invoke a blocking device-to-host transfer. The tensor would be transferred from device memory to CPU memory to evaluate its value, while all other logics are waiting. This introduced a delay on the scale of ms after every new token generation. As a trade-off, we reduce the rate of checking the eos_reached value to be once every 10 new token generations. With this change, the impact of the blocking device-to-host transfer would be reduced by 10x, while the early stopping would still be effective, and at most 9 unnecessary tokens would be generated after each sequence reaches the eos token.
+
+Model Serving
+
+PyTorch/XLA is working on a serving strategy to enable the PyTorch community to serve their deep learning applications via Torch.Export, StableHLO, and SavedModel. PyTorch/XLA Serving is an experimental feature in PyTorch/XLA 2.1 release; for details visit our serving user guide. Users can take advantage of TorchServe to run their single-host workloads.
+
+Benchmarks
+
+Metrics
+
+To measure training performance, we use the industry-standard metric: Model FLOPS Utilization (MFU). Model FLOPS are the floating point operations required to perform a single forward and backward pass. Model FLOPs are hardware and implementation independent and only depend on the underlying model. MFU measures how effectively the model is using the actual hardware during training. Achieving 100% MFU means that the model is using the hardware perfectly.
+
+To measure inference performance, we use the industry-standard metric of throughput. First, we measure latency per token when the model has been compiled and loaded. Then, we calculate throughput by dividing batch size (BS) over latency per chip. As a result, throughput measures how the model is performing in production environments regardless of how many chips are used.
+
+Results
+
+Training Evaluation
+
+Figure 1 shows Llama 2 SPMD 2D sharding training results on a range of Google TPU v4 hardware with PyTorch/XLA FSDP as the baseline. We increased MFU by 28% across all sizes of Llama 2 compared to FSDP running on the same hardware configuration. This performance improvement is largely due to: 1) 2D Sharding has less communication overhead than FSDP, and 2) asynchronous collective communication is enabled in SPMD which allows communication and computation overlapping. Also note that as the model size scales, we maintain the high MFU. Table 3 shows all the hardware configurations plus some hyperparameters used in the training benchmarks.
+
+
+
+Fig. 1: Llama 2 Training MFU on TPU v4 Hardware
+
+The results in Figure 1 are produced with sequence length 1,024. Figure 2 shows how the performance behaves with larger sequence lengths. It shows our performance also scales linearly with sequence lengths. The MFU is expected to decrease a little as a smaller per device batch size is needed to accommodate the additional memory pressure introduced by the larger sequence length since the sequence length axis is not sharded in 2D sharding. And TPU is very sensitive to batch size. For Llama 2, 70B parameters, the performance decrease is as low as 4%. At the time of preparing these results, Hugging Face Llama 2 tokenizer limits the max model input to 2,048, preventing us from evaluating larger sequence lengths.
+
+
+
+Fig. 2: Llama 2 SPMD Training MFU on TPU v4 with Different Sequence Lengths
+
+
+  
+   Model Size
+   
+   7B
+   
+   13B
+   
+   70B
+   
+  
+  
+   TPU NumCores
+   
+   V4-32
+   
+   V4-64
+   
+   V4-256
+   
+  
+  
+   Mesh Shape
+   
+   (16, 1)
+   
+   (32, 1)
+   
+   (32, 4)
+   
+  
+  
+   Seq Len
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+  
+  
+   Global Batch
+   
+   256
+   
+   128
+   
+   256
+   
+   128
+   
+   512
+   
+   256
+   
+  
+  
+   Per Device Batch
+   
+   16
+   
+   8
+   
+   8
+   
+   4
+   
+   16
+   
+   8
+   
+  
+
+
+Table 3: Llama 2 SPMD Training Benchmark TPU Configurations and Hyperparameters
+
+One last thing to call out is that we use adafactor as the optimizer for better memory utilization. And once again, here is the user guide to reproduce the benchmark results listed above.
+
+Inference Evaluation
+
+In this section, we extend our previous evaluation of Llama on Cloud v4 TPU. Here, we demonstrate the performance properties of TPU v5e for inference applications.
+
+We define inference throughput as the number of tokens produced by a model per second per TPU chip. Figure 3 shows Llama 2 70B throughput on a v5e-16 TPU node. Given Llama is a memory bound application, we see that applying weight-only quantization unblocks extending the model batch size to 32. Higher throughput results would be possible on larger TPU v5e hardware up to the point where the ICI network bandwidth between chips throttle the TPU slice from delivering higher throughput. Exploring the upper bound limits of TPU v5e on Llama 2 was outside of the scope of this work. Notice, to make the Llama 2 70B model run on v5e-16, we replicated the attention heads to have one head per chip as discussed in the Inference section above. As discussed previously, with increasing model batch size, per-token latency grows proportionally; quantization improves overall latency by reducing memory I/O demand.
+
+
+
+Fig. 3: Llama 2 70B Inference Per-Chip Throughput on TPU v5e vs. Batch Size
+
+Figure 4 shows inference throughput results across different model sizes. These results highlight the largest throughput given the hardware configuration when using bf16 precision. With weight only quantization, this throughput reaches 42 on the 70B model. As mentioned above, increasing hardware resources may lead to performance gains.
+
+
+
+Fig. 4: Llama 2 Inference Per-Chip Throughput on TPU v5e
+
+Figure 5 shows the cost of serving Llama 2 models (from Figure 4) on Cloud TPU v5e. We report the TPU v5e per-chip cost based on the 3-year commitment (reserved) price in the us-west4 region. All model sizes use maximum sequence length of 2,048 and maximum generation length of 1,000 tokens. Note that with quantization, the cost for the 70B model drops to $0.0036 per 1,000 tokens.
+
+
+
+Fig. 5: Llama 2 Inference Per-Chip Cost on TPU v5e
+
+Figure 6 summarizes our best Llama 2 inference latency results on TPU v5e. Llama 2 7B results are obtained from our non-quantized configuration (BF16 Weight, BF16 Activation) while the 13B and 70B results are from the quantized (INT8 Weight, BF16 Activation) configuration. We attribute this observation to the inherent memory saving vs. compute overhead tradeoff of quantization; as a result, for smaller models, quantization may not lead to lower inference latency.
+
+Additionally, prompt length has a strong effect on the memory requirements of LLMs. For instance, we observe a latency of 1.2ms / token (i.e. 201 tokens / second / chip) when max_seq_len=256 at batch size of 1 with no quantization on v5e-4 running Llama2 7B.
+
+
+
+Fig. 6: Llama 2 Inference Latency on TPU v5e
+
+Final Thoughts
+
+The recent wave of AI innovation has been nothing short of transformative, with breakthroughs in LLMs at the forefront. Meta’s Llama and Llama 2 models stand as notable milestones in this wave of progress. PyTorch/XLA uniquely enables high-performance, cost-efficient training and inference for Llama 2 and other LLMs and generative AI models on Cloud TPUs, including the new Cloud TPU v5e. Looking forward, PyTorch/XLA will continue to push the performance limits on Cloud TPUs in both throughput and scalability and at the same time maintain the same PyTorch user experience.
+
+We are ecstatic about what’s ahead for PyTorch/XLA and invite the community to join us. PyTorch/XLA is developed fully in open source. So, please file issues, submit pull requests, and send RFCs to GitHub so that we can openly collaborate. You can also try out PyTorch/XLA for yourself on various XLA devices including TPUs and GPUs.
+
+We would like to extend our special thanks to Marcello Maggioni, Tongfei Guo, Andy Davis, Berkin Ilbeyi for their support and collaboration in this effort.
+
+Cheers,
+The PyTorch/XLA Team at Google
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="High-Performance Llama 2 Training and Inference with PyTorch/XLA on Cloud TPUs">
+<meta name="twitter:description" content="In a landscape where AI innovation is accelerating at an unprecedented pace, Meta’s Llama family of open sourced large language models (LLMs) stands out as a notable breakthrough. Llama marked a significant step forward for LLMs, demonstrating the power of pre-trained architectures for a wide range of applications. Llama 2 further pushed the boundaries of scale and capabilities, inspiring advancements in language understanding, generation, and beyond.
+
+Shortly after the announcement of Llama, we published a blog post showcasing ultra-low inference latency for Llama using PyTorch/XLA on Cloud TPU v4. Building on these results, today, we are proud to share Llama 2 training and inference performance using PyTorch/XLA on Cloud TPU v4 and our newest AI supercomputer, Cloud TPU v5e.
+
+In this blog post, we use Llama 2 as an example model to demonstrate the power of PyTorch/XLA on Cloud TPUs for LLM training and inference. We discuss the computation techniques and optimizations used to improve inference throughput and training model FLOPs utilization (MFU). For Llama 2 70B parameters, we deliver 53% training MFU, 17 ms/token inference latency, 42 tokens/s/chip throughput powered by PyTorch/XLA on Google Cloud TPU. We offer a training user guide and an inference user guide for reproducing the results in this article. Additionally, you may find our Google Next 2023 presentation here.
+
+Model Overview
+
+Llama 2 comes in various sizes, ranging from 7B to 70B parameters, catering to different needs, computational resources, and training / inference budgets. Whether it’s small-scale projects or large-scale deployments, Llama models offer versatility and scalability to accommodate a wide range of applications.
+
+Llama 2 is an auto-regressive language model that uses an optimized transformer architecture. The largest, 70B model, uses grouped-query attention, which speeds up inference without sacrificing quality. Llama 2 is trained on 2 trillion tokens (40% more data than Llama) and has the context length of 4,096 tokens for inference (double the context length of Llama), which enables more accuracy, fluency, and creativity for the model.
+
+Llama 2 is a state-of-the-art LLM that outperforms many other open source language models on many benchmarks, including reasoning, coding, proficiency, and knowledge tests. The model’s scale and complexity place many demands on AI accelerators, making it an ideal benchmark for LLM training and inference performance of PyTorch/XLA on Cloud TPUs.
+
+Performance Challenge of LLMs
+
+Large-scale distributed training for LLMs such as Llama 2 introduces technical challenges that require practical solutions to make the most efficient use of TPUs. Llama’s size can strain both memory and processing resources of TPUs. To address this, we use model sharding, which involves breaking down the model into smaller segments, each fitting within the capacity of a single TPU core. This enables parallelism across multiple TPUs, improving training speed while reducing communication overhead.
+
+Another challenge is managing the large datasets required for training Llama 2 efficiently, which requires effective data distribution and synchronization methods. Additionally, optimizing factors like learning rate schedules, gradient aggregation, and weight synchronization across distributed TPUs is crucial for achieving convergence.
+
+After pretraining or fine-tuning Llama 2, running inference on the model checkpoint creates additional technical challenges. All of the challenges discussed in our previous blog post, such as autoregressive decoding, variable input prompt lengths, and the need for model sharding and quantization still apply for Llama 2. In addition, Llama 2 introduced two new capabilities: grouped-query attention and early stopping. We discuss how PyTorch/XLA handles these challenges to enable high-performance, cost-efficient training and inference of Llama 2 on Cloud TPU v4 and v5e.
+
+Large-Scale Distributed Training
+
+PyTorch/XLA offers two major ways of doing large-scale distributed training: SPMD, which utilizes the XLA compiler to transform and partition a single-device program into a multi-device distributed program; and FSDP, which implements the widely-adopted Fully Sharded Data Parallel algorithm.
+
+In this blog post, we show how to use the SPMD API to annotate the HuggingFace (HF) Llama 2 implementation to maximize performance. For comparison, we also show our FSDP results with the same configurations; read about PyTorch/XLA FSDP API here.
+
+SPMD Overview
+
+Let’s briefly review the fundamentals of SPMD. For details, please refer to our blog post and user guide.
+
+Mesh
+
+A multidimensional array that describes the logical topology of the TPU devices:
+
+# Assuming you are running on a TPU host that has 8 devices attached
+num_devices = xr.global_runtime_device_count()
+# mesh shape will be (4,2) in this example
+mesh_shape = (num_devices // 2, 2)
+device_ids = np.array(range(num_devices))
+# axis_names 'x' and 'y' are optional
+mesh = Mesh(device_ids, mesh_shape, ('x', 'y'))
+
+
+Partition Spec
+
+A tuple that describes how the corresponding tensor’s dimensions are sharded across the mesh:
+
+partition_spec = ('x', 'y')
+
+
+Mark Sharding
+
+An API that takes a mesh and a partition_spec, and then generates a sharding annotation for the XLA compiler.
+
+tensor = torch.randn(4, 4).to('xla')
+# Let's resue the above mesh and partition_spec.
+# It means the tensor's 0th dim is sharded 4 way and 1th dim is sharded 2 way.
+xs.mark_sharding(tensor, mesh, partition_spec)
+
+
+2D Sharding with SPMD
+
+In our SPMD blog post, we demonstrated using 1D FSDP style sharding. Here, we introduce a more powerful sharding strategy, called 2D sharding, where both the parameters and activations are sharded. This new sharding strategy not only allows fitting a larger model but also boosts the MFU to up to 54.3%. For more details, read the Benchmarks section.
+
+This section introduces a set of general rules that applies to most LLMs, and for convenience we directly reference the variable names and configuration names from HF Llama.
+
+First, let’s create a 2D Mesh with corresponding axis names: data and model. The data axis is usually where we distribute the input data, and the model axis is where we further distribute the model.
+
+mesh = Mesh(device_ids, mesh_shape, ('data', 'model'))
+
+
+The mesh_shape can be a hyper-parameter that is tuned for different model sizes and hardware configurations. The same mesh will be reused in all following sharding annotations. In the next few sections, we will cover how to use the mesh to shard parameters, activations and input data.
+
+Parameter Sharding
+
+Below is a table that summarizes all parameters of HF Llama 2 and corresponding partition specifications. Example HF code can be found here.
+
+
+  
+   Parameter Name
+   
+   Explanation
+   
+   Parameter Shape
+   
+   Partition Spec
+   
+  
+  
+   embed_tokens
+   
+   embedding layer
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   q_proj
+   
+   attention weights
+   
+   (num_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   k_proj / v_proj
+   
+   attention weights
+   
+   (num_key_value_heads x head_dim, hidden_size)
+   
+   (data, model)
+   
+  
+  
+   o_proj
+   
+   attention weights
+   
+   (hidden_size, num_heads x head_dim)
+   
+   (model, data)
+   
+  
+  
+   gate_proj / up_proj
+   
+   MLP weights
+   
+   (intermediate_size, hidden_size)
+   
+   (model, data)
+   
+  
+  
+   down_proj
+   
+   MLP weights
+   
+   (hidden_size, intermediate_size)
+   
+   (data, model)
+   
+  
+  
+   lm_head
+   
+   HF output embedding 
+   
+   (vocab_size, hidden_size)
+   
+   (model, data)
+   
+  
+
+
+Table 1: SPMD 2D Sharding Parameter Partition Spec
+
+The rule is to shard the hidden_size dim of any weights except QKVO projections according to the data axis of the mesh, then shard the other dim with the remaining model axis. For QKVO, do the opposite. This model-data axis rotation methodology is similar to that of Megatron-LM to reduce communication overhead. For layernorm weights, we implicitly mark them as replicated across different devices given they are 1D tensors.
+
+Activation Sharding
+
+In order to better utilize the device memory, very often we need to annotate the output of some memory bound ops. That way the compiler is forced to only keep partial output on devices instead of the full output. In Llama 2, we explicitly annotate all torch.matmul and nn.Linear outputs. Table 2 summarizes the corresponding annotations; the example HF code can be found here.
+
+
+  
+   Output Name
+   
+   Explanation
+   
+   Output Shape
+   
+   Partition Spec
+   
+  
+  
+   inputs_embeds
+   
+   embedding layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   query_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   key_states / value_states
+   
+   attention nn.Linear output
+   
+   (batch_size, sequence_length, num_key_value_heads x head_dim)
+   
+   (data, None, model)
+   
+  
+  
+   attn_weights
+   
+   attention weights
+   
+   (batch_size, num_attention_heads, sequence_length, sequence_length)
+   
+   (data, model, None, None)
+   
+  
+  
+   attn_output
+   
+   attention layer output
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+  
+   up_proj / gate_proj / down_proj
+   
+   MLP nn.Linear outputs
+   
+   (batch_size, sequence_length, intermediate_size)
+   
+   (data, None, model)
+   
+  
+  
+   logits
+   
+   HF output embedding output 
+   
+   (batch_size, sequence_length, hidden_size)
+   
+   (data, None, model)
+   
+  
+
+
+Table 2: SPMD 2D Sharding Activation Partition Spec
+
+The rule is to shard the batch_size dim of any outputs according to the data axis of the mesh, then replicate the length dims of any outputs, and finally shard the last dim along the model axis.
+
+Input Sharding
+
+For input sharding, the rule is to shard the batch dim along the data axis of the mesh, and replicate the sequence_length dim. Below is the example code, and the corresponding HF change may be found here.
+
+partition_spec = ('data', None)
+sharding_spec = xs.ShardingSpec(mesh, partition_spec)
+# MpDeviceLoader will shard the input data before sending to the device.
+pl.MpDeviceLoader(dataloader, self.args.device, input_sharding=sharding_spec, ...)
+
+
+Now, all the data and model tensors that require sharding are covered!
+
+Optimizer States &amp; Gradients
+
+You may be wondering whether it is necessary to shard the optimizer states and gradients as well. Great news: the sharding propagation feature of the XLA compiler automates the sharding annotation in these two scenarios, without needing more hints to improve performance.
+
+It is important to note that optimizer states are typically initialized within the first iteration of the training loop. From the standpoint of the XLA compiler, the optimizer states are the outputs of the first graph, and therefore have the sharding annotation propagated. For subsequent iterations, the optimizer states become inputs to the second graph, with the sharding annotation propagated from the first one. This is also why PyTorch/XLA typically produces two graphs for the training loops. If the optimizer states are somehow initialized before the first iteration, users will have to manually annotate them, just like the model weights.
+
+Again, all concrete examples of the above sharding annotation can be found in our fork of HF Transformers here. The repo also contains code for our experimental feature MultiSlice, including HybridMesh and dcn axis, which follows the same principles mentioned above.
+
+Caveats
+
+While using SPMD for training, there are a few important things to pay attention to:
+
+
+  Use torch.einsum instead of torch.matmul; torch.matmul usually flattens tensors and does a torch.mm at the end, and that’s bad for SPMD when the combined axes are sharded. The XLA compiler will have a hard time determining how to propagate the sharding.
+  PyTorch/XLA provides patched [nn.Linear](https://github.com/pytorch/xla/blob/master/torch_xla/experimental/xla_sharding.py#L570) to overcome the above constraint:
+
+
+import torch_xla.experimental.xla_sharding as xs
+from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
+
+ model = apply_xla_patch_to_nn_linear(model, xs.xla_patched_nn_linear_forward)
+
+
+
+  Always reuse the same mesh across all shardings
+  Always specify --dataloader_drop_last yes. The last smaller data is hard to annotate.
+  Large models which are initialized on the host can induce host-side OOM. One way to avoid this issue is to initialize parameters on the meta device, then create and shard real tensors layer-by-layer.
+
+
+Infrastructure Improvements
+
+Besides the above modeling techniques, we have developed additional features and improvements to maximize performance, including:
+
+
+  We enable asynchronous collective communication. This requires enhancements on the XLA compiler’s latency hiding scheduler to better optimize for the Llama 2 PyTorch code.
+  We now allow sharding annotations in the middle of the IR graph, just like JAX’s jax.lax.with_sharding_constraint. Previously, only graph inputs were annotated.
+  We also propagate replicated sharding spec from the compiler to the graph outputs. This allows us to shard the optimizer states automatically.
+
+
+Inference Optimizations
+
+All the PyTorch/XLA optimizations implemented for Llama inference are applied to Llama 2 as well. That includes Tensor Parallelism + Dynamo (torch.compile) using torch-xla collective ops, autoregressive decoding logic improvement to avoid recompilation, bucketized prompt length, KV-cache with compilation friendly index ops. Llama 2 introduces two new changes: Grouped Query Attention, and Early Stopping when eos is reached for all prompts. We applied corresponding changes to promote better performance and flexibility with PyTorch/XLA.
+
+Grouped Query Attention
+
+Llama 2 enables Grouped Query Attention for the 70B models. It allows the number of Key and Value heads to be smaller than the number of Query heads, while still supporting KV-cache sharding up to the number of KV heads. For the 70B models, the n_kv_heads is 8, which limits the tensor parallelism to be less or equal to 8. In order to shard the model checkpoint to run on more devices, the K, V projection weights need to be replicated first, and then split into multiple pieces. For example, to shard the 70B model checkpoint from 8 pieces to 16 pieces, the K, V projection weights are duplicated and split into 2 pieces for each shard. We provide a reshard_checkpoints.py script to handle that, and to make sure the sharded checkpoint performs mathematically identical to the original checkpoint.
+
+EOS Early Stopping
+
+The Llama 2 generation code added the early stopping logic. A eos_reached tensor is used to track the completion of all the prompt generations, and if the eos token is reached for all the prompts in the batch, the generation would stop early. The similar change is incorporated in the PyTorch/XLA optimized version as well, with some minor tweaks.
+
+In PyTorch/XLA, checking the value of a tensor like eos_reached as part of the control flow condition would invoke a blocking device-to-host transfer. The tensor would be transferred from device memory to CPU memory to evaluate its value, while all other logics are waiting. This introduced a delay on the scale of ms after every new token generation. As a trade-off, we reduce the rate of checking the eos_reached value to be once every 10 new token generations. With this change, the impact of the blocking device-to-host transfer would be reduced by 10x, while the early stopping would still be effective, and at most 9 unnecessary tokens would be generated after each sequence reaches the eos token.
+
+Model Serving
+
+PyTorch/XLA is working on a serving strategy to enable the PyTorch community to serve their deep learning applications via Torch.Export, StableHLO, and SavedModel. PyTorch/XLA Serving is an experimental feature in PyTorch/XLA 2.1 release; for details visit our serving user guide. Users can take advantage of TorchServe to run their single-host workloads.
+
+Benchmarks
+
+Metrics
+
+To measure training performance, we use the industry-standard metric: Model FLOPS Utilization (MFU). Model FLOPS are the floating point operations required to perform a single forward and backward pass. Model FLOPs are hardware and implementation independent and only depend on the underlying model. MFU measures how effectively the model is using the actual hardware during training. Achieving 100% MFU means that the model is using the hardware perfectly.
+
+To measure inference performance, we use the industry-standard metric of throughput. First, we measure latency per token when the model has been compiled and loaded. Then, we calculate throughput by dividing batch size (BS) over latency per chip. As a result, throughput measures how the model is performing in production environments regardless of how many chips are used.
+
+Results
+
+Training Evaluation
+
+Figure 1 shows Llama 2 SPMD 2D sharding training results on a range of Google TPU v4 hardware with PyTorch/XLA FSDP as the baseline. We increased MFU by 28% across all sizes of Llama 2 compared to FSDP running on the same hardware configuration. This performance improvement is largely due to: 1) 2D Sharding has less communication overhead than FSDP, and 2) asynchronous collective communication is enabled in SPMD which allows communication and computation overlapping. Also note that as the model size scales, we maintain the high MFU. Table 3 shows all the hardware configurations plus some hyperparameters used in the training benchmarks.
+
+
+
+Fig. 1: Llama 2 Training MFU on TPU v4 Hardware
+
+The results in Figure 1 are produced with sequence length 1,024. Figure 2 shows how the performance behaves with larger sequence lengths. It shows our performance also scales linearly with sequence lengths. The MFU is expected to decrease a little as a smaller per device batch size is needed to accommodate the additional memory pressure introduced by the larger sequence length since the sequence length axis is not sharded in 2D sharding. And TPU is very sensitive to batch size. For Llama 2, 70B parameters, the performance decrease is as low as 4%. At the time of preparing these results, Hugging Face Llama 2 tokenizer limits the max model input to 2,048, preventing us from evaluating larger sequence lengths.
+
+
+
+Fig. 2: Llama 2 SPMD Training MFU on TPU v4 with Different Sequence Lengths
+
+
+  
+   Model Size
+   
+   7B
+   
+   13B
+   
+   70B
+   
+  
+  
+   TPU NumCores
+   
+   V4-32
+   
+   V4-64
+   
+   V4-256
+   
+  
+  
+   Mesh Shape
+   
+   (16, 1)
+   
+   (32, 1)
+   
+   (32, 4)
+   
+  
+  
+   Seq Len
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+   1,024
+   
+   2,048
+   
+  
+  
+   Global Batch
+   
+   256
+   
+   128
+   
+   256
+   
+   128
+   
+   512
+   
+   256
+   
+  
+  
+   Per Device Batch
+   
+   16
+   
+   8
+   
+   8
+   
+   4
+   
+   16
+   
+   8
+   
+  
+
+
+Table 3: Llama 2 SPMD Training Benchmark TPU Configurations and Hyperparameters
+
+One last thing to call out is that we use adafactor as the optimizer for better memory utilization. And once again, here is the user guide to reproduce the benchmark results listed above.
+
+Inference Evaluation
+
+In this section, we extend our previous evaluation of Llama on Cloud v4 TPU. Here, we demonstrate the performance properties of TPU v5e for inference applications.
+
+We define inference throughput as the number of tokens produced by a model per second per TPU chip. Figure 3 shows Llama 2 70B throughput on a v5e-16 TPU node. Given Llama is a memory bound application, we see that applying weight-only quantization unblocks extending the model batch size to 32. Higher throughput results would be possible on larger TPU v5e hardware up to the point where the ICI network bandwidth between chips throttle the TPU slice from delivering higher throughput. Exploring the upper bound limits of TPU v5e on Llama 2 was outside of the scope of this work. Notice, to make the Llama 2 70B model run on v5e-16, we replicated the attention heads to have one head per chip as discussed in the Inference section above. As discussed previously, with increasing model batch size, per-token latency grows proportionally; quantization improves overall latency by reducing memory I/O demand.
+
+
+
+Fig. 3: Llama 2 70B Inference Per-Chip Throughput on TPU v5e vs. Batch Size
+
+Figure 4 shows inference throughput results across different model sizes. These results highlight the largest throughput given the hardware configuration when using bf16 precision. With weight only quantization, this throughput reaches 42 on the 70B model. As mentioned above, increasing hardware resources may lead to performance gains.
+
+
+
+Fig. 4: Llama 2 Inference Per-Chip Throughput on TPU v5e
+
+Figure 5 shows the cost of serving Llama 2 models (from Figure 4) on Cloud TPU v5e. We report the TPU v5e per-chip cost based on the 3-year commitment (reserved) price in the us-west4 region. All model sizes use maximum sequence length of 2,048 and maximum generation length of 1,000 tokens. Note that with quantization, the cost for the 70B model drops to $0.0036 per 1,000 tokens.
+
+
+
+Fig. 5: Llama 2 Inference Per-Chip Cost on TPU v5e
+
+Figure 6 summarizes our best Llama 2 inference latency results on TPU v5e. Llama 2 7B results are obtained from our non-quantized configuration (BF16 Weight, BF16 Activation) while the 13B and 70B results are from the quantized (INT8 Weight, BF16 Activation) configuration. We attribute this observation to the inherent memory saving vs. compute overhead tradeoff of quantization; as a result, for smaller models, quantization may not lead to lower inference latency.
+
+Additionally, prompt length has a strong effect on the memory requirements of LLMs. For instance, we observe a latency of 1.2ms / token (i.e. 201 tokens / second / chip) when max_seq_len=256 at batch size of 1 with no quantization on v5e-4 running Llama2 7B.
+
+
+
+Fig. 6: Llama 2 Inference Latency on TPU v5e
+
+Final Thoughts
+
+The recent wave of AI innovation has been nothing short of transformative, with breakthroughs in LLMs at the forefront. Meta’s Llama and Llama 2 models stand as notable milestones in this wave of progress. PyTorch/XLA uniquely enables high-performance, cost-efficient training and inference for Llama 2 and other LLMs and generative AI models on Cloud TPUs, including the new Cloud TPU v5e. Looking forward, PyTorch/XLA will continue to push the performance limits on Cloud TPUs in both throughput and scalability and at the same time maintain the same PyTorch user experience.
+
+We are ecstatic about what’s ahead for PyTorch/XLA and invite the community to join us. PyTorch/XLA is developed fully in open source. So, please file issues, submit pull requests, and send RFCs to GitHub so that we can openly collaborate. You can also try out PyTorch/XLA for yourself on various XLA devices including TPUs and GPUs.
+
+We would like to extend our special thanks to Marcello Maggioni, Tongfei Guo, Andy Davis, Berkin Ilbeyi for their support and collaboration in this effort.
+
+Cheers,
+The PyTorch/XLA Team at Google
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年11月6日</p>
+            <h1>
+                <a class="blog-title">高性能 Llama 2 在 PyTorch/XLA 和云 TPU 上的训练与推理</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由谭洁文、乔恩·博林、郑耀诺、鲁立扬、刘思源、李恩珠、白曼菲、梅根·考恩、曹杰、莫哈马迪、沙乌欣·扎希拉扎米、亚历克斯·斯皮里多诺夫</p>
+                    <p>在人工智能创新以前所未有的速度加速发展的背景下，Meta 的 Llama 系列开源大型语言模型(LLMs)脱颖而出，成为一项显著的突破。<a href="https://ai.meta.com/llama/">LLAMA</a> 标志着LLMs的重大进步，展示了预训练架构在广泛应用中的力量。<a href="https://about.fb.com/news/2023/07/llama-2/">Llama 2</a> 进一步推动了规模和能力边界，激发了语言理解、生成等方面的进步。</p>
+
+<p>在宣布 Llama 之后不久，我们发布了一篇<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/">博客文章 </a>，展示了在 Cloud TPU v4 上使用 PyTorch/XLA 为 Llama 实现超低推理延迟。在此基础上，今天，我们自豪地分享使用 <a href="https://github.com/pytorch/xla">PyTorch/XLA</a> 在 Cloud TPU v4 和我们的最新 AI 超级计算机 <a href="https://cloud.google.com/blog/products/compute/announcing-cloud-tpu-v5e-and-a3-gpus-in-ga">Cloud TPU v5e</a> 上进行的 Llama 2 训练和推理性能。</p>
+
+<p>在这篇博客文章中，我们以 Llama 2 为例，展示了 PyTorch/XLA 在 Google Cloud TPU 上进行LLM训练和推理的强大功能。我们讨论了用于提高推理吞吐量和训练模型 FLOPs 利用率（MFU）的计算技术和优化方法。<strong> 对于 70B 参数的 Llama 2，我们实现了 53%的训练 MFU，17 毫秒/令牌的推理延迟，42 个令牌/芯片的吞吐量，这一切都得益于 PyTorch/XLA 在 Google Cloud TPU 上的应用。</strong> 我们提供了<a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/SPMD_USER_GUIDE.md">训练用户指南</a>和<a href="https://github.com/pytorch-tpu/llama/blob/llama2-google-next-inference/TORCH_XLA_USER_GUIDE.md">推理用户指南 </a>，以帮助您重现本文中的结果。此外，您还可以在这里找到我们的 <a href="https://www.youtube.com/watch?v=PSpmRtWuMs8">Google Next 2023 演示文稿 </a>。</p>
+
+<h2 id="model-overview">模型概述</h2>
+
+<p>Llama 2 有多种大小，参数量从 7B 到 70B 不等，满足不同的需求、计算资源和训练/推理预算。无论是小型项目还是大规模部署，Llama 模型都提供灵活性和可扩展性，以适应各种应用。</p>
+
+<p>Llama 2 是一种自回归语言模型，它使用优化的 Transformer 架构。最大的 70B 模型使用分组查询注意力，这可以在不牺牲质量的情况下加快推理速度。 <a href="https://arxiv.org/pdf/2307.09288.pdf">Llama 2 在 200 万亿个标记上训练 </a>（比 Llama 多 40%的数据）并且推理的上下文长度为 4,096 个标记（是 Llama 的两倍），这使模型具有更高的准确性、流畅性和创造力。</p>
+
+<p>Llama 2 是一种最先进的 LLM，在许多基准测试中，包括推理、编码、熟练度和知识测试中，都优于许多其他开源语言模型。该模型的规模和复杂性对 AI 加速器提出了许多要求，使其成为 PyTorch/XLA 在 Cloud TPUs 上训练和推理性能的理想基准。</p>
+
+<h2 id="performance-challenge-of-llms">LLMs 的性能挑战</h2>
+
+<p>大规模分布式训练对于 Llama 2 等模型来说，引入了需要实际解决方案的技术挑战，以最大限度地利用 TPU。Llama 的规模可能会对 TPU 的内存和计算资源造成压力。为了解决这个问题，我们采用了模型分片技术，即将模型分解成更小的部分，每个部分都适合单个 TPU 核心的容量。这可以在多个 TPU 之间实现并行处理，提高训练速度同时减少通信开销。</p>
+
+<p>另一个挑战是管理训练 Llama 2 所需的大量数据集，这需要有效的数据分布和同步方法。此外，优化学习率调度、梯度聚合以及跨分布式 TPU 的权重同步对于实现收敛至关重要。</p>
+
+<p>在预训练或微调 Llama 2 之后，在模型检查点上进行推理会带来额外的技术挑战。我们之前<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/">博客文章</a>中讨论的所有挑战，例如自回归解码、可变输入提示长度以及需要模型分片和量化，在 Llama 2 中仍然适用。此外，Llama 2 引入了两种新功能：分组查询注意力和早期停止。我们讨论了 PyTorch/XLA 如何处理这些挑战，以实现 Llama 2 在 Cloud TPU v4 和 v5e 上的高性能、低成本训练和推理。</p>
+
+<h2 id="large-scale-distributed-training">大规模分布式训练</h2>
+
+<p>PyTorch/XLA 提供了两种进行大规模分布式训练的主要方式：<a href="https://pytorch.org/blog/pytorch-xla-spmd/">SPMD</a>，它利用 XLA 编译器将单设备程序转换和分区为多设备分布式程序；以及 <a href="https://pytorch.org/blog/large-scale-training-hugging-face/">FSDP</a>，它实现了广泛采用的<a href="https://engineering.fb.com/2021/07/15/open-source/fsdp/">全分片数据并行</a>算法。</p>
+
+<p>在这篇博客文章中，我们展示了如何使用 SPMD API 来注释 <a href="https://huggingface.co/blog/llama2">HuggingFace (HF) Llama 2</a> 的实现以最大化性能。为了比较，我们还展示了相同配置下的 FSDP 结果；有关 <a href="https://github.com/pytorch/xla/blob/master/docs/fsdp.md">PyTorch/XLA FSDP API 的详细信息请在此处阅读 </a>。</p>
+
+<h3 id="spmd-overview">SPMD 概述</h3>
+
+<p>让我们简要回顾一下 SPMD 的基本原理。有关详细信息，请参阅我们的<a href="https://pytorch.org/blog/pytorch-xla-spmd/">博客文章</a>和<a href="https://github.com/pytorch/xla/blob/master/docs/spmd.md">用户指南 </a>。</p>
+
+<h4 id="mesh">网格</h4>
+
+<p>描述 TPU 设备逻辑拓扑的多维数组：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Assuming you are running on a TPU host that has 8 devices attached
+num_devices = xr.global_runtime_device_count()
+# mesh shape will be (4,2) in this example
+mesh_shape = (num_devices // 2, 2)
+device_ids = np.array(range(num_devices))
+# axis_names 'x' and 'y' are optional
+mesh = Mesh(device_ids, mesh_shape, ('x', 'y'))
+</code></pre></div></div>
+
+<h4 id="partition-spec">分区规范</h4>
+
+<p>描述相应张量维度如何在网格上分片的元组：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>partition_spec = ('x', 'y')</code>
+</font></font></font></pre></div></div>
+
+<h4 id="mark-sharding">马克·碎片化</h4>
+
+<p>一个接受网格和分区规范的 API，然后为 XLA 编译器生成碎片化注解。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>tensor = torch.randn(4, 4).to('xla')
+# Let's resue the above mesh and partition_spec.
+# It means the tensor's 0th dim is sharded 4 way and 1th dim is sharded 2 way.
+xs.mark_sharding(tensor, mesh, partition_spec)
+</code></pre></div></div>
+
+<h3 id="2d-sharding-with-spmd">2D SPMD 碎片化</h3>
+
+<p>在我们的 <a href="https://pytorch.org/blog/pytorch-xla-spmd/">SPMD 博客文章</a>中，我们展示了使用 1D FSDP 风格的分片。在这里，我们介绍了一种更强大的分片策略，称为 <a href="https://arxiv.org/pdf/2105.04663.pdf">2D 分片 </a>，其中参数和激活都进行了分片。这种新的分片策略不仅允许拟合更大的模型，还能将 MFU 提升至高达 <strong>54.3%</strong>。更多详情请参阅基准测试部分。</p>
+
+<p>本节介绍了一组适用于大多数LLMs的一般规则，为了方便起见，我们直接引用了 <a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/src/transformers/models/llama/modeling_llama.py">HF Llama</a> 中的变量名和配置名。</p>
+
+<p>首先，让我们创建一个具有相应轴名称的 2D 网格：数据和模型。数据轴通常是分配输入数据的地方，模型轴是进一步分配模型的地方。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mesh = Mesh(device_ids, mesh_shape, ('data', 'model'))
+</code></pre></div></div>
+
+<p><code class="language-plaintext highlighter-rouge">mesh_shape</code> 可以是一个超参数，用于针对不同模型大小和硬件配置进行调整。相同的网格将在所有后续分片注解中重复使用。在接下来的几节中，我们将介绍如何使用网格来分片参数、激活和输入数据。</p>
+
+<h4 id="parameter-sharding">参数分片</h4>
+
+<p>以下表格总结了 HF Llama 2 的所有参数及其对应的分区规格。示例 HF 代码可在此处找到：<a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/examples/pytorch/language-modeling/run_clm.py#L572"> 这里 </a>。</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td><strong>参数名称</strong>
+   </td>
+   <td><strong>说明</strong>
+   </td>
+   <td><strong>参数形状</strong>
+   </td>
+   <td><strong>分区规范</strong>
+   </td>
+  </tr>
+  <tr>
+   <td><code>嵌入标记</code>
+   </td>
+   <td>嵌入层</td>
+   <td>(<code> 词汇量 </code>, <code> 隐藏层大小 </code>)</td>
+   <td>(模型, 数据)</td>
+  </tr>
+  <tr>
+   <td><code>q_proj</code>
+   </td>
+   <td>注意力权重</td>
+   <td>(num_heads<code> x</code>head_dim, hidden_size)</td>
+   <td>(数据，模型)</td>
+  </tr>
+  <tr>
+   <td>(<code>k_proj / v_proj</code>)
+   </td>
+   <td>注意力权重</td>
+   <td>(num_key_value_heads<code> x</code><code> head_dim</code>, <code> hidden_size</code>)</td>
+   <td>(数据，模型)</td>
+  </tr>
+  <tr>
+   <td><code>o_proj</code>
+   </td>
+   <td>注意力权重</td>
+   <td>(隐藏大小, <code>num_heads x head_dim</code>)</td>
+   <td>(模型, 数据)</td>
+  </tr>
+  <tr>
+   <td><code>门控投影 / 上投影</code>
+   </td>
+   <td>MLP 权重</td>
+   <td>(<code> 中间尺寸 </code>, <code> 隐藏尺寸 </code>)</td>
+   <td>(模型, 数据)</td>
+  </tr>
+  <tr>
+   <td><code>下投影</code>
+   </td>
+   <td>MLP 权重</td>
+   <td>(<code> 隐藏尺寸 </code>, <code> 中间尺寸 </code>)</td>
+   <td>(数据，模型)</td>
+  </tr>
+  <tr>
+   <td><code>语言模型头部</code>
+   </td>
+   <td>HF 输出嵌入</td>
+   <td>(<code> 词汇量 </code>, <code> 隐藏层大小 </code>)</td>
+   <td>(模型, 数据)</td>
+  </tr>
+</tbody></table>
+
+<p><strong>表 1：SPMD 2D 分片参数分区规范</strong></p>
+
+<p>规则是根据网格的 <code class="language-plaintext highlighter-rouge"> 隐藏层大小 </code> 维度对除 QKVO 投影外的任何权重进行分片，然后根据剩余的 <code class="language-plaintext highlighter-rouge"> 模型 </code> 轴对其他维度进行分片。对于 QKVO，则进行相反操作。这种模型-数据轴旋转方法与 <a href="https://arxiv.org/pdf/1909.08053.pdf">Megatron-LM</a> 类似，以减少通信开销。对于 <code class="language-plaintext highlighter-rouge"> 层归一化 </code> 权重，由于它们是 1 维张量，我们默认它们在不同设备间是复制的。</p>
+
+<h4 id="activation-sharding">激活分片</h4>
+
+<p>为了更好地利用设备内存，我们通常需要注释一些内存密集型操作的输出。这样编译器就只会保留设备上的部分输出，而不是全部输出。在 Llama 2 中，我们显式注释了所有的 <code class="language-plaintext highlighter-rouge">torch.matmul</code> 和 <code class="language-plaintext highlighter-rouge">nn.Linear</code> 输出。表 2 总结了相应的注释；示例 HF 代码可以在<a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/src/transformers/models/llama/modeling_llama.py#L235">这里</a>找到。</p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td><strong>输出名称</strong>
+   </td>
+   <td><strong>说明</strong>
+   </td>
+   <td><strong>输出形状</strong>
+   </td>
+   <td><strong>分区规范</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>输入嵌入
+   </td>
+   <td>嵌入层输出</td>
+   <td>(<code>batch_size</code>, <code>sequence_length</code>, <code>hidden_size</code>)
+   </td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+  <tr>
+   <td><code>查询状态</code>
+   </td>
+   <td>注意力 nn.Linear 输出</td>
+   <td>(批处理大小, 序列长度, 头数 x 头维度 <code>batch_size</code>, <code>sequence_length</code>, <code>num_heads x head_dim</code>)</td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+  <tr>
+   <td><code>键状态 / 值状态</code>
+   </td>
+   <td>注意力 nn.Linear 输出</td>
+   <td>(批处理大小, 序列长度, <code>num_key_value_heads x head_dim</code> )</td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+  <tr>
+   <td><code>注意力权重</code>
+   </td>
+   <td>注意力权重</td>
+   <td>（<code> 批量大小 </code>，<code> 注意力头数 </code>，<code> 序列长度 </code>，<code> 序列长度 </code>）</td>
+   <td>(数据, 模型, None, None)</td>
+  </tr>
+  <tr>
+   <td><code>注意力输出</code>
+   </td>
+   <td>注意层输出</td>
+   <td>(<code>batch_size</code>, <code>sequence_length</code>, <code>hidden_size</code>)
+   </td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+  <tr>
+   <td><code>up_proj / gate_proj / down_proj</code>
+   </td>
+   <td>MLP <code>nn.Linear</code> 输出</td>
+   <td>(批处理大小, 序列长度, 中间层大小)</td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+  <tr>
+   <td><code>logits</code>
+   </td>
+   <td>HF 输出嵌入输出</td>
+   <td>(<code>batch_size</code>, <code>sequence_length</code>, <code>hidden_size</code>)
+   </td>
+   <td>(数据, 无, 模型)</td>
+  </tr>
+</tbody></table>
+
+<p><strong>表 2：SPMD 2D 分片激活分区规范</strong></p>
+
+<p>规则是根据网格的数据轴分片任何输出的 <code class="language-plaintext highlighter-rouge">batch_size</code> 维度，然后复制任何输出的长度维度，最后沿着 <code class="language-plaintext highlighter-rouge"> 模型 </code> 轴分片最后一个维度。</p>
+
+<h4 id="input-sharding">输入分片</h4>
+
+<p>对于输入分片，规则是沿着网格的 <code class="language-plaintext highlighter-rouge"> 数据 </code> 轴分片批次维度，并复制 <code class="language-plaintext highlighter-rouge"> 序列长度 </code> 维度。下面是示例代码，相应的 HF 更改可以在 <a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/src/transformers/trainer.py#L1456"> 这里 </a> 找到。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>partition_spec = ('data', None)
+sharding_spec = xs.ShardingSpec(mesh, partition_spec)
+# MpDeviceLoader will shard the input data before sending to the device.
+pl.MpDeviceLoader(dataloader, self.args.device, input_sharding=sharding_spec, ...)
+</code></pre></div></div>
+
+<p>现在，所有需要分片的数据和模型张量都已覆盖！</p>
+
+<h4 id="optimizer-states--gradients">优化器状态与梯度</h4>
+
+<p>您可能想知道是否需要将优化器状态和梯度也进行分片。好消息是，XLA 编译器的分片传播功能自动化了这两种场景的分片注释，无需更多提示即可提高性能。</p>
+
+<p>注意，优化器状态通常在训练循环的第一轮迭代中初始化。从 XLA 编译器的角度来看，优化器状态是第一个图的输出，因此会传播分片注解。对于后续迭代，优化器状态成为第二个图的输入，并且从第一个图传播分片注解。这也是为什么 PyTorch/XLA 通常为训练循环生成两个图的原因。如果优化器状态在第一轮迭代之前以某种方式初始化，用户将需要手动注解它们，就像模型权重一样。</p>
+
+<p>再次，上述分片注解的所有具体示例都可以在我们的 HF Transformers 分支<a href="https://github.com/pytorch-tpu/transformers/tree/llama2-google-next-training">这里</a>找到。该仓库还包含我们实验性功能 <a href="https://cloud.google.com/blog/products/compute/using-cloud-tpu-multislice-to-scale-ai-workloads">MultiSlice</a> 的代码，包括 <code class="language-plaintext highlighter-rouge">HybridMesh</code> 和 <code class="language-plaintext highlighter-rouge">dcn</code> 轴，遵循上述提到的相同原则。</p>
+
+<h3 id="caveats">注意事项</h3>
+
+<p>在使用 SPMD 进行训练时，有几个重要事项需要注意：</p>
+
+<ul>
+  <li>使用 <code class="language-plaintext highlighter-rouge">torch.einsum</code> 而不是 <code class="language-plaintext highlighter-rouge">torch.matmul</code>；<code class="language-plaintext highlighter-rouge">torch.matmul</code> 通常会将张量展平并在最后执行 <code class="language-plaintext highlighter-rouge">torch.mm</code>，这在 SPMD 中当合并的轴被分片时是不利的。XLA 编译器将很难确定如何传播分片。</li>
+  <li>PyTorch/XLA 提供了修复的 <code>[nn.Linear](https://github.com/pytorch/xla/blob/master/torch_xla/experimental/xla_sharding.py#L570)</code> 来克服上述限制：</li>
+</ul>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch_xla.experimental.xla_sharding as xs
+from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
+
+ model = apply_xla_patch_to_nn_linear(model, xs.xla_patched_nn_linear_forward)
+</code></pre></div></div>
+
+<ul>
+  <li>总是跨所有分片重用相同的网格。</li>
+  <li>总是指定 <code>--dataloader_drop_last yes</code>。最后的小数据难以标注。</li>
+  <li>主机端初始化的大模型可能会引起主机端内存溢出。避免此问题的方法之一是在<a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/examples/pytorch/language-modeling/run_clm.py#L501">元设备</a>上初始化参数，然后逐层创建和分片真实张量。</li>
+</ul>
+
+<h3 id="infrastructure-improvements">基础设施改进</h3>
+
+<p>除了上述建模技术之外，我们还开发了额外的功能和改进，以最大化性能，包括：</p>
+
+<ul>
+  <li>我们启用了异步集体通信。这需要对 XLA 编译器的延迟隐藏调度器进行增强，以更好地优化 Llama 2 PyTorch 代码。</li>
+  <li>我们现在允许在 IR 图中间进行分片注释，就像 JAX 的 <a href="https://jax.readthedocs.io/en/latest/_autosummary/jax.lax.with_sharding_constraint.html">jax.lax.with_sharding_constraint</a> 一样。之前，只有图输入被注释。</li>
+  <li>我们还从编译器将复制的分片规范传播到图输出。这允许我们自动分片优化器状态。</li>
+</ul>
+
+<h2 id="inference-optimizations">推理优化</h2>
+
+<p>所有为 Llama 推理实现的 PyTorch/XLA <a href="https://pytorch.org/blog/path-achieve-low-inference-latency/"> 优化 </a> 都应用于 Llama 2。这包括<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/#fairscale-sharding">使用 torch-xla 集体操作的 Tensor Parallelism + Dynamo (torch.compile)</a>，<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/#autoregressive-decoding-on-pytorchxla"> 自回归解码逻辑改进以避免重新编译 </a>，<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/#input-prompt-optimization"> 分桶提示长度 </a>，<a href="https://pytorch.org/blog/path-achieve-low-inference-latency/#kv-cache-optimization"> 与编译友好的索引操作的 KV-cache</a>。Llama 2 引入了两个新变化：分组查询注意力和当 eos 对所有提示达到时提前停止。我们对 PyTorch/XLA 应用了相应的更改，以促进更好的性能和灵活性。</p>
+
+<h3 id="grouped-query-attention">分组查询注意力</h3>
+
+<p>Llama 2 允许 70B 模型使用 <a href="https://arxiv.org/pdf/2305.13245.pdf"> 分组查询注意力 </a>。它允许键和值头数小于查询头数，同时仍支持 KV 缓存分片至 KV 头数。对于 70B 模型，<code class="language-plaintext highlighter-rouge">n_kv_heads</code> 为 8，这限制了张量并行度小于或等于 8。为了将模型检查点分片以在更多设备上运行，需要首先复制 K、V 投影权重，然后将其分割成多个部分。例如，要将 70B 模型检查点从 8 片分割到 16 片，需要将 K、V 投影权重复制并分割成每个分片 2 片。我们提供了一个 <a href="https://github.com/pytorch-tpu/llama/blob/llama2-google-next-inference/reshard_checkpoints.py">reshard_checkpoints.py</a> 脚本来处理该操作，并确保分割后的检查点在数学上与原始检查点相同。</p>
+
+<h3 id="eos-early-stopping">EOS 提前停止</h3>
+
+<p>Llama 2 代码添加了<a href="https://github.com/facebookresearch/llama/blob/ea9f33d6d3ea8ed7d560d270986407fd6c2e52b7/llama/generation.py#L159">早期停止逻辑 </a>。使用一个 <code class="language-plaintext highlighter-rouge">eos_reached</code> 张量来跟踪所有提示生成的完成情况，如果批次中所有提示都达到了 <code class="language-plaintext highlighter-rouge">eos</code> 标记，则提前停止生成。类似的更改也融入了 PyTorch/XLA 优化的版本中，并进行了一些小的调整。</p>
+
+<p>在 PyTorch/XLA 中，将张量如 <code class="language-plaintext highlighter-rouge">eos_reached</code> 的值作为控制流条件的一部分进行检查，会触发阻塞的设备到主机传输。该张量将从设备内存传输到 CPU 内存以评估其值，而所有其他逻辑都在等待。这导致每次新标记生成后引入了 ms 级别的延迟。作为权衡，我们将检查 <code class="language-plaintext highlighter-rouge">eos_reached</code> 值的频率降低到<a href="https://github.com/pytorch-tpu/llama/blob/b89dd0f2351c42fef367670d9d2c5b65cd0ae932/llama/generation.py#L268C13-L270C26">每生成 10 个新标记检查一次 </a>。通过此更改，阻塞的设备到主机传输的影响将降低 10 倍，而早期停止仍然有效，并且每个序列达到 <code class="language-plaintext highlighter-rouge">eos</code> 标记后最多只会生成 9 个不必要的标记。</p>
+
+<h3 id="model-serving">模型服务</h3>
+
+<p>PyTorch/XLA 正在开发一种服务策略，以使 PyTorch 社区能够通过 <a href="https://pytorch.org/docs/stable/export.html">Torch.Export</a>、<a href="https://github.com/openxla/stablehlo">StableHLO</a> 和 <a href="https://www.tensorflow.org/guide/saved_model">SavedModel</a> 来提供他们的深度学习应用。PyTorch/XLA 服务是 PyTorch/XLA 2.1 版本中的实验性功能；有关详细信息，请访问我们的 <a href="https://github.com/pytorch/xla/blob/r2.1/docs/stablehlo.md#convert-saved-stablehlo-for-serving"> 服务用户指南 </a>。用户可以利用 TorchServe 运行他们的单主机工作负载。</p>
+
+<h2 id="benchmarks">基准测试</h2>
+
+<h3 id="metrics">指标</h3>
+
+<p>为了衡量训练性能，我们使用行业标准指标：<a href="https://arxiv.org/abs/2204.02311"> 模型浮点运算利用率（MFU）</a>。模型 FLOPS 是执行单个正向和反向传递所需的浮点运算。模型 FLOPs 与硬件和实现无关，仅取决于底层模型。MFU 衡量模型在训练过程中实际硬件的使用效率。达到 100% MFU 意味着模型正在完美地使用硬件。</p>
+
+<p>为了衡量推理性能，我们使用行业标准的吞吐量指标。首先，我们测量模型编译和加载后的每个标记的延迟。然后，通过将批大小（BS）除以每个芯片的延迟来计算吞吐量。因此，吞吐量衡量了模型在生产环境中的性能，而不管使用了多少芯片。</p>
+
+<h3 id="results">结果</h3>
+
+<h4 id="training-evaluation">训练评估</h4>
+
+<p>图 1 显示了 Llama 2 SPMD 2D 分片训练结果，在一系列 Google TPU v4 硬件上，以 <a href="https://pytorch.org/blog/scaling-pytorch-models-on-cloud-tpus-with-fsdp/">PyTorch/XLA FSDP</a> 作为基准。与在同一硬件配置上运行的 FSDP 相比，我们在所有大小的 Llama 2 上提高了 28%的 MFU。这种性能提升主要归因于：1）2D 分片比 FSDP 有更少的通信开销，2）SPMD 中启用了异步集体通信，这允许通信和计算重叠。此外，请注意，随着模型规模的扩大，我们保持了高 MFU。表 3 显示了所有硬件配置以及训练基准中使用的某些超参数。</p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig1.jpg" alt="Figure 1. Llama 2 Training MFU on TPU v4 Hardware" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em><strong>图 1</strong>：Llama 2 在 TPU v4 硬件上的训练 MFU</em></small></p>
+
+<p>图 1 的结果使用 1,024 的序列长度生成。图 2 展示了随着序列长度的增加，性能如何表现。它显示我们的性能也随着序列长度的增加而线性增长。由于 2D 分片没有对序列长度轴进行分片，因此需要更小的每个设备批次大小来适应更大的序列长度带来的额外内存压力，MFU 预计会略有下降。TPU 对批次大小非常敏感。对于 Llama 2，70B 参数，性能下降低至 <strong>4%。在准备这些结果的时候，<a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/src/transformers/models/llama/tokenization_llama.py#L48">Hugging Face Llama 2 分词器</a>限制了最大模型输入为 2,048，这阻止了我们评估更大的序列长度。</strong></p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig2.jpg" alt="Figure 2. Llama 2 SPMD Training MFU on TPU v4 with Different Sequence Lengths" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em><strong>图 2：Llama 2 SPMD 在 TPU v4 上的不同序列长度下的 MFU 训练</strong></em></small></p>
+
+<table class="table table-bordered">
+  <tbody><tr>
+   <td><strong>模型大小</strong>
+   </td>
+   <td colspan="2"><strong>7B</strong>
+   </td>
+   <td colspan="2"><strong>13B</strong>
+   </td>
+   <td colspan="2"><strong>70B</strong>
+   </td>
+  </tr>
+  <tr>
+   <td><strong>TPU 核心数</strong>
+   </td>
+   <td colspan="2">V4-32
+   </td>
+   <td colspan="2">V4-64
+   </td>
+   <td colspan="2">V4-256
+   </td>
+  </tr>
+  <tr>
+   <td><strong>网格形状</strong>
+   </td>
+   <td colspan="2">(16, 1)
+   </td>
+   <td colspan="2">(32, 1)
+   </td>
+   <td colspan="2">(32, 4)
+   </td>
+  </tr>
+  <tr>
+   <td><strong>序列长度</strong>
+   </td>
+   <td>1,024
+   </td>
+   <td>2,048
+   </td>
+   <td>1,024
+   </td>
+   <td>2,048
+   </td>
+   <td>1,024
+   </td>
+   <td>2,048
+   </td>
+  </tr>
+  <tr>
+   <td><strong>全局批量</strong>
+   </td>
+   <td>256
+   </td>
+   <td>128
+   </td>
+   <td>256
+   </td>
+   <td>128
+   </td>
+   <td>512
+   </td>
+   <td>256
+   </td>
+  </tr>
+  <tr>
+   <td><strong>每设备批量</strong>
+   </td>
+   <td>16
+   </td>
+   <td>8
+   </td>
+   <td>8
+   </td>
+   <td>4
+   </td>
+   <td>16
+   </td>
+   <td>8
+   </td>
+  </tr>
+</tbody></table>
+
+<p><strong>表格 3：Llama 2 SPMD 训练基准 TPU 配置和超参数</strong></p>
+
+<p>最后要指出的是，我们使用 <a href="https://arxiv.org/abs/1804.04235">adafactor</a> 作为优化器以实现更好的内存利用率。再次提供 <a href="https://github.com/pytorch-tpu/transformers/blob/llama2-google-next-training/SPMD_USER_GUIDE.md"> 用户指南 </a> 以重现上述基准结果。</p>
+
+<h4 id="inference-evaluation">推理评估</h4>
+
+<p>在本节中，我们扩展了在 Cloud v4 TPU 上对 Llama 的 <a href="https://pytorch.org/blog/path-achieve-low-inference-latency/"> 先前评估 </a>。在此，我们展示了 TPU v5e 在推理应用中的性能特性。</p>
+
+<p>我们将推理吞吐量定义为每秒每个 TPU 芯片产生的 token 数量。图 3 显示了 Llama 2 70B 在 v5e-16 TPU 节点上的吞吐量。由于 Llama 是一个内存密集型应用程序，我们发现仅应用权重量化就可以解锁扩展模型批大小到 32。在 TPU v5e 硬件更大的情况下，更高的吞吐量是可能的，直到 ICI 网络带宽在芯片之间限制 TPU 切片提供更高的吞吐量。探索 TPU v5e 在 Llama 2 上的上限超出了本工作的范围。请注意，为了使 Llama 2 70B 模型在 v5e-16 上运行，我们按照上文推理部分讨论的方式复制了注意力头，每个芯片有一个头。如前所述，随着模型批大小的增加，每 token 的延迟成比例增长；量化通过减少内存 I/O 需求来提高整体延迟。</p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig3.jpg" alt="Figure 3. Llama 2 70B Inference Per-Chip Throughput on TPU v5e vs. Batch Size" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em><strong>图 3</strong>：TPU v5e 上 Llama 2 70B 每芯片推理吞吐量与批大小的比较</em></small></p>
+
+<p>图 4 展示了不同模型大小下的推理吞吐量结果。这些结果突出了在硬件配置下使用 <code class="language-plaintext highlighter-rouge">bf16</code> 精度时的最大吞吐量。仅使用权重量化时，该吞吐量在 70B 模型上达到 42。如上所述，增加硬件资源可能会导致性能提升。</p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig4.jpg" alt="Figure 4. Llama 2 Inference Per-Chip Throughput on TPU v5e" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em>强调图 4：Llama 2 在 TPU v5e 上的每芯片推理吞吐量</em></small></p>
+
+<p>图 5 展示了在 Cloud TPU v5e 上服务 Llama 2 模型（见图 4）的成本。我们报告了基于 3 年承诺（预留）价格在 <code class="language-plaintext highlighter-rouge">us-west4</code> 区域的 TPU v5e 每芯片成本。所有模型大小均使用最大序列长度为 2,048 和最大生成长度为 1,000 个 token。请注意，使用量化后，70B 模型的成本降至<strong>每 1,000 个 token 0.0036 美元 </strong>。</p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig5.jpg" alt="Figure 5. Llama 2 Inference Per-Chip Cost on TPU v5e" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em>强调图 5：Llama 2 在 TPU v5e 上的每芯片推理成本</em></small></p>
+
+<p>图 6 总结了我们在 TPU v5e 上最好的 Llama 2 推理延迟结果。7B 的 Llama 2 结果来自我们的非量化配置（BF16 权重，BF16 激活），而 13B 和 70B 的结果来自量化配置（INT8 权重，BF16 激活）。我们将这一观察归因于量化固有的内存节省与计算开销之间的权衡；因此，对于较小的模型，量化可能不会导致更低的推理延迟。</p>
+
+<p>此外，提示长度对LLMs的内存需求有很强的影响。例如，我们在 v5e-4 上运行 Llama2 7B，在批处理大小为 1 且未量化时，观察到 1.2ms/令牌的延迟（即每秒每芯片 201 个令牌）。</p>
+
+<p><img src="/assets/images/high-performance-llama-2/fig6.jpg" alt="Figure 6. Llama 2 Inference Latency on TPU v5e" style="width:100%;"></p>
+
+<p style="line-height: 1.05"><small><em><strong>图 6</strong>：TPU v5e 上 Llama 2 推理延迟</em></small></p>
+
+<h2 id="final-thoughts">总结</h2>
+
+<p>最近的人工智能创新浪潮堪称变革性的，其中LLMs的突破处于前沿。Meta 的 Llama 和 Llama 2 模型是这一波进步中的显著里程碑。PyTorch/XLA 独特地实现了 Llama 2 和其他LLMs以及生成式 AI 模型在 Cloud TPUs 上的高性能、低成本训练和推理，包括新的 Cloud TPU v5e。展望未来，PyTorch/XLA 将继续在 Cloud TPUs 的吞吐量和可扩展性方面推动性能极限，同时保持相同的 PyTorch 用户体验。</p>
+
+<p>我们对 PyTorch/XLA 的未来充满期待，并邀请社区加入我们。PyTorch/XLA 完全开源开发。因此，请将问题提交到 <a href="https://github.com/pytorch/xla">GitHub</a>，提交 pull 请求，并发送 RFC，以便我们公开协作。您还可以<a href="https://colab.sandbox.google.com/github/pytorch/xla/blob/master/contrib/colab/getting-started.ipynb">亲自尝试 </a>PyTorch/XLA，在各种 XLA 设备上使用，包括 TPUs 和 GPU。</p>
+
+<p>我们想特别感谢 Marcello Maggioni、Tongfei Guo、Andy Davis、Berkin Ilbeyi 在这项工作中的支持和合作。</p>
+
+<p>干杯，</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">谷歌 PyTorch/XLA 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

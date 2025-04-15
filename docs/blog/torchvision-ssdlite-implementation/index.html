@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Everything You Need To Know About Torchvision’s SSDlite Implementation | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="In the previous article, we’ve discussed how the SSD algorithm works, covered its implementation details and presented its training process. If you have not read the previous blog post, I encourage you to check it out before continuing.
+
+In this part 2 of the series, we will focus on the mobile-friendly variant of SSD called SSDlite. Our plan is to first go through the main components of the algorithm highlighting the parts that differ from the original SSD, then discuss how the released model was trained and finally provide detailed benchmarks for all the new Object Detection models that we explored.
+
+The SSDlite Network Architecture
+
+The SSDlite is an adaptation of SSD which was first briefly introduced on the MobileNetV2 paper and later reused on the MobileNetV3 paper. Because the main focus of the two papers was to introduce novel CNN architectures, most of the implementation details of SSDlite were not clarified. Our code follows all the details presented on the two papers and where necessary fills the gaps from the official implementation.
+
+As noted before, the SSD is a family of models because one can configure it with different backbones (such as VGG, MobileNetV3 etc) and different Heads (such as using regular convolutions, separable convolutions etc). Thus many of the SSD components remain the same in SSDlite. Below we discuss only those that are different
+
+Classification and Regression Heads
+
+Following the Section 6.2 of the MobileNetV2 paper, SSDlite replaces the regular convolutions used on the original Heads with separable convolutions. Consequently, our implementation introduces new heads that use 3x3 Depthwise convolutions and 1x1 projections. Since all other components of the SSD method remain the same, to create an SSDlite model our implementation initializes the SSDlite head and passes it directly to the SSD constructor.
+
+Backbone Feature Extractor
+
+Our implementation introduces a new class for building MobileNet feature extractors. Following the Section 6.3 of the MobileNetV3 paper, the backbone returns the output of the expansion layer of the Inverted Bottleneck block which has an output stride of 16 and the output of the layer just before the pooling which has an output stride of 32. Moreover, all extra blocks of the backbone are replaced with lightweight equivalents which use a 1x1 compression, a separable 3x3 convolution with stride 2 and a 1x1 expansion. Finally to ensure that the heads have enough prediction power even when small width multipliers are used, the minimum depth size of all convolutions is controlled by the min_depth hyperparameter.
+
+The SSDlite320 MobileNetV3-Large model
+
+
+  
+
+
+This section discusses the configuration of the provided SSDlite pre-trained model along with the training processes followed to replicate the paper results as closely as possible.
+
+Training process
+
+All of the hyperparameters and scripts used to train the model on the COCO dataset can be found in our references folder. Here we discuss the most notable details of the training process.
+
+Tuned Hyperparameters
+
+Though the papers don’t provide any information on the hyperparameters used for training the models (such as regularization, learning rate and the batch size), the parameters listed in the configuration files on the official repo were good starting points and using cross validation we adjusted them to their optimal values. All the above gave us a significant boost over the baseline SSD configuration.
+
+Data Augmentation
+
+Key important difference of SSDlite comparing to SSD is that the backbone of the first has only a fraction of the weights of the latter. This is why in SSDlite, the Data Augmentation focuses more on making the model robust to objects of variable sizes than trying to avoid overfitting. Consequently, SSDlite uses only a subset of the SSD transformations and this way it avoids the over-regularization of the model.
+
+LR Scheme
+
+Due to the reliance on Data Augmentation to make the model robust to small and medium sized objects, we found that it is particularly beneficial for the training recipe to use large number of epochs. More specifically by using roughly 3x more epochs than SSD we are able to increase our precision by 4.2mAP points and by using a 6x multiplier we improve by 4.9mAP. Increasing further the epochs seems to yield diminishing returns and makes the training too slow and impractical, nevertheless based on the model configuration it seems that the authors of the paper used an equivalent 16x multiplier.
+
+Weight Initialization &amp; Input Scaling &amp; ReLU6
+
+A set of final optimizations that brought our implementation very close to the official one and helped us bridge the accuracy gap was training the backbone from scratch instead of initializing from ImageNet, adapting our weight initialization scheme, changing our Input Scaling and replacing all standard ReLUs added on the SSDlite heads with ReLU6. Note that since we trained the model from random weights, we additionally applied the speed optimization described on the paper of using a reduced tail on the backbone.
+
+Implementation Differences
+
+Comparing the above implementation with the one on the official repo, we’ve identified a few differences. Most of them are minor and they are related to how we initialize the weights (for example Normal initialization vs Truncated Normal), how we parameterize the LR Scheduling (for example smaller vs larger warmup rate, shorter vs longer training) etc. The biggest known difference lies in the way we compute the Classification loss. More specifically the implementation of SSDlite with MobileNetV3 backbone on the official repo doesn’t use the SSD’s Multibox loss but instead uses RetinaNet’s focal loss. This is a rather significant deviation from the paper and since TorchVision already offers a full implementation of RetinaNet, we decided to implement SSDlite using the normal Multi-box SSD loss.
+
+Break down of key accuracy improvements
+
+As discussed in previous articles, reproducing research papers and porting them to code is not a journey of monotonically increasing accuracies, especially in cases where the full training and implementation details are not known. Typically the process involves lots of backtracking as one needs to identify those implementation details and parameters that have significant impact on the accuracy from those that don’t. Below we try to visualize the most important iterations that improved our accuracy from the baseline:
+
+
+  
+
+
+
+  
+    
+      Iteration
+      mAP
+    
+  
+  
+    
+      Baseline with “SSD-style” Hyperparams
+      10.6
+    
+    
+      + Tuned Hyperparams
+      14.2
+    
+    
+      + SSDlite Data Augmentation
+      15.2
+    
+    
+      + 3x LR Scheme
+      19.4
+    
+    
+      + 6x LR Scheme
+      20.1
+    
+    
+      + Weight Initialization &amp; Input Scaling &amp; ReLU6
+      21.3
+    
+  
+
+
+The order of optimizations presented above is accurate, though a bit idealized in some cases. For example, though different schedulers were tested during the Hyperparameter tuning phase, none of them provided significant improvements and thus we maintained the MultiStepLR which was used in the baseline. Nevertheless while later experimenting with different LR Schemes, we found it beneficial to switch to CosineAnnealingLR, as it required less configuration. Consequently, we believe that the main takeaway from the above summary should be that even by starting with a correct implementation and a set of optimal hyperparams from a model of the same family, there is always accuracy points to be found by optimizing the training recipe and tuning the implementation. Admittedly the above is a rather extreme case where the accuracy doubled, but still in many cases there is a large number of optimizations that can help us push the accuracy significantly.
+
+Benchmarks
+
+Here is how to initialize the two pre-trained models:
+
+ssdlite = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+ssd = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+
+
+Below are the benchmarks between the new and selected previous detection models:
+
+
+  
+    
+      Model
+      mAP
+      Inference on CPU (sec)
+      # Params (M)
+    
+  
+  
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      0.0911
+      3.44
+    
+    
+      SSD300 VGG16
+      25.1
+      0.8303
+      35.64
+    
+    
+      SSD512 VGG16 (not released)
+      28.8
+      2.2494
+      37.08
+    
+    
+      SSD512 ResNet50 (not released)
+      30.2
+      1.1137
+      42.70
+    
+    
+      Faster R-CNN MobileNetV3-Large 320 FPN (Low-Res)
+      22.8
+      0.1679
+      19.39
+    
+    
+      Faster R-CNN MobileNetV3-Large FPN (High-Res)
+      32.8
+      0.8409
+      19.39
+    
+  
+
+
+As we can see, the SSDlite320 MobileNetV3-Large model is by far the fastest and smallest model and thus it’s an excellent candidate for real-world mobile applications. Though its accuracy is lower than the pre-trained low-resolution Faster R-CNN equivalent, the SSDlite framework is adaptable and one can boost its accuracy by introducing heavier heads with more convolutions.
+
+On the other hand, the SSD300 VGG16 model is rather slow and less accurate. This is mainly because of its VGG16 backbone. Though extremely important and influential, the VGG architecture is nowadays quite outdated. Thus though the specific model has historical and research value and hence it’s included in TorchVision, we recommend to users who want high-resolution detectors for real world applications to either combine SSD with alternative backbones (see this example on how to create one) or use one of the Faster R-CNN pre-trained models.
+
+We hope you enjoyed the 2nd and final part of the SSD series. We are looking forward to your feedback.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/mAP-of-SSD320-MobileNetV3-Large.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/mAP-of-SSD320-MobileNetV3-Large.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Everything You Need To Know About Torchvision’s SSDlite Implementation">
+<meta property="og:description" content="In the previous article, we’ve discussed how the SSD algorithm works, covered its implementation details and presented its training process. If you have not read the previous blog post, I encourage you to check it out before continuing.
+
+In this part 2 of the series, we will focus on the mobile-friendly variant of SSD called SSDlite. Our plan is to first go through the main components of the algorithm highlighting the parts that differ from the original SSD, then discuss how the released model was trained and finally provide detailed benchmarks for all the new Object Detection models that we explored.
+
+The SSDlite Network Architecture
+
+The SSDlite is an adaptation of SSD which was first briefly introduced on the MobileNetV2 paper and later reused on the MobileNetV3 paper. Because the main focus of the two papers was to introduce novel CNN architectures, most of the implementation details of SSDlite were not clarified. Our code follows all the details presented on the two papers and where necessary fills the gaps from the official implementation.
+
+As noted before, the SSD is a family of models because one can configure it with different backbones (such as VGG, MobileNetV3 etc) and different Heads (such as using regular convolutions, separable convolutions etc). Thus many of the SSD components remain the same in SSDlite. Below we discuss only those that are different
+
+Classification and Regression Heads
+
+Following the Section 6.2 of the MobileNetV2 paper, SSDlite replaces the regular convolutions used on the original Heads with separable convolutions. Consequently, our implementation introduces new heads that use 3x3 Depthwise convolutions and 1x1 projections. Since all other components of the SSD method remain the same, to create an SSDlite model our implementation initializes the SSDlite head and passes it directly to the SSD constructor.
+
+Backbone Feature Extractor
+
+Our implementation introduces a new class for building MobileNet feature extractors. Following the Section 6.3 of the MobileNetV3 paper, the backbone returns the output of the expansion layer of the Inverted Bottleneck block which has an output stride of 16 and the output of the layer just before the pooling which has an output stride of 32. Moreover, all extra blocks of the backbone are replaced with lightweight equivalents which use a 1x1 compression, a separable 3x3 convolution with stride 2 and a 1x1 expansion. Finally to ensure that the heads have enough prediction power even when small width multipliers are used, the minimum depth size of all convolutions is controlled by the min_depth hyperparameter.
+
+The SSDlite320 MobileNetV3-Large model
+
+
+  
+
+
+This section discusses the configuration of the provided SSDlite pre-trained model along with the training processes followed to replicate the paper results as closely as possible.
+
+Training process
+
+All of the hyperparameters and scripts used to train the model on the COCO dataset can be found in our references folder. Here we discuss the most notable details of the training process.
+
+Tuned Hyperparameters
+
+Though the papers don’t provide any information on the hyperparameters used for training the models (such as regularization, learning rate and the batch size), the parameters listed in the configuration files on the official repo were good starting points and using cross validation we adjusted them to their optimal values. All the above gave us a significant boost over the baseline SSD configuration.
+
+Data Augmentation
+
+Key important difference of SSDlite comparing to SSD is that the backbone of the first has only a fraction of the weights of the latter. This is why in SSDlite, the Data Augmentation focuses more on making the model robust to objects of variable sizes than trying to avoid overfitting. Consequently, SSDlite uses only a subset of the SSD transformations and this way it avoids the over-regularization of the model.
+
+LR Scheme
+
+Due to the reliance on Data Augmentation to make the model robust to small and medium sized objects, we found that it is particularly beneficial for the training recipe to use large number of epochs. More specifically by using roughly 3x more epochs than SSD we are able to increase our precision by 4.2mAP points and by using a 6x multiplier we improve by 4.9mAP. Increasing further the epochs seems to yield diminishing returns and makes the training too slow and impractical, nevertheless based on the model configuration it seems that the authors of the paper used an equivalent 16x multiplier.
+
+Weight Initialization &amp; Input Scaling &amp; ReLU6
+
+A set of final optimizations that brought our implementation very close to the official one and helped us bridge the accuracy gap was training the backbone from scratch instead of initializing from ImageNet, adapting our weight initialization scheme, changing our Input Scaling and replacing all standard ReLUs added on the SSDlite heads with ReLU6. Note that since we trained the model from random weights, we additionally applied the speed optimization described on the paper of using a reduced tail on the backbone.
+
+Implementation Differences
+
+Comparing the above implementation with the one on the official repo, we’ve identified a few differences. Most of them are minor and they are related to how we initialize the weights (for example Normal initialization vs Truncated Normal), how we parameterize the LR Scheduling (for example smaller vs larger warmup rate, shorter vs longer training) etc. The biggest known difference lies in the way we compute the Classification loss. More specifically the implementation of SSDlite with MobileNetV3 backbone on the official repo doesn’t use the SSD’s Multibox loss but instead uses RetinaNet’s focal loss. This is a rather significant deviation from the paper and since TorchVision already offers a full implementation of RetinaNet, we decided to implement SSDlite using the normal Multi-box SSD loss.
+
+Break down of key accuracy improvements
+
+As discussed in previous articles, reproducing research papers and porting them to code is not a journey of monotonically increasing accuracies, especially in cases where the full training and implementation details are not known. Typically the process involves lots of backtracking as one needs to identify those implementation details and parameters that have significant impact on the accuracy from those that don’t. Below we try to visualize the most important iterations that improved our accuracy from the baseline:
+
+
+  
+
+
+
+  
+    
+      Iteration
+      mAP
+    
+  
+  
+    
+      Baseline with “SSD-style” Hyperparams
+      10.6
+    
+    
+      + Tuned Hyperparams
+      14.2
+    
+    
+      + SSDlite Data Augmentation
+      15.2
+    
+    
+      + 3x LR Scheme
+      19.4
+    
+    
+      + 6x LR Scheme
+      20.1
+    
+    
+      + Weight Initialization &amp; Input Scaling &amp; ReLU6
+      21.3
+    
+  
+
+
+The order of optimizations presented above is accurate, though a bit idealized in some cases. For example, though different schedulers were tested during the Hyperparameter tuning phase, none of them provided significant improvements and thus we maintained the MultiStepLR which was used in the baseline. Nevertheless while later experimenting with different LR Schemes, we found it beneficial to switch to CosineAnnealingLR, as it required less configuration. Consequently, we believe that the main takeaway from the above summary should be that even by starting with a correct implementation and a set of optimal hyperparams from a model of the same family, there is always accuracy points to be found by optimizing the training recipe and tuning the implementation. Admittedly the above is a rather extreme case where the accuracy doubled, but still in many cases there is a large number of optimizations that can help us push the accuracy significantly.
+
+Benchmarks
+
+Here is how to initialize the two pre-trained models:
+
+ssdlite = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+ssd = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+
+
+Below are the benchmarks between the new and selected previous detection models:
+
+
+  
+    
+      Model
+      mAP
+      Inference on CPU (sec)
+      # Params (M)
+    
+  
+  
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      0.0911
+      3.44
+    
+    
+      SSD300 VGG16
+      25.1
+      0.8303
+      35.64
+    
+    
+      SSD512 VGG16 (not released)
+      28.8
+      2.2494
+      37.08
+    
+    
+      SSD512 ResNet50 (not released)
+      30.2
+      1.1137
+      42.70
+    
+    
+      Faster R-CNN MobileNetV3-Large 320 FPN (Low-Res)
+      22.8
+      0.1679
+      19.39
+    
+    
+      Faster R-CNN MobileNetV3-Large FPN (High-Res)
+      32.8
+      0.8409
+      19.39
+    
+  
+
+
+As we can see, the SSDlite320 MobileNetV3-Large model is by far the fastest and smallest model and thus it’s an excellent candidate for real-world mobile applications. Though its accuracy is lower than the pre-trained low-resolution Faster R-CNN equivalent, the SSDlite framework is adaptable and one can boost its accuracy by introducing heavier heads with more convolutions.
+
+On the other hand, the SSD300 VGG16 model is rather slow and less accurate. This is mainly because of its VGG16 backbone. Though extremely important and influential, the VGG architecture is nowadays quite outdated. Thus though the specific model has historical and research value and hence it’s included in TorchVision, we recommend to users who want high-resolution detectors for real world applications to either combine SSD with alternative backbones (see this example on how to create one) or use one of the Faster R-CNN pre-trained models.
+
+We hope you enjoyed the 2nd and final part of the SSD series. We are looking forward to your feedback.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Everything You Need To Know About Torchvision’s SSDlite Implementation">
+<meta name="twitter:description" content="In the previous article, we’ve discussed how the SSD algorithm works, covered its implementation details and presented its training process. If you have not read the previous blog post, I encourage you to check it out before continuing.
+
+In this part 2 of the series, we will focus on the mobile-friendly variant of SSD called SSDlite. Our plan is to first go through the main components of the algorithm highlighting the parts that differ from the original SSD, then discuss how the released model was trained and finally provide detailed benchmarks for all the new Object Detection models that we explored.
+
+The SSDlite Network Architecture
+
+The SSDlite is an adaptation of SSD which was first briefly introduced on the MobileNetV2 paper and later reused on the MobileNetV3 paper. Because the main focus of the two papers was to introduce novel CNN architectures, most of the implementation details of SSDlite were not clarified. Our code follows all the details presented on the two papers and where necessary fills the gaps from the official implementation.
+
+As noted before, the SSD is a family of models because one can configure it with different backbones (such as VGG, MobileNetV3 etc) and different Heads (such as using regular convolutions, separable convolutions etc). Thus many of the SSD components remain the same in SSDlite. Below we discuss only those that are different
+
+Classification and Regression Heads
+
+Following the Section 6.2 of the MobileNetV2 paper, SSDlite replaces the regular convolutions used on the original Heads with separable convolutions. Consequently, our implementation introduces new heads that use 3x3 Depthwise convolutions and 1x1 projections. Since all other components of the SSD method remain the same, to create an SSDlite model our implementation initializes the SSDlite head and passes it directly to the SSD constructor.
+
+Backbone Feature Extractor
+
+Our implementation introduces a new class for building MobileNet feature extractors. Following the Section 6.3 of the MobileNetV3 paper, the backbone returns the output of the expansion layer of the Inverted Bottleneck block which has an output stride of 16 and the output of the layer just before the pooling which has an output stride of 32. Moreover, all extra blocks of the backbone are replaced with lightweight equivalents which use a 1x1 compression, a separable 3x3 convolution with stride 2 and a 1x1 expansion. Finally to ensure that the heads have enough prediction power even when small width multipliers are used, the minimum depth size of all convolutions is controlled by the min_depth hyperparameter.
+
+The SSDlite320 MobileNetV3-Large model
+
+
+  
+
+
+This section discusses the configuration of the provided SSDlite pre-trained model along with the training processes followed to replicate the paper results as closely as possible.
+
+Training process
+
+All of the hyperparameters and scripts used to train the model on the COCO dataset can be found in our references folder. Here we discuss the most notable details of the training process.
+
+Tuned Hyperparameters
+
+Though the papers don’t provide any information on the hyperparameters used for training the models (such as regularization, learning rate and the batch size), the parameters listed in the configuration files on the official repo were good starting points and using cross validation we adjusted them to their optimal values. All the above gave us a significant boost over the baseline SSD configuration.
+
+Data Augmentation
+
+Key important difference of SSDlite comparing to SSD is that the backbone of the first has only a fraction of the weights of the latter. This is why in SSDlite, the Data Augmentation focuses more on making the model robust to objects of variable sizes than trying to avoid overfitting. Consequently, SSDlite uses only a subset of the SSD transformations and this way it avoids the over-regularization of the model.
+
+LR Scheme
+
+Due to the reliance on Data Augmentation to make the model robust to small and medium sized objects, we found that it is particularly beneficial for the training recipe to use large number of epochs. More specifically by using roughly 3x more epochs than SSD we are able to increase our precision by 4.2mAP points and by using a 6x multiplier we improve by 4.9mAP. Increasing further the epochs seems to yield diminishing returns and makes the training too slow and impractical, nevertheless based on the model configuration it seems that the authors of the paper used an equivalent 16x multiplier.
+
+Weight Initialization &amp; Input Scaling &amp; ReLU6
+
+A set of final optimizations that brought our implementation very close to the official one and helped us bridge the accuracy gap was training the backbone from scratch instead of initializing from ImageNet, adapting our weight initialization scheme, changing our Input Scaling and replacing all standard ReLUs added on the SSDlite heads with ReLU6. Note that since we trained the model from random weights, we additionally applied the speed optimization described on the paper of using a reduced tail on the backbone.
+
+Implementation Differences
+
+Comparing the above implementation with the one on the official repo, we’ve identified a few differences. Most of them are minor and they are related to how we initialize the weights (for example Normal initialization vs Truncated Normal), how we parameterize the LR Scheduling (for example smaller vs larger warmup rate, shorter vs longer training) etc. The biggest known difference lies in the way we compute the Classification loss. More specifically the implementation of SSDlite with MobileNetV3 backbone on the official repo doesn’t use the SSD’s Multibox loss but instead uses RetinaNet’s focal loss. This is a rather significant deviation from the paper and since TorchVision already offers a full implementation of RetinaNet, we decided to implement SSDlite using the normal Multi-box SSD loss.
+
+Break down of key accuracy improvements
+
+As discussed in previous articles, reproducing research papers and porting them to code is not a journey of monotonically increasing accuracies, especially in cases where the full training and implementation details are not known. Typically the process involves lots of backtracking as one needs to identify those implementation details and parameters that have significant impact on the accuracy from those that don’t. Below we try to visualize the most important iterations that improved our accuracy from the baseline:
+
+
+  
+
+
+
+  
+    
+      Iteration
+      mAP
+    
+  
+  
+    
+      Baseline with “SSD-style” Hyperparams
+      10.6
+    
+    
+      + Tuned Hyperparams
+      14.2
+    
+    
+      + SSDlite Data Augmentation
+      15.2
+    
+    
+      + 3x LR Scheme
+      19.4
+    
+    
+      + 6x LR Scheme
+      20.1
+    
+    
+      + Weight Initialization &amp; Input Scaling &amp; ReLU6
+      21.3
+    
+  
+
+
+The order of optimizations presented above is accurate, though a bit idealized in some cases. For example, though different schedulers were tested during the Hyperparameter tuning phase, none of them provided significant improvements and thus we maintained the MultiStepLR which was used in the baseline. Nevertheless while later experimenting with different LR Schemes, we found it beneficial to switch to CosineAnnealingLR, as it required less configuration. Consequently, we believe that the main takeaway from the above summary should be that even by starting with a correct implementation and a set of optimal hyperparams from a model of the same family, there is always accuracy points to be found by optimizing the training recipe and tuning the implementation. Admittedly the above is a rather extreme case where the accuracy doubled, but still in many cases there is a large number of optimizations that can help us push the accuracy significantly.
+
+Benchmarks
+
+Here is how to initialize the two pre-trained models:
+
+ssdlite = torchvision.models.detection.ssdlite320_mobilenet_v3_large(pretrained=True)
+ssd = torchvision.models.detection.ssd300_vgg16(pretrained=True)
+
+
+Below are the benchmarks between the new and selected previous detection models:
+
+
+  
+    
+      Model
+      mAP
+      Inference on CPU (sec)
+      # Params (M)
+    
+  
+  
+    
+      SSDlite320 MobileNetV3-Large
+      21.3
+      0.0911
+      3.44
+    
+    
+      SSD300 VGG16
+      25.1
+      0.8303
+      35.64
+    
+    
+      SSD512 VGG16 (not released)
+      28.8
+      2.2494
+      37.08
+    
+    
+      SSD512 ResNet50 (not released)
+      30.2
+      1.1137
+      42.70
+    
+    
+      Faster R-CNN MobileNetV3-Large 320 FPN (Low-Res)
+      22.8
+      0.1679
+      19.39
+    
+    
+      Faster R-CNN MobileNetV3-Large FPN (High-Res)
+      32.8
+      0.8409
+      19.39
+    
+  
+
+
+As we can see, the SSDlite320 MobileNetV3-Large model is by far the fastest and smallest model and thus it’s an excellent candidate for real-world mobile applications. Though its accuracy is lower than the pre-trained low-resolution Faster R-CNN equivalent, the SSDlite framework is adaptable and one can boost its accuracy by introducing heavier heads with more convolutions.
+
+On the other hand, the SSD300 VGG16 model is rather slow and less accurate. This is mainly because of its VGG16 backbone. Though extremely important and influential, the VGG architecture is nowadays quite outdated. Thus though the specific model has historical and research value and hence it’s included in TorchVision, we recommend to users who want high-resolution detectors for real world applications to either combine SSD with alternative backbones (see this example on how to create one) or use one of the Faster R-CNN pre-trained models.
+
+We hope you enjoyed the 2nd and final part of the SSD series. We are looking forward to your feedback.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。CFP 现已开放！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中有什么新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年6月27日</p>
+            <h1>
+                <a class="blog-title">关于 Torchvision 的 SSDlite 实现，您需要了解的一切</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由瓦西利斯·弗里尼奥蒂斯著</p>
+                    <p>在上一篇文章中，我们讨论了 SSD 算法的工作原理，介绍了其实现细节，并展示了其训练过程。如果您还没有阅读上一篇博客文章，我鼓励您在继续之前先阅读一下。</p>
+
+<p>在本系列的第二部分，我们将关注 SSD 的移动友好版本——SSDlite。我们的计划是首先介绍算法的主要组件，突出与原始 SSD 不同的部分，然后讨论发布模型的训练过程，最后提供我们探索的所有新目标检测模型的详细基准。</p>
+
+<h1 id="the-ssdlite-network-architecture">SSDlite 网络架构</h1>
+
+<p>SSDlite 是 SSD 的一个变体，最初在 <a href="https://arxiv.org/abs/1801.04381">MobileNetV2 论文</a>中简要介绍，后来在 <a href="https://arxiv.org/abs/1905.02244">MobileNetV3 论文</a>中再次使用。由于这两篇论文的主要重点是介绍新的 CNN 架构，因此 SSDlite 的大部分实现细节都没有被明确说明。我们的代码遵循了两篇论文上所展示的所有细节，并在必要时填补了<a href="https://github.com/tensorflow/models/tree/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection">官方实现</a>中的空白。</p>
+
+<p>如前所述，SSD 是一个模型系列，因为可以配置不同的骨干网络（如 VGG、MobileNetV3 等）和不同的头部（如使用常规卷积、可分离卷积等）。因此，SSDlite 中的许多组件保持不变。以下我们将讨论那些不同的部分</p>
+
+<h2 id="classification-and-regression-heads">分类和回归头部</h2>
+
+<p>遵循 MobileNetV2 论文的第 6.2 节，SSDlite 将原始头部中使用的常规卷积替换为可分离卷积。因此，我们的实现引入了<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L65-L95">新的头部 </a>，这些头部使用 <a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L26-L36">3x3 深度卷积和 1x1 投影 </a>。由于 SSD 方法的所有其他组件保持不变，为了创建 SSDlite 模型，我们的实现<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L222-L223">初始化 SSDlite 头部</a>并将其直接传递给 SSD 构造函数。</p>
+
+<h2 id="backbone-feature-extractor">骨干网络特征提取器</h2>
+
+<p>我们的实现引入了一个新的类来构建 MobileNet <a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L98"> 特征提取器 </a>。遵循 MobileNetV3 论文的第 6.3 节，骨干网络返回 Inverted Bottleneck 块的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L106">扩展层输出 </a>，其输出步长为 16，以及<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L107">在池化层之前的层输出 </a>，其输出步长为 32。此外，所有骨干网络的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L111-L116">额外块</a>都被替换为使用 1x1 压缩、步长为 2 的可分离 3x3 卷积和 1x1 扩展的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L39-L54">轻量级等效块 </a>。最后，为了确保即使使用小的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L99">宽度乘数</a>时头部也有足够的预测能力，所有卷积的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L110">最小深度</a>大小由 <code class="language-plaintext highlighter-rouge">min_depth</code> 超参数控制。</p>
+
+<h1 id="the-ssdlite320-mobilenetv3-large-model">SSDlite320 MobileNetV3-Large 模型</h1>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/ssdlite-pre-trained.png" width="100%">
+</div>
+
+<p>本节讨论了提供的 <a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L159-L162">SSDlite 预训练</a>模型的配置以及为了尽可能接近论文结果而遵循的训练过程。</p>
+
+<h2 id="training-process">训练过程</h2>
+
+<p>所有用于在 COCO 数据集上训练模型的超参数和脚本都可以在我们的<a href="https://github.com/pytorch/vision/blob/e35793a1a4000db1f9f99673437c514e24e65451/references/detection/README.md#ssdlite320-mobilenetv3-large">参考文献</a>文件夹中找到。在这里，我们讨论了训练过程中最显著的细节。</p>
+
+<h3 id="tuned-hyperparameters">调优超参数</h3>
+
+<p>尽管论文没有提供用于训练模型的超参数（如正则化、学习率和批大小）的信息，但官方仓库中列出的<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config">配置文件</a>是良好的起点，我们通过交叉验证调整了它们到最佳值。所有这些都使我们比基线 SSD 配置有了显著的提升。</p>
+
+<h3 id="data-augmentation">数据增强</h3>
+
+<p>与 SSD 相比，SSDlite 的一个重要重要区别是，前者的骨干网络只有后者权重的一小部分。这就是为什么在 SSDlite 中，数据增强更注重使模型对大小可变的对象具有鲁棒性，而不是试图避免过拟合。因此，SSDlite<a href="https://github.com/pytorch/vision/blob/43d772067fe77965ec8fc49c799de5cea44b8aa2/references/detection/presets.py#L19-L24"> 仅使用 </a>SSD 变换的一部分，从而避免了模型的过度正则化。</p>
+
+<h3 id="lr-scheme">LR 方案</h3>
+
+<p>由于依赖于数据增强来使模型对小型和中型对象具有鲁棒性，我们发现使用大量 epoch 对训练方案特别有益。更具体地说，通过使用比 SSD 大约 3 倍的 epoch，我们能够将精度提高 4.2mAP 点，通过使用 6 倍乘数，我们提高了 4.9mAP。进一步增加 epoch 似乎会产生递减的回报，并使训练变得太慢且不切实际，尽管根据<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config#L154">模型配置 </a>，论文的作者似乎使用了等效的 <em>16 倍乘数 </em>。</p>
+
+<h3 id="weight-initialization--input-scaling--relu6">权重初始化 &amp; 输入缩放 &amp; ReLU6</h3>
+
+<p>一系列最终优化使我们的实现非常接近官方版本，并帮助我们缩小了准确度差距，包括从头开始训练骨干网络而不是从 ImageNet 初始化，调整我们的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L57-L62">权重初始化方案 </a>，更改我们的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L216-L219">输入缩放 </a>，并将所有添加到 SSDlite 头部的标准 ReLU 替换为 ReLU6。请注意，由于我们从随机权重开始训练模型，我们还额外应用了论文中描述的<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L196-L197">减少尾部</a>的骨干网络速度优化。</p>
+
+<h3 id="implementation-differences">实现差异</h3>
+
+<p>与官方仓库中的实现进行比较，我们发现了一些差异。其中大部分都是微小的，它们与我们初始化权重的方式（例如<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/torchvision/models/detection/ssdlite.py#L57-L62">正常初始化</a>与<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config#L104-L107">截断正态分布 </a>）、我们如何参数化 LR 调度（例如<a href="https://github.com/pytorch/vision/blob/b6f733046c9259f354d060cd808241a558d7d596/references/detection/engine.py#L21-L22">较小的</a>与<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config#L169-L170">较大的</a>预热率，<a href="https://github.com/pytorch/vision/tree/master/references/detection#ssdlite320-mobilenetv3-large"> 较短的</a>与<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config#L154">较长的</a>训练）等相关。最大的已知差异在于我们计算分类损失的方式。更具体地说，官方仓库中基于 MobileNetV3 骨干网络的 SSDlite 实现<a href="https://github.com/tensorflow/models/blob/238922e98dd0e8254b5c0921b241a1f5a151782f/research/object_detection/samples/configs/ssdlite_mobilenet_v3_large_320x320_coco.config#L121-L124">没有使用 SSD 的多框损失 </a>，而是使用了 RetinaNet 的<a href="https://arxiv.org/abs/1708.02002">焦点损失 </a>。这与论文有相当大的偏差，并且由于 TorchVision 已经提供了 RetinaNet 的完整实现，我们决定使用正常的多框 SSD 损失来实现 SSDlite。</p>
+
+<h2 id="break-down-of-key-accuracy-improvements">关键精度改进的分解</h2>
+
+<p>如前文所述，复现研究论文并将其移植到代码中并非单调递增准确性的旅程，尤其是在不知道完整训练和实现细节的情况下。通常，这个过程涉及大量的回溯，因为需要从对准确性有显著影响的实现细节和参数中识别出那些没有影响的参数。以下我们尝试可视化那些从基线开始提高我们准确性的最重要的迭代：</p>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/mAP-of-SSD320-MobileNetV3-Large.png" width="100%">
+</div>
+
+<table class="table table-striped table-bordered">
+  <thead>
+    <tr>
+      <th><strong>迭代</strong></th>
+      <th><strong>平均精度均值（mAP）</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>基线配置采用“SSD-style”超参数</td>
+      <td>10.6</td>
+    </tr>
+    <tr>
+      <td>+ 调整后的超参数</td>
+      <td>14.2</td>
+    </tr>
+    <tr>
+      <td>+ SSDlite 数据增强</td>
+      <td>15.2</td>
+    </tr>
+    <tr>
+      <td>+ 3倍学习率方案</td>
+      <td>19.4</td>
+    </tr>
+    <tr>
+      <td>+ 6倍学习率方案</td>
+      <td>20.1</td>
+    </tr>
+    <tr>
+      <td>+ 权重初始化 &amp; 输入缩放 &amp; ReLU6</td>
+      <td>21.3</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>上述提出的优化顺序是准确的，尽管在某些情况下有些理想化。例如，虽然在超参数调整阶段测试了不同的调度器，但它们都没有提供显著的改进，因此我们保留了基线中使用的 MultiStepLR。然而，在后来尝试不同的 LR 方案时，我们发现切换到 CosineAnnealingLR 是有益的，因为它需要的配置更少。因此，我们认为上述总结的主要启示应该是，即使从同一系列模型中正确的实现和一组最优超参数开始，通过优化训练方案和调整实现，仍然可以找到准确度提升的点。诚然，上述是一个极端案例，准确度翻倍了，但仍然在许多情况下，有许多优化可以帮助我们显著提高准确度。</p>
+
+<h1 id="benchmarks">基准测试</h1>
+
+<p>下面是如何初始化两个预训练模型的方法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">ssdlite</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">ssdlite320_mobilenet_v3_large</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">ssd</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">ssd300_vgg16</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>下面是新模型和选定的先前检测模型之间的基准测试：</p>
+
+<table class="table table-striped table-bordered">
+  <thead>
+    <tr>
+      <th><strong>Model</strong></th>
+      <th><strong>平均精度均值（mAP）</strong></th>
+      <th><strong>CPU 上的推理（秒）</strong></th>
+      <th><strong># 参数 (M)</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>SSDlite320 MobileNetV3-Large</td>
+      <td>21.3</td>
+      <td>0.0911</td>
+      <td>3.44</td>
+    </tr>
+    <tr>
+      <td>SSD300 VGG16</td>
+      <td>25.1</td>
+      <td>0.8303</td>
+      <td>35.64</td>
+    </tr>
+    <tr>
+      <td>SSD512 VGG16（未发布）</td>
+      <td>28.8</td>
+      <td>2.2494</td>
+      <td>37.08</td>
+    </tr>
+    <tr>
+      <td>SSD512 ResNet50（未发布）</td>
+      <td>30.2</td>
+      <td>1.1137</td>
+      <td>42.70</td>
+    </tr>
+    <tr>
+      <td>Faster R-CNN MobileNetV3-Large 320 FPN（低分辨率）</td>
+      <td>22.8</td>
+      <td>0.1679</td>
+      <td>19.39</td>
+    </tr>
+    <tr>
+      <td>Faster R-CNN MobileNetV3-Large FPN (高分辨率)</td>
+      <td>32.8</td>
+      <td>0.8409</td>
+      <td>19.39</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>如我们所见，SSDlite320 MobileNetV3-Large 模型到目前为止是最快且最小的模型，因此它是现实世界移动应用的绝佳候选者。尽管其准确率低于预训练的低分辨率 Faster R-CNN 相当，但 SSDlite 框架是可适应的，可以通过引入具有更多卷积的重型头部来提高其准确率。</p>
+
+<p>另一方面，SSD300 VGG16 模型相当慢且准确率较低。这主要是因为其 VGG16 骨干。尽管 VGG 架构非常重要且具有影响力，但现在它已经相当过时了。因此，尽管该特定模型具有历史和科研价值，因此被包含在 TorchVision 中，我们建议想要为现实世界应用提供高分辨率检测器的用户，要么将 SSD 与替代骨干结合（参见此<a href="https://github.com/pytorch/vision/pull/3760">示例</a>了解如何创建一个），要么使用 Faster R-CNN 预训练模型之一。</p>
+
+<p>希望您喜欢 SSD 系列的第二个也是最后一个部分。我们期待您的反馈。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Scaling PyTorch models on Cloud TPUs with FSDP | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Introduction
+
+The research community has witnessed a lot of successes with large models across NLP, computer vision, and other domains in recent years. Many of these successes were enabled by Cloud TPUs – which are powerful hardware for distributed training. To support TPUs in PyTorch, the PyTorch/XLA library provides a backend for XLA devices (most notably TPUs) and lays the groundwork for scaling large PyTorch models on TPUs.
+
+However, most existing modeling scaling tools in the PyTorch ecosystem assume GPU (or CPU) devices, often depend on specific features in CUDA, and do not work directly on TPUs. The lack of scaling tools makes it challenging to build large models that cannot fit into the memory of a single TPU chip.
+
+To support model scaling on TPUs, we implemented the widely-adopted Fully Sharded Data Parallel (FSDP) algorithm for XLA devices as part of the PyTorch/XLA 1.12 release. We provide an FSDP interface with a similar high-level design to the CUDA-based PyTorch FSDP class while also handling several restrictions in XLA (see Design Notes below for more details). This FSDP interface allowed us to easily build models with e.g. 10B+ parameters on TPUs and has enabled many research explorations.
+
+Using Fully Sharded Data Parallel (FSDP) in PyTorch/XLA
+
+We provide a wrapper class XlaFullyShardedDataParallel over a given PyTorch model to shard its parameters across data-parallel workers. An example usage is as follows:
+
+import torch
+import torch_xla.core.xla_model as xm
+from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
+
+model = FSDP(my_module)
+optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+output = model(x, y)
+loss = output.sum()
+loss.backward()
+optim.step()
+
+
+Wrapping an nn.Module instance with XlaFullyShardedDataParallel enables the ZeRO-2 algorithm on it, where its gradients and the optimizer states are sharded for the entire training process. During its forward and backward passes, the full parameters of the wrapped module are first reconstructed from their corresponding shards for computation.
+
+Nested FSDP wrapping can be used to further save memory. This allows the model to store only the full parameters of one individual layer at any given time. For nested FSDP, one should first wrap its individual submodules with an inner FSDP before wrapping the base model with an outer FSDP. This allows the model to store only the full parameters of one individual layer at any given time. And having an outer wrapper ensures to handle any leftover parameters, corresponding to the ZeRO-3 algorithm. Nested FSDP wrapping can be applied at any depth of submodules and there can be more than 2 layers of nesting.
+
+Model checkpoint saving and loading for models and optimizers can be done like before by saving and loading their .state_dict(). Meanwhile, each training process should save its own checkpoint file of the sharded model parameters and optimizer states, and load the checkpoint file for the corresponding rank when resuming (regardless of ZeRO-2 or ZeRO-3, i.e. nested wrapping or not). A command line tool and a Python interface are provided to consolidate the sharded model checkpoint files together into a full/unshareded model checkpoint file.
+
+Gradient checkpointing (also referred to as “activation checkpointing” or “rematerialization”) is another common technique for model scaling and can be used in conjunction with FSDP. We provide checkpoint_module, a wrapper function over a given nn.Module instance for gradient checkpointing (based on torch_xla.utils.checkpoint.checkpoint).
+
+The MNIST and ImageNet examples below provide illustrative usages of (plain or nested) FSDP, saving and consolidation of model checkpoints, as well as gradient checkpointing.
+
+Starting examples of FSDP in PyTorch/XLA
+
+Training MNIST and ImageNet with FSDP
+
+MNIST and ImageNet classification can often be used as starting points to build more complicated deep learning models. We provide the following FSDP examples on these two datasets:
+
+
+  MNIST: test/test_train_mp_mnist_fsdp_with_ckpt.py (it also illustrates checkpoint saving and consolidation)
+  ImageNet: test/test_train_mp_imagenet_fsdp.py
+
+
+A comparison of them with the vanilla data-parallel examples of MNIST and ImageNet illustrates how to adapt a training script to use FSDP. A major distinction to keep in mind is that when stepping the optimizer on an FSDP-wrapped model, one should directly call optimizer.step() instead of xm.optimizer_step(optimizer). The latter reduces the gradients across ranks, which is not what we need in FSDP, where the gradients are already reduced and sharded (from a reduce-scatter op in its backward pass).
+
+Installation
+
+FSDP is available from the PyTorch/XLA 1.12 and newer nightly releases. Please refer to https://github.com/pytorch/xla#-available-images-and-wheels for a guide on installation as well as Cloud TPU allocation. Then clone PyTorch/XLA repo on a TPU VM as follows
+
+mkdir -p ~/pytorch &amp;&amp; cd ~/pytorch
+git clone --recursive https://github.com/pytorch/xla.git
+cd ~/
+
+
+Train MNIST on v3-8 TPU
+
+It gets around 98.9 accuracy for 2 epochs:
+
+python3 ~/pytorch/xla/test/test_train_mp_mnist_fsdp_with_ckpt.py \
+  --batch_size 16 --drop_last --num_epochs 2 \
+  --use_nested_fsdp
+
+
+The script above automatically tests consolidation of the sharded model checkpoints at the end. You can also manually consolidate the sharded checkpoint files via
+
+python3 -m torch_xla.distributed.fsdp.consolidate_sharded_ckpts \
+  --ckpt_prefix /tmp/mnist-fsdp/final_ckpt \
+  --ckpt_suffix " _rank-*-of-*.pth"="" train="" imagenet="" with="" resnet-50="" on="" v3-8="" tpu="" it="" gets="" around="" 75.9="" accuracy="" for="" 100="" epochs,="" same="" as="" what="" one="" would="" get="" without="" using="" fsdp;="" download="" and="" preprocess="" the="" imagenet-1k="" dataset="" to="" datasets="" imagenet-1k:="" python3="" ~="" pytorch="" xla="" test="" test_train_mp_imagenet_fsdp.py="" \="" --datadir="" --drop_last="" --model="" resnet50="" --test_set_batch_size="" 64="" --eval_interval="" 10="" --lr="" 0.4="" --batch_size="" 128="" --num_warmup_epochs="" 5="" --lr_scheduler_divide_every_n_epochs="" 30="" --lr_scheduler_divisor="" --num_epochs="" --use_nested_fsdp="" you="" can="" also="" explore="" other="" options="" in="" these="" two="" examples,="" such="" --use_gradient_checkpointing="" apply="" gradient="" checkpointing="" (i.e.="" activation="" checkpointing)="" resnet="" blocks,="" or="" --compute_dtype="" bfloat16="" perform="" forward="" backward="" passes="" precision.="" examples="" large-scale="" models="" when="" building="" large="" tpus,="" we="" often="" need="" be="" aware="" of="" memory="" constraints="" (e.g.="" 16="" gb="" per="" core="" v3="" 32="" chip="" v4).="" that="" cannot="" fit="" into="" a="" single="" host="" cpu="" memory,="" should="" use="" nested="" fsdp="" implement="" zero-3="" algorithm="" interleave="" submodule="" construction="" inner="" wrapping,="" so="" full="" model="" never="" needs="" stored="" during="" construction.="" illustrate="" cases="" https:="" github.com="" ronghanghu="" ptxla_scaling_examples,="" which="" provides="" training="" vision="" transformer="" (vit)="" 10b+="" parameters="" pod="" (with="" cores)="" well="" cases.="" design="" notes="" might="" wonder="" why="" develop="" separate="" class="" instead="" directly="" reusing="" pytorch’s="" extending="" backend.="" main="" motivation="" behind="" is="" native="" heavily="" relies="" cuda="" features="" are="" not="" supported="" by="" devices,="" while="" has="" several="" unique="" characteristics="" special="" handling.="" distinctions="" require="" different="" implementation="" much="" easier="" build="" class.="" changes="" api="" calls="" prominent="" distinction="" built="" upon="" streams="" asynchronous="" execution="" eager="" mode,="" runs="" lazy="" mode="" does="" support="" streams.="" addition,="" requires="" all="" devices="" homogeneously="" run="" program.="" result,="" implementation,="" per-process="" heterogeneity="" replaced="" apis="" alternative="" homogeneous="" implementations.="" tensor="" storage="" handling="" another="" how="" free="" tensor’s="" storage,="" harder="" than="" cuda.="" zero-3,="" after="" module’s="" pass,="" next="" module="" reuse="" this="" buffer="" subsequent="" computation.="" fspd="" accomplishes="" freeing="" actual="" parameter="" p="" via="" p.data.storage().resize_(0).="" however,="" tensors="" do="" have="" .storage()="" handle="" given="" hlo="" irs="" completely="" functional="" provide="" any="" ops="" deallocate="" resize="" its="" storage.="" below="" interface,="" only="" compiler="" decide="" device="" corresponding="" an="" tensor,="" prerequisite="" released="" object="" deallocated="" python="" –="" happen="" because="" referenced="" attributes="" saved="" autograd="" pass.="" our="" solution="" issue="" split="" value="" properties="" from="" variable="" properties,="" nn.parameter="" setting="" .data="" attribute="" dummy="" scalar="" size="" 1.="" way="" data="" dereferenced="" recycle="" computation,="" still="" trace="" base="" weak="" reference="" data.="" work,="" views="" over="" hold="" references="" (this="" required="" fixing="" shape-related="" xla).="" working="" above="" enough="" if="" faithfully="" preserves="" operations="" their="" order="" but="" there="" problem="" attempts="" optimize="" program="" speed="" up="" applying="" common="" subexpression="" elimination="" (cse)="" irs.="" naive="" fsdp,="" typically="" eliminates="" 2nd="" all-gather="" pass="" reconstruct="" sees="" repeated="" computation="" holds="" reuses="" want="" guard="" against="" undesired="" behavior,="" introduced="" optimization="" barrier="" op="" used="" stop="" eliminating="" all-gather.="" applied="" similar="" case="" prevent="" cse="" between="" could="" eliminate="" rematerialization.="" future,="" become="" mentioned="" above,="" worth="" considering="" merge="" unified="" interface.="" acknowledgments="" thanks="" junmin="" hao="" aws="" reviewing="" pull="" request.="" brian="" hirsh="" meta="" team="" issues.="" isaack="" karanja,="" will="" cromar,="" blake="" hechtman="" google="" gcp,="" xla,="" piotr="" dollar,="" wan-yen="" lo,="" alex="" berg,="" ryan="" mark,="" kaiming="" he,="" xinlei="" chen,="" saining="" xie,="" shoubhik="" debnath,="" min="" xu,="" vaibhav="" aggarwal="" fair="" various="" tpu-related="" discussions.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000//assets/images/scaling-pytorch-models-on-cloud-tpus-with-fsdp.jpg">
+  <meta name="twitter:image" content="http://localhost:4000//assets/images/scaling-pytorch-models-on-cloud-tpus-with-fsdp.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Scaling PyTorch models on Cloud TPUs with FSDP">
+<meta property="og:description" content="Introduction
+
+The research community has witnessed a lot of successes with large models across NLP, computer vision, and other domains in recent years. Many of these successes were enabled by Cloud TPUs – which are powerful hardware for distributed training. To support TPUs in PyTorch, the PyTorch/XLA library provides a backend for XLA devices (most notably TPUs) and lays the groundwork for scaling large PyTorch models on TPUs.
+
+However, most existing modeling scaling tools in the PyTorch ecosystem assume GPU (or CPU) devices, often depend on specific features in CUDA, and do not work directly on TPUs. The lack of scaling tools makes it challenging to build large models that cannot fit into the memory of a single TPU chip.
+
+To support model scaling on TPUs, we implemented the widely-adopted Fully Sharded Data Parallel (FSDP) algorithm for XLA devices as part of the PyTorch/XLA 1.12 release. We provide an FSDP interface with a similar high-level design to the CUDA-based PyTorch FSDP class while also handling several restrictions in XLA (see Design Notes below for more details). This FSDP interface allowed us to easily build models with e.g. 10B+ parameters on TPUs and has enabled many research explorations.
+
+Using Fully Sharded Data Parallel (FSDP) in PyTorch/XLA
+
+We provide a wrapper class XlaFullyShardedDataParallel over a given PyTorch model to shard its parameters across data-parallel workers. An example usage is as follows:
+
+import torch
+import torch_xla.core.xla_model as xm
+from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
+
+model = FSDP(my_module)
+optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+output = model(x, y)
+loss = output.sum()
+loss.backward()
+optim.step()
+
+
+Wrapping an nn.Module instance with XlaFullyShardedDataParallel enables the ZeRO-2 algorithm on it, where its gradients and the optimizer states are sharded for the entire training process. During its forward and backward passes, the full parameters of the wrapped module are first reconstructed from their corresponding shards for computation.
+
+Nested FSDP wrapping can be used to further save memory. This allows the model to store only the full parameters of one individual layer at any given time. For nested FSDP, one should first wrap its individual submodules with an inner FSDP before wrapping the base model with an outer FSDP. This allows the model to store only the full parameters of one individual layer at any given time. And having an outer wrapper ensures to handle any leftover parameters, corresponding to the ZeRO-3 algorithm. Nested FSDP wrapping can be applied at any depth of submodules and there can be more than 2 layers of nesting.
+
+Model checkpoint saving and loading for models and optimizers can be done like before by saving and loading their .state_dict(). Meanwhile, each training process should save its own checkpoint file of the sharded model parameters and optimizer states, and load the checkpoint file for the corresponding rank when resuming (regardless of ZeRO-2 or ZeRO-3, i.e. nested wrapping or not). A command line tool and a Python interface are provided to consolidate the sharded model checkpoint files together into a full/unshareded model checkpoint file.
+
+Gradient checkpointing (also referred to as “activation checkpointing” or “rematerialization”) is another common technique for model scaling and can be used in conjunction with FSDP. We provide checkpoint_module, a wrapper function over a given nn.Module instance for gradient checkpointing (based on torch_xla.utils.checkpoint.checkpoint).
+
+The MNIST and ImageNet examples below provide illustrative usages of (plain or nested) FSDP, saving and consolidation of model checkpoints, as well as gradient checkpointing.
+
+Starting examples of FSDP in PyTorch/XLA
+
+Training MNIST and ImageNet with FSDP
+
+MNIST and ImageNet classification can often be used as starting points to build more complicated deep learning models. We provide the following FSDP examples on these two datasets:
+
+
+  MNIST: test/test_train_mp_mnist_fsdp_with_ckpt.py (it also illustrates checkpoint saving and consolidation)
+  ImageNet: test/test_train_mp_imagenet_fsdp.py
+
+
+A comparison of them with the vanilla data-parallel examples of MNIST and ImageNet illustrates how to adapt a training script to use FSDP. A major distinction to keep in mind is that when stepping the optimizer on an FSDP-wrapped model, one should directly call optimizer.step() instead of xm.optimizer_step(optimizer). The latter reduces the gradients across ranks, which is not what we need in FSDP, where the gradients are already reduced and sharded (from a reduce-scatter op in its backward pass).
+
+Installation
+
+FSDP is available from the PyTorch/XLA 1.12 and newer nightly releases. Please refer to https://github.com/pytorch/xla#-available-images-and-wheels for a guide on installation as well as Cloud TPU allocation. Then clone PyTorch/XLA repo on a TPU VM as follows
+
+mkdir -p ~/pytorch &amp;&amp; cd ~/pytorch
+git clone --recursive https://github.com/pytorch/xla.git
+cd ~/
+
+
+Train MNIST on v3-8 TPU
+
+It gets around 98.9 accuracy for 2 epochs:
+
+python3 ~/pytorch/xla/test/test_train_mp_mnist_fsdp_with_ckpt.py \
+  --batch_size 16 --drop_last --num_epochs 2 \
+  --use_nested_fsdp
+
+
+The script above automatically tests consolidation of the sharded model checkpoints at the end. You can also manually consolidate the sharded checkpoint files via
+
+python3 -m torch_xla.distributed.fsdp.consolidate_sharded_ckpts \
+  --ckpt_prefix /tmp/mnist-fsdp/final_ckpt \
+  --ckpt_suffix " _rank-*-of-*.pth"="" train="" imagenet="" with="" resnet-50="" on="" v3-8="" tpu="" it="" gets="" around="" 75.9="" accuracy="" for="" 100="" epochs,="" same="" as="" what="" one="" would="" get="" without="" using="" fsdp;="" download="" and="" preprocess="" the="" imagenet-1k="" dataset="" to="" datasets="" imagenet-1k:="" python3="" ~="" pytorch="" xla="" test="" test_train_mp_imagenet_fsdp.py="" \="" --datadir="" --drop_last="" --model="" resnet50="" --test_set_batch_size="" 64="" --eval_interval="" 10="" --lr="" 0.4="" --batch_size="" 128="" --num_warmup_epochs="" 5="" --lr_scheduler_divide_every_n_epochs="" 30="" --lr_scheduler_divisor="" --num_epochs="" --use_nested_fsdp="" you="" can="" also="" explore="" other="" options="" in="" these="" two="" examples,="" such="" --use_gradient_checkpointing="" apply="" gradient="" checkpointing="" (i.e.="" activation="" checkpointing)="" resnet="" blocks,="" or="" --compute_dtype="" bfloat16="" perform="" forward="" backward="" passes="" precision.="" examples="" large-scale="" models="" when="" building="" large="" tpus,="" we="" often="" need="" be="" aware="" of="" memory="" constraints="" (e.g.="" 16="" gb="" per="" core="" v3="" 32="" chip="" v4).="" that="" cannot="" fit="" into="" a="" single="" host="" cpu="" memory,="" should="" use="" nested="" fsdp="" implement="" zero-3="" algorithm="" interleave="" submodule="" construction="" inner="" wrapping,="" so="" full="" model="" never="" needs="" stored="" during="" construction.="" illustrate="" cases="" https:="" github.com="" ronghanghu="" ptxla_scaling_examples,="" which="" provides="" training="" vision="" transformer="" (vit)="" 10b+="" parameters="" pod="" (with="" cores)="" well="" cases.="" design="" notes="" might="" wonder="" why="" develop="" separate="" class="" instead="" directly="" reusing="" pytorch’s="" extending="" backend.="" main="" motivation="" behind="" is="" native="" heavily="" relies="" cuda="" features="" are="" not="" supported="" by="" devices,="" while="" has="" several="" unique="" characteristics="" special="" handling.="" distinctions="" require="" different="" implementation="" much="" easier="" build="" class.="" changes="" api="" calls="" prominent="" distinction="" built="" upon="" streams="" asynchronous="" execution="" eager="" mode,="" runs="" lazy="" mode="" does="" support="" streams.="" addition,="" requires="" all="" devices="" homogeneously="" run="" program.="" result,="" implementation,="" per-process="" heterogeneity="" replaced="" apis="" alternative="" homogeneous="" implementations.="" tensor="" storage="" handling="" another="" how="" free="" tensor’s="" storage,="" harder="" than="" cuda.="" zero-3,="" after="" module’s="" pass,="" next="" module="" reuse="" this="" buffer="" subsequent="" computation.="" fspd="" accomplishes="" freeing="" actual="" parameter="" p="" via="" p.data.storage().resize_(0).="" however,="" tensors="" do="" have="" .storage()="" handle="" given="" hlo="" irs="" completely="" functional="" provide="" any="" ops="" deallocate="" resize="" its="" storage.="" below="" interface,="" only="" compiler="" decide="" device="" corresponding="" an="" tensor,="" prerequisite="" released="" object="" deallocated="" python="" –="" happen="" because="" referenced="" attributes="" saved="" autograd="" pass.="" our="" solution="" issue="" split="" value="" properties="" from="" variable="" properties,="" nn.parameter="" setting="" .data="" attribute="" dummy="" scalar="" size="" 1.="" way="" data="" dereferenced="" recycle="" computation,="" still="" trace="" base="" weak="" reference="" data.="" work,="" views="" over="" hold="" references="" (this="" required="" fixing="" shape-related="" xla).="" working="" above="" enough="" if="" faithfully="" preserves="" operations="" their="" order="" but="" there="" problem="" attempts="" optimize="" program="" speed="" up="" applying="" common="" subexpression="" elimination="" (cse)="" irs.="" naive="" fsdp,="" typically="" eliminates="" 2nd="" all-gather="" pass="" reconstruct="" sees="" repeated="" computation="" holds="" reuses="" want="" guard="" against="" undesired="" behavior,="" introduced="" optimization="" barrier="" op="" used="" stop="" eliminating="" all-gather.="" applied="" similar="" case="" prevent="" cse="" between="" could="" eliminate="" rematerialization.="" future,="" become="" mentioned="" above,="" worth="" considering="" merge="" unified="" interface.="" acknowledgments="" thanks="" junmin="" hao="" aws="" reviewing="" pull="" request.="" brian="" hirsh="" meta="" team="" issues.="" isaack="" karanja,="" will="" cromar,="" blake="" hechtman="" google="" gcp,="" xla,="" piotr="" dollar,="" wan-yen="" lo,="" alex="" berg,="" ryan="" mark,="" kaiming="" he,="" xinlei="" chen,="" saining="" xie,="" shoubhik="" debnath,="" min="" xu,="" vaibhav="" aggarwal="" fair="" various="" tpu-related="" discussions.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Scaling PyTorch models on Cloud TPUs with FSDP">
+<meta name="twitter:description" content="Introduction
+
+The research community has witnessed a lot of successes with large models across NLP, computer vision, and other domains in recent years. Many of these successes were enabled by Cloud TPUs – which are powerful hardware for distributed training. To support TPUs in PyTorch, the PyTorch/XLA library provides a backend for XLA devices (most notably TPUs) and lays the groundwork for scaling large PyTorch models on TPUs.
+
+However, most existing modeling scaling tools in the PyTorch ecosystem assume GPU (or CPU) devices, often depend on specific features in CUDA, and do not work directly on TPUs. The lack of scaling tools makes it challenging to build large models that cannot fit into the memory of a single TPU chip.
+
+To support model scaling on TPUs, we implemented the widely-adopted Fully Sharded Data Parallel (FSDP) algorithm for XLA devices as part of the PyTorch/XLA 1.12 release. We provide an FSDP interface with a similar high-level design to the CUDA-based PyTorch FSDP class while also handling several restrictions in XLA (see Design Notes below for more details). This FSDP interface allowed us to easily build models with e.g. 10B+ parameters on TPUs and has enabled many research explorations.
+
+Using Fully Sharded Data Parallel (FSDP) in PyTorch/XLA
+
+We provide a wrapper class XlaFullyShardedDataParallel over a given PyTorch model to shard its parameters across data-parallel workers. An example usage is as follows:
+
+import torch
+import torch_xla.core.xla_model as xm
+from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
+
+model = FSDP(my_module)
+optim = torch.optim.Adam(model.parameters(), lr=0.0001)
+output = model(x, y)
+loss = output.sum()
+loss.backward()
+optim.step()
+
+
+Wrapping an nn.Module instance with XlaFullyShardedDataParallel enables the ZeRO-2 algorithm on it, where its gradients and the optimizer states are sharded for the entire training process. During its forward and backward passes, the full parameters of the wrapped module are first reconstructed from their corresponding shards for computation.
+
+Nested FSDP wrapping can be used to further save memory. This allows the model to store only the full parameters of one individual layer at any given time. For nested FSDP, one should first wrap its individual submodules with an inner FSDP before wrapping the base model with an outer FSDP. This allows the model to store only the full parameters of one individual layer at any given time. And having an outer wrapper ensures to handle any leftover parameters, corresponding to the ZeRO-3 algorithm. Nested FSDP wrapping can be applied at any depth of submodules and there can be more than 2 layers of nesting.
+
+Model checkpoint saving and loading for models and optimizers can be done like before by saving and loading their .state_dict(). Meanwhile, each training process should save its own checkpoint file of the sharded model parameters and optimizer states, and load the checkpoint file for the corresponding rank when resuming (regardless of ZeRO-2 or ZeRO-3, i.e. nested wrapping or not). A command line tool and a Python interface are provided to consolidate the sharded model checkpoint files together into a full/unshareded model checkpoint file.
+
+Gradient checkpointing (also referred to as “activation checkpointing” or “rematerialization”) is another common technique for model scaling and can be used in conjunction with FSDP. We provide checkpoint_module, a wrapper function over a given nn.Module instance for gradient checkpointing (based on torch_xla.utils.checkpoint.checkpoint).
+
+The MNIST and ImageNet examples below provide illustrative usages of (plain or nested) FSDP, saving and consolidation of model checkpoints, as well as gradient checkpointing.
+
+Starting examples of FSDP in PyTorch/XLA
+
+Training MNIST and ImageNet with FSDP
+
+MNIST and ImageNet classification can often be used as starting points to build more complicated deep learning models. We provide the following FSDP examples on these two datasets:
+
+
+  MNIST: test/test_train_mp_mnist_fsdp_with_ckpt.py (it also illustrates checkpoint saving and consolidation)
+  ImageNet: test/test_train_mp_imagenet_fsdp.py
+
+
+A comparison of them with the vanilla data-parallel examples of MNIST and ImageNet illustrates how to adapt a training script to use FSDP. A major distinction to keep in mind is that when stepping the optimizer on an FSDP-wrapped model, one should directly call optimizer.step() instead of xm.optimizer_step(optimizer). The latter reduces the gradients across ranks, which is not what we need in FSDP, where the gradients are already reduced and sharded (from a reduce-scatter op in its backward pass).
+
+Installation
+
+FSDP is available from the PyTorch/XLA 1.12 and newer nightly releases. Please refer to https://github.com/pytorch/xla#-available-images-and-wheels for a guide on installation as well as Cloud TPU allocation. Then clone PyTorch/XLA repo on a TPU VM as follows
+
+mkdir -p ~/pytorch &amp;&amp; cd ~/pytorch
+git clone --recursive https://github.com/pytorch/xla.git
+cd ~/
+
+
+Train MNIST on v3-8 TPU
+
+It gets around 98.9 accuracy for 2 epochs:
+
+python3 ~/pytorch/xla/test/test_train_mp_mnist_fsdp_with_ckpt.py \
+  --batch_size 16 --drop_last --num_epochs 2 \
+  --use_nested_fsdp
+
+
+The script above automatically tests consolidation of the sharded model checkpoints at the end. You can also manually consolidate the sharded checkpoint files via
+
+python3 -m torch_xla.distributed.fsdp.consolidate_sharded_ckpts \
+  --ckpt_prefix /tmp/mnist-fsdp/final_ckpt \
+  --ckpt_suffix " _rank-*-of-*.pth"="" train="" imagenet="" with="" resnet-50="" on="" v3-8="" tpu="" it="" gets="" around="" 75.9="" accuracy="" for="" 100="" epochs,="" same="" as="" what="" one="" would="" get="" without="" using="" fsdp;="" download="" and="" preprocess="" the="" imagenet-1k="" dataset="" to="" datasets="" imagenet-1k:="" python3="" ~="" pytorch="" xla="" test="" test_train_mp_imagenet_fsdp.py="" \="" --datadir="" --drop_last="" --model="" resnet50="" --test_set_batch_size="" 64="" --eval_interval="" 10="" --lr="" 0.4="" --batch_size="" 128="" --num_warmup_epochs="" 5="" --lr_scheduler_divide_every_n_epochs="" 30="" --lr_scheduler_divisor="" --num_epochs="" --use_nested_fsdp="" you="" can="" also="" explore="" other="" options="" in="" these="" two="" examples,="" such="" --use_gradient_checkpointing="" apply="" gradient="" checkpointing="" (i.e.="" activation="" checkpointing)="" resnet="" blocks,="" or="" --compute_dtype="" bfloat16="" perform="" forward="" backward="" passes="" precision.="" examples="" large-scale="" models="" when="" building="" large="" tpus,="" we="" often="" need="" be="" aware="" of="" memory="" constraints="" (e.g.="" 16="" gb="" per="" core="" v3="" 32="" chip="" v4).="" that="" cannot="" fit="" into="" a="" single="" host="" cpu="" memory,="" should="" use="" nested="" fsdp="" implement="" zero-3="" algorithm="" interleave="" submodule="" construction="" inner="" wrapping,="" so="" full="" model="" never="" needs="" stored="" during="" construction.="" illustrate="" cases="" https:="" github.com="" ronghanghu="" ptxla_scaling_examples,="" which="" provides="" training="" vision="" transformer="" (vit)="" 10b+="" parameters="" pod="" (with="" cores)="" well="" cases.="" design="" notes="" might="" wonder="" why="" develop="" separate="" class="" instead="" directly="" reusing="" pytorch’s="" extending="" backend.="" main="" motivation="" behind="" is="" native="" heavily="" relies="" cuda="" features="" are="" not="" supported="" by="" devices,="" while="" has="" several="" unique="" characteristics="" special="" handling.="" distinctions="" require="" different="" implementation="" much="" easier="" build="" class.="" changes="" api="" calls="" prominent="" distinction="" built="" upon="" streams="" asynchronous="" execution="" eager="" mode,="" runs="" lazy="" mode="" does="" support="" streams.="" addition,="" requires="" all="" devices="" homogeneously="" run="" program.="" result,="" implementation,="" per-process="" heterogeneity="" replaced="" apis="" alternative="" homogeneous="" implementations.="" tensor="" storage="" handling="" another="" how="" free="" tensor’s="" storage,="" harder="" than="" cuda.="" zero-3,="" after="" module’s="" pass,="" next="" module="" reuse="" this="" buffer="" subsequent="" computation.="" fspd="" accomplishes="" freeing="" actual="" parameter="" p="" via="" p.data.storage().resize_(0).="" however,="" tensors="" do="" have="" .storage()="" handle="" given="" hlo="" irs="" completely="" functional="" provide="" any="" ops="" deallocate="" resize="" its="" storage.="" below="" interface,="" only="" compiler="" decide="" device="" corresponding="" an="" tensor,="" prerequisite="" released="" object="" deallocated="" python="" –="" happen="" because="" referenced="" attributes="" saved="" autograd="" pass.="" our="" solution="" issue="" split="" value="" properties="" from="" variable="" properties,="" nn.parameter="" setting="" .data="" attribute="" dummy="" scalar="" size="" 1.="" way="" data="" dereferenced="" recycle="" computation,="" still="" trace="" base="" weak="" reference="" data.="" work,="" views="" over="" hold="" references="" (this="" required="" fixing="" shape-related="" xla).="" working="" above="" enough="" if="" faithfully="" preserves="" operations="" their="" order="" but="" there="" problem="" attempts="" optimize="" program="" speed="" up="" applying="" common="" subexpression="" elimination="" (cse)="" irs.="" naive="" fsdp,="" typically="" eliminates="" 2nd="" all-gather="" pass="" reconstruct="" sees="" repeated="" computation="" holds="" reuses="" want="" guard="" against="" undesired="" behavior,="" introduced="" optimization="" barrier="" op="" used="" stop="" eliminating="" all-gather.="" applied="" similar="" case="" prevent="" cse="" between="" could="" eliminate="" rematerialization.="" future,="" become="" mentioned="" above,="" worth="" considering="" merge="" unified="" interface.="" acknowledgments="" thanks="" junmin="" hao="" aws="" reviewing="" pull="" request.="" brian="" hirsh="" meta="" team="" issues.="" isaack="" karanja,="" will="" cromar,="" blake="" hechtman="" google="" gcp,="" xla,="" piotr="" dollar,="" wan-yen="" lo,="" alex="" berg,="" ryan="" mark,="" kaiming="" he,="" xinlei="" chen,="" saining="" xie,="" shoubhik="" debnath,="" min="" xu,="" vaibhav="" aggarwal="" fair="" various="" tpu-related="" discussions.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容是什么</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年10月13日</p>
+            <h1>
+                <a class="blog-title">使用 FSDP 在云 TPU 上扩展 PyTorch 模型</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由胡荣航、瓦伊布·辛格、曹杰、米尔达·莫哈马迪、郑永诺、沙乌欣·扎希拉扎米、罗斯·吉什克著</p>
+                    <h2 id="introduction">简介</h2>
+
+<p>近年来，研究界在自然语言处理、计算机视觉和其他领域使用大型模型取得了许多成功。其中许多成功得益于云 TPU——这是一种用于分布式训练的强大硬件。为了支持 PyTorch 中的 TPU，PyTorch/XLA 库为 XLA 设备（尤其是 TPU）提供了一个后端，并为在 TPU 上扩展大型 PyTorch 模型奠定了基础。</p>
+
+<p>然而，PyTorch 生态系统中的大多数现有建模扩展工具都假设 GPU（或 CPU）设备，通常依赖于 CUDA 的特定功能，并且不能直接在 TPU 上工作。缺乏扩展工具使得构建无法适应单个 TPU 芯片内存的大型模型变得具有挑战性。</p>
+
+<p>为了支持 TPU 上的模型扩展，我们在 PyTorch/XLA 1.12 版本中实现了广泛采用的<a href="https://engineering.fb.com/2021/07/15/open-source/fsdp/">完全分片数据并行（FSDP）</a> 算法，作为 XLA 设备的一部分。我们提供了一个与基于 CUDA 的 PyTorch FSDP 类具有类似高级设计的 FSDP 接口，同时处理了 XLA 中的几个限制（更多详细信息请参阅以下设计笔记）。这个 FSDP 接口使我们能够轻松地在 TPU 上构建具有例如 10B+参数的模型，并已使许多研究探索成为可能。</p>
+
+<h2 id="using-fully-sharded-data-parallel-fsdp-in-pytorchxla">在 PyTorch/XLA 中使用完全分片数据并行（FSDP）</h2>
+
+<p>我们提供了一个包装类 <code class="language-plaintext highlighter-rouge">XlaFullyShardedDataParallel</code>，用于将给定 PyTorch 模型的参数分片到数据并行工作进程中。以下是一个示例用法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torch_xla.core.xla_model</span> <span class="k">as</span> <span class="n">xm</span>
+<span class="kn">from</span> <span class="nn">torch_xla.distributed.fsdp</span> <span class="kn">import</span> <span class="n">XlaFullyShardedDataParallel</span> <span class="k">as</span> <span class="n">FSDP</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">FSDP</span><span class="p">(</span><span class="n">my_module</span><span class="p">)</span>
+<span class="n">optim</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">Adam</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.0001</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<span class="n">loss</span> <span class="o">=</span> <span class="n">output</span><span class="p">.</span><span class="nb">sum</span><span class="p">()</span>
+<span class="n">loss</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
+<span class="n">optim</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>使用 <code class="language-plaintext highlighter-rouge">nn.Module</code> 实例包装 <code class="language-plaintext highlighter-rouge">XlaFullyShardedDataParallel</code> 可以在其上启用 <a href="https://arxiv.org/abs/1910.02054">ZeRO-2</a> 算法，在整个训练过程中对其梯度优化器状态进行分片。在其正向和反向传播过程中，首先从相应的分片重建包装模块的完整参数以进行计算。</p>
+
+<p>嵌套 FSDP 包装可用于进一步节省内存。这允许模型在任何给定时间只存储单个层的完整参数。对于嵌套 FSDP，应首先使用内部 FSDP 包装其各个子模块，然后再用外部 FSDP 包装基本模型。这允许模型在任何给定时间只存储单个层的完整参数。并且有一个外部包装器可以确保处理与 <a href="https://arxiv.org/abs/1910.02054">ZeRO-3</a> 算法对应的任何剩余参数。嵌套 FSDP 包装可以应用于子模块的任何深度，并且可以有超过 2 层的嵌套。</p>
+
+<p><strong>模型检查点保存和加载</strong>对于模型和优化器，可以像以前一样通过保存和加载它们的 <code class="language-plaintext highlighter-rouge">.state_dict()</code> 来完成。同时，每个训练过程应保存其分片模型参数和优化器状态的检查点文件，并在恢复时加载对应 rank 的检查点文件（无论是否使用 ZeRO-2 或 ZeRO-3，即嵌套包装或不包装）。提供了一个命令行工具和 Python 接口，用于将分片模型检查点文件合并成一个完整/非分片的模型检查点文件。</p>
+
+<p><strong>梯度检查点 </strong>（也称为“激活检查点”或“重材料化”），是另一种常见的模型扩展技术，可以与 FSDP 结合使用。我们提供了 <code class="language-plaintext highlighter-rouge">checkpoint_module</code>，这是一个用于梯度检查点的包装函数，它覆盖了给定的 <code class="language-plaintext highlighter-rouge">nn.Module</code> 实例（基于 <code class="language-plaintext highlighter-rouge">torch_xla.utils.checkpoint.checkpoint</code> ）。</p>
+
+<p>下面的 MNIST 和 ImageNet 示例提供了（平面或嵌套）FSDP、模型检查点保存和合并以及梯度检查点的示例用法。</p>
+
+<h2 id="starting-examples-of-fsdp-in-pytorchxla">PyTorch/XLA 中 FSDP 的起始示例</h2>
+
+<h3 id="training-mnist-and-imagenet-with-fsdp">使用 FSDP 训练 MNIST 和 ImageNet</h3>
+
+<p>MNIST 和 ImageNet 分类通常可以用作构建更复杂深度学习模型的起点。我们提供了以下两个数据集上的 FSDP 示例：</p>
+
+<ul>
+  <li>MNIST: <a href="https://github.com/pytorch/xla/blob/master/test/test_train_mp_mnist_fsdp_with_ckpt.py">test/test_train_mp_mnist_fsdp_with_ckpt.py</a>（同时说明了检查点保存和合并）</li>
+  <li>ImageNet: <a href="https://github.com/pytorch/xla/blob/master/test/test_train_mp_imagenet_fsdp.py">test/test_train_mp_imagenet_fsdp.py</a></li>
+</ul>
+
+<p>与 <a href="https://github.com/pytorch/xla/blob/master/test/test_train_mp_mnist.py">MNIST</a> 和 <a href="https://github.com/pytorch/xla/blob/master/test/test_train_mp_imagenet.py">ImageNet</a> 的 vanilla 数据并行示例进行比较，说明了如何将训练脚本适配以使用 FSDP。需要注意的是，在 FSDP 包装的模型上步进优化器时，应直接调用 <code class="language-plaintext highlighter-rouge">optimizer.step()</code>，而不是 <code class="language-plaintext highlighter-rouge">xm.optimizer_step(optimizer)</code>。后者会减少跨 rank 的梯度，这在 FSDP 中是不需要的，因为在 FSDP 中梯度已经通过其反向传播中的 reduce-scatter 操作进行了减少和分片。</p>
+
+<h4 id="installation">安装</h4>
+
+<p>FSDP 可以从 PyTorch/XLA 1.12 及更高版本的 nightly 版本中获取。请参考 <a href="https://github.com/pytorch/xla#-available-images-and-wheels">https://github.com/pytorch/xla#-available-images-and-wheels</a> 获取安装指南以及 Cloud TPU 分配信息。然后在 TPU VM 上克隆 PyTorch/XLA 仓库，如下所示</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mkdir</span> <span class="o">-</span><span class="n">p</span> <span class="o">~/</span><span class="n">pytorch</span> <span class="o">&amp;&amp;</span> <span class="n">cd</span> <span class="o">~/</span><span class="n">pytorch</span>
+<span class="n">git</span> <span class="n">clone</span> <span class="o">--</span><span class="n">recursive</span> <span class="n">https</span><span class="p">:</span><span class="o">//</span><span class="n">github</span><span class="p">.</span><span class="n">com</span><span class="o">/</span><span class="n">pytorch</span><span class="o">/</span><span class="n">xla</span><span class="p">.</span><span class="n">git</span>
+<span class="n">cd</span> <span class="o">~/</span>
+</code></pre></div></div>
+
+<h4 id="train-mnist-on-v3-8-tpu">在 v3-8 TPU 上训练 MNIST</h4>
+
+<p>经过 2 个 epoch 的训练，准确率达到了 98.9：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">python3</span> <span class="o">~/</span><span class="n">pytorch</span><span class="o">/</span><span class="n">xla</span><span class="o">/</span><span class="n">test</span><span class="o">/</span><span class="n">test_train_mp_mnist_fsdp_with_ckpt</span><span class="p">.</span><span class="n">py</span> \
+  <span class="o">--</span><span class="n">batch_size</span> <span class="mi">16</span> <span class="o">--</span><span class="n">drop_last</span> <span class="o">--</span><span class="n">num_epochs</span> <span class="mi">2</span> \
+  <span class="o">--</span><span class="n">use_nested_fsdp</span>
+</code></pre></div></div>
+
+<p>上面的脚本会自动测试在末尾对分片模型检查点的合并。您也可以通过以下方式手动合并分片检查点文件：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">python3</span> <span class="o">-</span><span class="n">m</span> <span class="n">torch_xla</span><span class="p">.</span><span class="n">distributed</span><span class="p">.</span><span class="n">fsdp</span><span class="p">.</span><span class="n">consolidate_sharded_ckpts</span> \
+  <span class="o">--</span><span class="n">ckpt_prefix</span> <span class="o">/</span><span class="n">tmp</span><span class="o">/</span><span class="n">mnist</span><span class="o">-</span><span class="n">fsdp</span><span class="o">/</span><span class="n">final_ckpt</span> \
+  <span class="o">--</span><span class="n">ckpt_suffix</span> <span class="s">"_rank-*-of-*.pth"</span>
+</code></pre></div></div>
+
+<h4 id="train-imagenet-with-resnet-50-on-v3-8-tpu">在 v3-8 TPU 上使用 ResNet-50 训练 ImageNet</h4>
+
+<p>经过 100 个 epoch 的训练，准确率约为 75.9，与不使用 FSDP 时相同；请下载并预处理 <a href="https://github.com/pytorch/examples/tree/master/imagenet#requirements">ImageNet-1k</a> 数据集到 <code class="language-plaintext highlighter-rouge">/datasets/imagenet-1k</code>：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">python3</span> <span class="o">~/</span><span class="n">pytorch</span><span class="o">/</span><span class="n">xla</span><span class="o">/</span><span class="n">test</span><span class="o">/</span><span class="n">test_train_mp_imagenet_fsdp</span><span class="p">.</span><span class="n">py</span> \
+  <span class="o">--</span><span class="n">datadir</span> <span class="o">/</span><span class="n">datasets</span><span class="o">/</span><span class="n">imagenet</span><span class="o">-</span><span class="mi">1</span><span class="n">k</span> <span class="o">--</span><span class="n">drop_last</span> \
+  <span class="o">--</span><span class="n">model</span> <span class="n">resnet50</span> <span class="o">--</span><span class="n">test_set_batch_size</span> <span class="mi">64</span> <span class="o">--</span><span class="n">eval_interval</span> <span class="mi">10</span> \
+  <span class="o">--</span><span class="n">lr</span> <span class="mf">0.4</span> <span class="o">--</span><span class="n">batch_size</span> <span class="mi">128</span> <span class="o">--</span><span class="n">num_warmup_epochs</span> <span class="mi">5</span> \
+  <span class="o">--</span><span class="n">lr_scheduler_divide_every_n_epochs</span> <span class="mi">30</span> <span class="o">--</span><span class="n">lr_scheduler_divisor</span> <span class="mi">10</span> \
+  <span class="o">--</span><span class="n">num_epochs</span> <span class="mi">100</span> \
+  <span class="o">--</span><span class="n">use_nested_fsdp</span>
+</code></pre></div></div>
+
+<p>您还可以在这两个示例中探索其他选项，例如使用 <code class="language-plaintext highlighter-rouge">--use_gradient_checkpointing</code> 来应用梯度检查点（即激活检查点）在 ResNet 块上，或者使用 <code class="language-plaintext highlighter-rouge">--compute_dtype bfloat16</code> 以 bfloat16 精度执行前向和反向传递。</p>
+
+<h3 id="examples-on-large-scale-models">大规模模型示例</h3>
+
+<p>在 TPU 上构建大型模型时，我们通常需要注意内存限制（例如，TPU v3 每个核心 16 GB，TPU v4 每个芯片 32 GB）。对于无法适应单个 TPU 内存或主机 CPU 内存的大型模型，应使用嵌套 FSDP 实现 ZeRO-3 算法的交错子模块构建，并使用内部 FSDP 包装，这样在构建过程中模型的全量数据无需存储在内存中。</p>
+
+<p>我们在 <a href="https://github.com/ronghanghu/ptxla_scaling_examples">https://github.com/ronghanghu/ptxla_scaling_examples</a> 中展示了这些案例，该链接提供了在 TPU v3 pod（具有 128 个核心）上训练 10B+参数的 Vision Transformer（ViT）模型以及其他案例的示例。</p>
+
+<h3 id="design-notes">设计笔记</h3>
+
+<p>人们可能会好奇，为什么我们需要在 PyTorch/XLA 中开发一个独立的 FSDP 类，而不是直接重用 <a href="https://pytorch.org/docs/stable/fsdp.html">PyTorch 的 FSDP 类</a>或将其扩展到 XLA 后端。在 PyTorch/XLA 中单独开发 FSDP 类的主要动机是，原生 PyTorch 的 FSDP 类严重依赖于 XLA 设备不支持 CUDA 功能，而 XLA 也有许多独特的特性需要特殊处理。这些区别需要 FSDP 的不同实现，这将更容易在一个单独的类中构建。</p>
+
+<h4 id="changes-in-api-calls">API 调用更改</h4>
+<p>一个显著的区分是，原生 PyTorch 的 FSDP 基于独立的 CUDA 流在 eager 模式下异步执行，而 PyTorch/XLA 运行在 lazy 模式下，也不支持流。此外，TPU 要求所有设备统一运行相同的程序。因此，在 PyTorch/XLA 的 FSDP 实现中，需要用 XLA API 和替代的统一实现来替换 CUDA 调用和进程异构性。</p>
+
+<h4 id="tensor-storage-handling">张量存储处理</h4>
+
+<p>另一个显著的区别是如何释放张量的存储，这在 XLA 中比在 CUDA 中要困难得多。要实现 ZeRO-3，需要在模块的前向传播后释放全部参数的存储，以便下一个模块可以重用这个内存缓冲区进行后续计算。PyTorch 的 FSPD 通过在 CUDA 中释放参数 <code class="language-plaintext highlighter-rouge">p</code> 的实际存储，通过 <code class="language-plaintext highlighter-rouge">p.data.storage().resize_(0)</code> 来实现这一点。然而，XLA 张量没有这个 <code class="language-plaintext highlighter-rouge">.storage()</code> 处理程序，因为 XLA HLO IRs 是完全功能性的，不提供任何操作来释放张量或调整其存储。在 PyTorch 接口下方，只有 XLA 编译器可以决定何时释放对应于 XLA 张量的 TPU 设备内存，前提是内存只能在 Python 中释放张量对象时释放——这在 FSDP 中不可能发生，因为这些参数张量被引用为模块属性，并且由 PyTorch autograd 保存以进行反向传播。</p>
+
+<p>我们解决这个问题的方案是将张量的值属性与其 autograd Variable 属性分开，并通过将 <code class="language-plaintext highlighter-rouge">nn.Parameter</code> 张量的 <code class="language-plaintext highlighter-rouge">.data</code> 属性设置为大小为 1 的虚拟标量来释放它。这样，实际的参数数据张量在 Python 中就会被解引用，以便 XLA 可以回收其内存用于其他计算，同时 autograd 仍然可以追踪作为参数数据的弱引用的基 <code class="language-plaintext highlighter-rouge">nn.Parameter</code>。为了实现这一点，还需要处理参数的视图，因为在 PyTorch 中视图也持有对其实际数据的引用（这需要修复 PyTorch/XLA 中视图形状相关的问题）。</p>
+
+<h4 id="working-with-xla-compiler">与 XLA 编译器一起工作</h4>
+
+<p>上述解决方案应该足以释放全部参数，如果 XLA 编译器忠实地保留了我们在 PyTorch 程序中的操作及其执行顺序。但还有一个问题——XLA 试图通过在 HLO IRs 上应用常见的子表达式消除（CSE）来优化程序，以加快其执行速度。在 FSDP 的简单实现中，XLA 编译器通常在反向传播中消除第 2 次 all-gather，以重建完整参数，当它看到这是一个从正向传播中重复的计算时，并直接保留和重用我们希望在正向传播后释放的完整参数。为了防止这种不希望的编译器行为，我们在 PyTorch/XLA 中引入了<a href="https://www.tensorflow.org/xla/operation_semantics#optimizationbarrier">优化屏障操作 </a>，并使用它来停止消除第 2 次 all-gather。这种优化屏障也应用于梯度检查点的类似情况，以防止正向传播和反向传播之间的 CSE 消除重计算。</p>
+
+<p>未来，如果 CUDA 和 XLA 之间的区别不像上述所提及的那样明显，那么考虑将 PyTorch/XLA FSDP 与原生 PyTorch FSDP 合并，以拥有统一的接口，可能是有意义的。</p>
+
+<h2 id="acknowledgments">致谢</h2>
+
+<p>感谢 AWS 的 Junmin Hao 对 PyTorch/XLA FSDP 拉取请求的审查。感谢 Meta PyTorch 团队的 Brian Hirsh 在 PyTorch 核心问题上的支持。感谢 Google 的 Isaack Karanja、Will Cromar 和 Blake Hechtman 在 GCP、XLA 和 TPU 问题上的支持。</p>
+
+<p>感谢 Meta FAIR 的 Piotr Dollar、Wan-Yen Lo、Alex Berg、Ryan Mark、Kaiming He、Xinlei Chen、Saining Xie、Shoubhik Debnath、Min Xu 和 Vaibhav Aggarwal 就各种 TPU 相关讨论的支持。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerating Llama3 FP8 Inference with Triton Kernels | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="1.0 Summary
+
+We present an optimized Triton FP8 GEMM (General Matrix-Matrix Multiply) kernel TK-GEMM, which leverages SplitK parallelization. For small batch size inference, TK-GEMM delivers up to 1.94x over the base Triton matmul implementation, 1.87x speedup over cuBLAS FP8 and 1.71x over cuBLAS FP16 for Llama3-70B inference problem sizes on NVIDIA H100 GPUs.
+
+
+
+Figure 1. TK-GEMM Speedup over PyTorch (calling cuBLAS) for Llama3-70B Attention Layer Matrix Shapes (N=K=8192)
+
+In this blog, we will cover how we designed an optimized kernel using Triton for FP8 inference and tuned it for Lama3-70B inference. We will cover FP8 (8-bit floating point), a new datatype supported by Hopper generation GPUs (SM90), the key SM90 features that Triton supports, and how we modified the parallelization to be able to maximize memory throughput for memory-bound (inference) problem sizes.
+
+We also dedicate a section on CUDA graphs, an important technology that will help materialize kernel level speedups and enable developers who want to use Triton kernels in production settings to get additional performance gain.
+
+Repo and code available at: https://github.com/pytorch-labs/applied-ai
+
+2.0 FP8 Datatype
+
+The FP8 datatype was introduced jointly by Nvidia, Arm and Intel and serves as a successor to 16-bit floating point types.  With half the bit count, it has the potential to provide significant throughput improvements over its predecessors for Transformer networks. The FP8 datatype consists of 2 formats:
+
+E4M3 (4-bit exponent and 3-bit mantissa).  Able to store +/ 448 and nan.
+E5M2 (5-bit exponent and 2-bit mantissa).  Able to store +/- 57,334, nan and inf.
+
+
+
+Above: BF16, FP16, FP8 E4M3 and FP8 E5M2.
+To show precision differences, the closest representation to 0.3952 is shown in each format.
+Image Credit: Nvidia
+
+We use E4M3 in inference and forward pass training due its higher precision and E5M2 in training backward pass due to its higher dynamic range. Nvidia has designed their H100 FP8 Tensor Core to provide a peak of 3958 TFLOPS, 2x the FLOPS of the FP16 Tensor Core.
+
+We designed our Triton kernel with these hardware innovations in mind and in the rest of the blog we will discuss methods to leverage and verify that these features are indeed being utilized by the Triton compiler.
+
+3.0 Triton Hopper Support and FP8 Tensor Core Instruction
+
+The Hopper GPU architecture has added the following new features that we can expect will accelerate FP8 GEMM.
+
+
+  TMA (Tensor Memory Accelerator) Hardware Unit
+  WGMMA (Warp Group Matrix Multiply-Accumulate Instruction)
+  Threadblock Clusters
+
+
+Triton currently takes advantage of one of these features, the wgmma instruction, whereas PyTorch (calling cuBLAS) leverages all 3 which makes these speedups even more impressive. To fully take advantage of the Hopper FP8 Tensor Core, the wgmma is necessary even though the older mma.sync instruction is still supported.
+
+The key difference between the mma and wgmma instructions is that instead of 1 CUDA warp being responsible for an output shard, an entire warp group, 4 CUDA warps, asynchronously contributes to an output shard.
+
+To see what this instruction looks like in practice, and to verify that our Triton Kernel is indeed utilizing this feature we analyzed the PTX and SASS assembly using nsight compute.
+
+
+
+Figure 2. PTX Assembly
+
+This instruction is further lowered into a QGMMA instruction in SASS.
+
+
+
+Figure 3. SASS Assembly
+
+Both instructions tell us that we are multiplying two FP8 E4M3 input tensors and accumulating in F32, which confirms that the TK-GEMM Kernel is utilizing the FP8 Tensor Core and the lowering is being done correctly.
+
+4.0 SplitK Work Decomposition
+
+
+
+Figure 4. TK-GEMM vs Base Triton GEMM TFLOPS for M = 1-64
+
+The base Triton FP8 GEMM implementation does not perform well for the small M regime, where for a matrix multiplication of A (MxN) x B (NxK), M < N, K. To optimize for this type matrix profile we applied a SplitK work decomposition instead of the Data Parallel decomposition found in the base Triton kernel. This greatly improved latencies for the small M regime.
+
+For background, SplitK launches additional thread blocks along the k dimension to calculate partial output sums. The partial results from each thread block are then summed using an atomic reduction.  This allows for finer grained work decomposition with resultant performance improvements.  More details on SplitK are available in our arxiv paper.
+
+After carefully tuning the other relevant hyperparameters for our kernel such as tile sizes, number of warps and the number of pipeline stages to Llama3-70B problem sizes we were able to produce up to 1.94x speedup over the Triton base implementation. For a more comprehensive introduction to hyperparameter tuning, see our blog.
+
+
+
+Above: NCU profiler times for TK-GEMM under varying batch sizes, and compared with PyTorch (calling cuBLAS) FP8 and FP16.
+
+Note that starting at M=32, the cuBLAS FP8 kernel starts to outperform TK-GEMM. For M >= 32, we suspect that hyperparameters we found are not optimal, and thus another set of experiments is required to determine the optimal parameters for the mid-sized M regime.
+
+5.0 CUDA Graphs to Enable End-to-End Speedup
+
+To be able to realize these speedups in an end-to-end setting, we must take into account both the kernel execution time (GPU duration) as well as the wall time (CPU+GPU) duration. Triton kernels, which are handwritten (as opposed to torch compile generated) are known to suffer from high-kernel launch latencies. If we use torch profiler to trace the TK-GEMM kernel we can see the call stack on the CPU side to pinpoint exactly what is causing the slowdown.
+
+
+
+Figure 5. CPU Launch Overhead: 2.413ms
+
+From above, we see that the majority of the wall time of our optimized kernel is dominated by JIT (Just-in-Time) compilation overhead. To combat this we can use CUDA graphs.
+
+
+
+Figure 6. CUDA Graphs Visualization
+Image Credit: PyTorch
+
+The key idea is instead of multiple kernel launches, we instead can create and instantiate a graph (1 time cost) and then submit that instance of the graph for execution. To illustrate this point we simulate a Llama3-70B Attention layer, As shown in the below figure generated using nsight systems, the time between each GEMM is 165us compared to the 12us spent on the actual matmul due the CPU kernel launch overhead. This means that 92% of the time of the time in an Attention layer the GPU is idle and not doing any work.
+
+
+
+Figure 7. Simulated Llama3-70B Attention Layer with TK-GEMM
+
+To show the impact of CUDA graphs, we then created a graph of the TK-GEMM kernel in the toy Attention layer and replayed the graph. Below, we can see that the gaps between kernel executions are reduced to 6.65us.
+
+
+
+Figure 8. Simulated Llama3-70B Attention Layer with TK-GEMM and CUDA Graphs
+
+In practice, this optimization would result in a 6.4x speedup of a single attention layer in Llama3-70B, over naively using TK-GEMM in a model without CUDA graphs.
+
+6.0 Potential Future Optimization Paths
+
+
+
+Figure 9. TMA Hardware Unit
+Image Credit: Nvidia
+
+The Nvidia H100 features a TMA hardware unit. The dedicated TMA unit frees up registers and threads to do other work, as address generation is completely handled by the TMA. For memory bound problem sizes, this can provide even further gain when Triton enables support for this feature.
+
+
+
+Figure 10. Tensor Core Utilization (Arrows Indicate Degrees of Freedom)
+
+To identify how well we are utilizing the Tensor Core, we can analyze the roofline chart. Notice that we are in the memory-bound region as expected for small M. To improve kernel latency we can either increase the arithmetic intensity, which with a fixed problem size can only be achieved through exploiting data locality and other loop optimizations or increasing the memory throughput. This requires either a more optimal parallel algorithm specialized for the FP8 datatype as well as the type of problem size characteristics we expect to see in FP8 inference.
+
+
+
+Figure 11. DRAM Throughput Circled, 1.65TB/s vs Peak 3.35TB/s on H100 (M=16, N=8192, K=8192)
+
+Lastly, we can see that we are only achieving around 50% of peak DRAM throughput on the NVIDIA H100. High performance GEMM kernels typically achieve around 70-80% of peak throughput. This means that there is still a lot of room to improve and the techniques mentioned above (loop unrolling, optimized parallelization) are needed for additional gain.
+
+7.0 Future Work
+
+For future research, we would like to explore CUTLASS 3.x and CuTe to leverage more direct control over Hopper features especially in terms of obtaining direct TMA control and exploring pingpong architectures, which have shown promising results for FP8 GEMM.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerating Llama3 FP8 Inference with Triton Kernels">
+<meta property="og:description" content="1.0 Summary
+
+We present an optimized Triton FP8 GEMM (General Matrix-Matrix Multiply) kernel TK-GEMM, which leverages SplitK parallelization. For small batch size inference, TK-GEMM delivers up to 1.94x over the base Triton matmul implementation, 1.87x speedup over cuBLAS FP8 and 1.71x over cuBLAS FP16 for Llama3-70B inference problem sizes on NVIDIA H100 GPUs.
+
+
+
+Figure 1. TK-GEMM Speedup over PyTorch (calling cuBLAS) for Llama3-70B Attention Layer Matrix Shapes (N=K=8192)
+
+In this blog, we will cover how we designed an optimized kernel using Triton for FP8 inference and tuned it for Lama3-70B inference. We will cover FP8 (8-bit floating point), a new datatype supported by Hopper generation GPUs (SM90), the key SM90 features that Triton supports, and how we modified the parallelization to be able to maximize memory throughput for memory-bound (inference) problem sizes.
+
+We also dedicate a section on CUDA graphs, an important technology that will help materialize kernel level speedups and enable developers who want to use Triton kernels in production settings to get additional performance gain.
+
+Repo and code available at: https://github.com/pytorch-labs/applied-ai
+
+2.0 FP8 Datatype
+
+The FP8 datatype was introduced jointly by Nvidia, Arm and Intel and serves as a successor to 16-bit floating point types.  With half the bit count, it has the potential to provide significant throughput improvements over its predecessors for Transformer networks. The FP8 datatype consists of 2 formats:
+
+E4M3 (4-bit exponent and 3-bit mantissa).  Able to store +/ 448 and nan.
+E5M2 (5-bit exponent and 2-bit mantissa).  Able to store +/- 57,334, nan and inf.
+
+
+
+Above: BF16, FP16, FP8 E4M3 and FP8 E5M2.
+To show precision differences, the closest representation to 0.3952 is shown in each format.
+Image Credit: Nvidia
+
+We use E4M3 in inference and forward pass training due its higher precision and E5M2 in training backward pass due to its higher dynamic range. Nvidia has designed their H100 FP8 Tensor Core to provide a peak of 3958 TFLOPS, 2x the FLOPS of the FP16 Tensor Core.
+
+We designed our Triton kernel with these hardware innovations in mind and in the rest of the blog we will discuss methods to leverage and verify that these features are indeed being utilized by the Triton compiler.
+
+3.0 Triton Hopper Support and FP8 Tensor Core Instruction
+
+The Hopper GPU architecture has added the following new features that we can expect will accelerate FP8 GEMM.
+
+
+  TMA (Tensor Memory Accelerator) Hardware Unit
+  WGMMA (Warp Group Matrix Multiply-Accumulate Instruction)
+  Threadblock Clusters
+
+
+Triton currently takes advantage of one of these features, the wgmma instruction, whereas PyTorch (calling cuBLAS) leverages all 3 which makes these speedups even more impressive. To fully take advantage of the Hopper FP8 Tensor Core, the wgmma is necessary even though the older mma.sync instruction is still supported.
+
+The key difference between the mma and wgmma instructions is that instead of 1 CUDA warp being responsible for an output shard, an entire warp group, 4 CUDA warps, asynchronously contributes to an output shard.
+
+To see what this instruction looks like in practice, and to verify that our Triton Kernel is indeed utilizing this feature we analyzed the PTX and SASS assembly using nsight compute.
+
+
+
+Figure 2. PTX Assembly
+
+This instruction is further lowered into a QGMMA instruction in SASS.
+
+
+
+Figure 3. SASS Assembly
+
+Both instructions tell us that we are multiplying two FP8 E4M3 input tensors and accumulating in F32, which confirms that the TK-GEMM Kernel is utilizing the FP8 Tensor Core and the lowering is being done correctly.
+
+4.0 SplitK Work Decomposition
+
+
+
+Figure 4. TK-GEMM vs Base Triton GEMM TFLOPS for M = 1-64
+
+The base Triton FP8 GEMM implementation does not perform well for the small M regime, where for a matrix multiplication of A (MxN) x B (NxK), M < N, K. To optimize for this type matrix profile we applied a SplitK work decomposition instead of the Data Parallel decomposition found in the base Triton kernel. This greatly improved latencies for the small M regime.
+
+For background, SplitK launches additional thread blocks along the k dimension to calculate partial output sums. The partial results from each thread block are then summed using an atomic reduction.  This allows for finer grained work decomposition with resultant performance improvements.  More details on SplitK are available in our arxiv paper.
+
+After carefully tuning the other relevant hyperparameters for our kernel such as tile sizes, number of warps and the number of pipeline stages to Llama3-70B problem sizes we were able to produce up to 1.94x speedup over the Triton base implementation. For a more comprehensive introduction to hyperparameter tuning, see our blog.
+
+
+
+Above: NCU profiler times for TK-GEMM under varying batch sizes, and compared with PyTorch (calling cuBLAS) FP8 and FP16.
+
+Note that starting at M=32, the cuBLAS FP8 kernel starts to outperform TK-GEMM. For M >= 32, we suspect that hyperparameters we found are not optimal, and thus another set of experiments is required to determine the optimal parameters for the mid-sized M regime.
+
+5.0 CUDA Graphs to Enable End-to-End Speedup
+
+To be able to realize these speedups in an end-to-end setting, we must take into account both the kernel execution time (GPU duration) as well as the wall time (CPU+GPU) duration. Triton kernels, which are handwritten (as opposed to torch compile generated) are known to suffer from high-kernel launch latencies. If we use torch profiler to trace the TK-GEMM kernel we can see the call stack on the CPU side to pinpoint exactly what is causing the slowdown.
+
+
+
+Figure 5. CPU Launch Overhead: 2.413ms
+
+From above, we see that the majority of the wall time of our optimized kernel is dominated by JIT (Just-in-Time) compilation overhead. To combat this we can use CUDA graphs.
+
+
+
+Figure 6. CUDA Graphs Visualization
+Image Credit: PyTorch
+
+The key idea is instead of multiple kernel launches, we instead can create and instantiate a graph (1 time cost) and then submit that instance of the graph for execution. To illustrate this point we simulate a Llama3-70B Attention layer, As shown in the below figure generated using nsight systems, the time between each GEMM is 165us compared to the 12us spent on the actual matmul due the CPU kernel launch overhead. This means that 92% of the time of the time in an Attention layer the GPU is idle and not doing any work.
+
+
+
+Figure 7. Simulated Llama3-70B Attention Layer with TK-GEMM
+
+To show the impact of CUDA graphs, we then created a graph of the TK-GEMM kernel in the toy Attention layer and replayed the graph. Below, we can see that the gaps between kernel executions are reduced to 6.65us.
+
+
+
+Figure 8. Simulated Llama3-70B Attention Layer with TK-GEMM and CUDA Graphs
+
+In practice, this optimization would result in a 6.4x speedup of a single attention layer in Llama3-70B, over naively using TK-GEMM in a model without CUDA graphs.
+
+6.0 Potential Future Optimization Paths
+
+
+
+Figure 9. TMA Hardware Unit
+Image Credit: Nvidia
+
+The Nvidia H100 features a TMA hardware unit. The dedicated TMA unit frees up registers and threads to do other work, as address generation is completely handled by the TMA. For memory bound problem sizes, this can provide even further gain when Triton enables support for this feature.
+
+
+
+Figure 10. Tensor Core Utilization (Arrows Indicate Degrees of Freedom)
+
+To identify how well we are utilizing the Tensor Core, we can analyze the roofline chart. Notice that we are in the memory-bound region as expected for small M. To improve kernel latency we can either increase the arithmetic intensity, which with a fixed problem size can only be achieved through exploiting data locality and other loop optimizations or increasing the memory throughput. This requires either a more optimal parallel algorithm specialized for the FP8 datatype as well as the type of problem size characteristics we expect to see in FP8 inference.
+
+
+
+Figure 11. DRAM Throughput Circled, 1.65TB/s vs Peak 3.35TB/s on H100 (M=16, N=8192, K=8192)
+
+Lastly, we can see that we are only achieving around 50% of peak DRAM throughput on the NVIDIA H100. High performance GEMM kernels typically achieve around 70-80% of peak throughput. This means that there is still a lot of room to improve and the techniques mentioned above (loop unrolling, optimized parallelization) are needed for additional gain.
+
+7.0 Future Work
+
+For future research, we would like to explore CUTLASS 3.x and CuTe to leverage more direct control over Hopper features especially in terms of obtaining direct TMA control and exploring pingpong architectures, which have shown promising results for FP8 GEMM.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerating Llama3 FP8 Inference with Triton Kernels">
+<meta name="twitter:description" content="1.0 Summary
+
+We present an optimized Triton FP8 GEMM (General Matrix-Matrix Multiply) kernel TK-GEMM, which leverages SplitK parallelization. For small batch size inference, TK-GEMM delivers up to 1.94x over the base Triton matmul implementation, 1.87x speedup over cuBLAS FP8 and 1.71x over cuBLAS FP16 for Llama3-70B inference problem sizes on NVIDIA H100 GPUs.
+
+
+
+Figure 1. TK-GEMM Speedup over PyTorch (calling cuBLAS) for Llama3-70B Attention Layer Matrix Shapes (N=K=8192)
+
+In this blog, we will cover how we designed an optimized kernel using Triton for FP8 inference and tuned it for Lama3-70B inference. We will cover FP8 (8-bit floating point), a new datatype supported by Hopper generation GPUs (SM90), the key SM90 features that Triton supports, and how we modified the parallelization to be able to maximize memory throughput for memory-bound (inference) problem sizes.
+
+We also dedicate a section on CUDA graphs, an important technology that will help materialize kernel level speedups and enable developers who want to use Triton kernels in production settings to get additional performance gain.
+
+Repo and code available at: https://github.com/pytorch-labs/applied-ai
+
+2.0 FP8 Datatype
+
+The FP8 datatype was introduced jointly by Nvidia, Arm and Intel and serves as a successor to 16-bit floating point types.  With half the bit count, it has the potential to provide significant throughput improvements over its predecessors for Transformer networks. The FP8 datatype consists of 2 formats:
+
+E4M3 (4-bit exponent and 3-bit mantissa).  Able to store +/ 448 and nan.
+E5M2 (5-bit exponent and 2-bit mantissa).  Able to store +/- 57,334, nan and inf.
+
+
+
+Above: BF16, FP16, FP8 E4M3 and FP8 E5M2.
+To show precision differences, the closest representation to 0.3952 is shown in each format.
+Image Credit: Nvidia
+
+We use E4M3 in inference and forward pass training due its higher precision and E5M2 in training backward pass due to its higher dynamic range. Nvidia has designed their H100 FP8 Tensor Core to provide a peak of 3958 TFLOPS, 2x the FLOPS of the FP16 Tensor Core.
+
+We designed our Triton kernel with these hardware innovations in mind and in the rest of the blog we will discuss methods to leverage and verify that these features are indeed being utilized by the Triton compiler.
+
+3.0 Triton Hopper Support and FP8 Tensor Core Instruction
+
+The Hopper GPU architecture has added the following new features that we can expect will accelerate FP8 GEMM.
+
+
+  TMA (Tensor Memory Accelerator) Hardware Unit
+  WGMMA (Warp Group Matrix Multiply-Accumulate Instruction)
+  Threadblock Clusters
+
+
+Triton currently takes advantage of one of these features, the wgmma instruction, whereas PyTorch (calling cuBLAS) leverages all 3 which makes these speedups even more impressive. To fully take advantage of the Hopper FP8 Tensor Core, the wgmma is necessary even though the older mma.sync instruction is still supported.
+
+The key difference between the mma and wgmma instructions is that instead of 1 CUDA warp being responsible for an output shard, an entire warp group, 4 CUDA warps, asynchronously contributes to an output shard.
+
+To see what this instruction looks like in practice, and to verify that our Triton Kernel is indeed utilizing this feature we analyzed the PTX and SASS assembly using nsight compute.
+
+
+
+Figure 2. PTX Assembly
+
+This instruction is further lowered into a QGMMA instruction in SASS.
+
+
+
+Figure 3. SASS Assembly
+
+Both instructions tell us that we are multiplying two FP8 E4M3 input tensors and accumulating in F32, which confirms that the TK-GEMM Kernel is utilizing the FP8 Tensor Core and the lowering is being done correctly.
+
+4.0 SplitK Work Decomposition
+
+
+
+Figure 4. TK-GEMM vs Base Triton GEMM TFLOPS for M = 1-64
+
+The base Triton FP8 GEMM implementation does not perform well for the small M regime, where for a matrix multiplication of A (MxN) x B (NxK), M < N, K. To optimize for this type matrix profile we applied a SplitK work decomposition instead of the Data Parallel decomposition found in the base Triton kernel. This greatly improved latencies for the small M regime.
+
+For background, SplitK launches additional thread blocks along the k dimension to calculate partial output sums. The partial results from each thread block are then summed using an atomic reduction.  This allows for finer grained work decomposition with resultant performance improvements.  More details on SplitK are available in our arxiv paper.
+
+After carefully tuning the other relevant hyperparameters for our kernel such as tile sizes, number of warps and the number of pipeline stages to Llama3-70B problem sizes we were able to produce up to 1.94x speedup over the Triton base implementation. For a more comprehensive introduction to hyperparameter tuning, see our blog.
+
+
+
+Above: NCU profiler times for TK-GEMM under varying batch sizes, and compared with PyTorch (calling cuBLAS) FP8 and FP16.
+
+Note that starting at M=32, the cuBLAS FP8 kernel starts to outperform TK-GEMM. For M >= 32, we suspect that hyperparameters we found are not optimal, and thus another set of experiments is required to determine the optimal parameters for the mid-sized M regime.
+
+5.0 CUDA Graphs to Enable End-to-End Speedup
+
+To be able to realize these speedups in an end-to-end setting, we must take into account both the kernel execution time (GPU duration) as well as the wall time (CPU+GPU) duration. Triton kernels, which are handwritten (as opposed to torch compile generated) are known to suffer from high-kernel launch latencies. If we use torch profiler to trace the TK-GEMM kernel we can see the call stack on the CPU side to pinpoint exactly what is causing the slowdown.
+
+
+
+Figure 5. CPU Launch Overhead: 2.413ms
+
+From above, we see that the majority of the wall time of our optimized kernel is dominated by JIT (Just-in-Time) compilation overhead. To combat this we can use CUDA graphs.
+
+
+
+Figure 6. CUDA Graphs Visualization
+Image Credit: PyTorch
+
+The key idea is instead of multiple kernel launches, we instead can create and instantiate a graph (1 time cost) and then submit that instance of the graph for execution. To illustrate this point we simulate a Llama3-70B Attention layer, As shown in the below figure generated using nsight systems, the time between each GEMM is 165us compared to the 12us spent on the actual matmul due the CPU kernel launch overhead. This means that 92% of the time of the time in an Attention layer the GPU is idle and not doing any work.
+
+
+
+Figure 7. Simulated Llama3-70B Attention Layer with TK-GEMM
+
+To show the impact of CUDA graphs, we then created a graph of the TK-GEMM kernel in the toy Attention layer and replayed the graph. Below, we can see that the gaps between kernel executions are reduced to 6.65us.
+
+
+
+Figure 8. Simulated Llama3-70B Attention Layer with TK-GEMM and CUDA Graphs
+
+In practice, this optimization would result in a 6.4x speedup of a single attention layer in Llama3-70B, over naively using TK-GEMM in a model without CUDA graphs.
+
+6.0 Potential Future Optimization Paths
+
+
+
+Figure 9. TMA Hardware Unit
+Image Credit: Nvidia
+
+The Nvidia H100 features a TMA hardware unit. The dedicated TMA unit frees up registers and threads to do other work, as address generation is completely handled by the TMA. For memory bound problem sizes, this can provide even further gain when Triton enables support for this feature.
+
+
+
+Figure 10. Tensor Core Utilization (Arrows Indicate Degrees of Freedom)
+
+To identify how well we are utilizing the Tensor Core, we can analyze the roofline chart. Notice that we are in the memory-bound region as expected for small M. To improve kernel latency we can either increase the arithmetic intensity, which with a fixed problem size can only be achieved through exploiting data locality and other loop optimizations or increasing the memory throughput. This requires either a more optimal parallel algorithm specialized for the FP8 datatype as well as the type of problem size characteristics we expect to see in FP8 inference.
+
+
+
+Figure 11. DRAM Throughput Circled, 1.65TB/s vs Peak 3.35TB/s on H100 (M=16, N=8192, K=8192)
+
+Lastly, we can see that we are only achieving around 50% of peak DRAM throughput on the NVIDIA H100. High performance GEMM kernels typically achieve around 70-80% of peak throughput. This means that there is still a lot of room to improve and the techniques mentioned above (loop unrolling, optimized parallelization) are needed for additional gain.
+
+7.0 Future Work
+
+For future research, we would like to explore CUTLASS 3.x and CuTe to leverage more direct control over Hopper features especially in terms of obtaining direct TMA control and exploring pingpong architectures, which have shown promising results for FP8 GEMM.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年5月1日</p>
+            <h1>
+                <a class="blog-title">加速 Llama3 FP8 推理与 Triton 内核</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由阿丹·侯克、莱斯·赖特、奇杰·杨著</p>
+                    <h2 id="10-summary">1.0 摘要</h2>
+
+<p>我们提出了一种优化的 Triton FP8 GEMM（通用矩阵-矩阵乘法）内核 TK-GEMM，该内核利用 SplitK 并行化。对于小批量大小推理，TK-GEMM 在 NVIDIA H100 GPU 上对 Llama3-70B 推理问题大小实现了相对于基础 Triton 矩阵乘法实现的至多 1.94 倍提升，相对于 cuBLAS FP8 提升 1.87 倍，相对于 cuBLAS FP16 提升 1.71 倍。<strong>1.94 倍 </strong>，<strong>1.87 倍 </strong>，<strong>1.71 倍</strong></p>
+
+<p><img src="/assets/images/accelerating-llama3/fig1.png" alt="TK-GEMM Speedup over PyTorch (calling cuBLAS) for Llama3-70B Attention Layer Matrix Shapes (N=K=8192)" style="width:100%;"></p>
+
+<p><strong>图 1.</strong> TK-GEMM 相对于 PyTorch（调用 cuBLAS）在 Llama3-70B 注意力层矩阵形状（N=K=8192）上的加速</p>
+
+<p>在这篇博客中，我们将介绍如何使用 <a href="https://github.com/openai/triton">Triton</a> 设计一个优化的内核，用于 FP8 推理，并将其调整以适应 Lama3-70B 推理。我们将介绍 FP8（8 位浮点数），这是由 Hopper 生成 GPU（SM90）支持的新的数据类型，Triton 支持的关键 SM90 功能，以及我们如何修改并行化以最大化内存吞吐量，适用于内存受限（推理）问题规模。</p>
+
+<p>我们还专门设置了一节介绍 CUDA 图，这是一种重要的技术，有助于实现内核级别的加速，并使希望在生产环境中使用 Triton 内核的开发者获得额外的性能提升。</p>
+
+<p>代码库和代码可在以下链接获取：<a href="https://github.com/pytorch-labs/applied-ai">https://github.com/pytorch-labs/applied-ai</a></p>
+
+<h2 id="20-fp8-datatype">2.0 FP8 数据类型</h2>
+
+<p>FP8 数据类型是由 Nvidia、Arm 和 Intel 共同<a href="https://arxiv.org/pdf/2209.05433.pdf">引入</a>的，作为 16 位浮点类型的后继者。由于位计数减半，它有可能为其前辈 Transformer 网络提供显著的吞吐量提升。FP8 数据类型包括以下两种格式：</p>
+
+<p><strong>E4M3</strong>（4 位指数和 3 位尾数）。能够存储+/- 448 和 nan。<br>
+<strong>E5M2</strong>（5 位指数和 2 位尾数）。能够存储+/- 57,334、nan 和 inf。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig2.png" alt="BF16, FP16, FP8 E4M3 and FP8 E5M2" style="width:100%;"></p>
+
+<p><strong>以上：</strong><em>BF16、FP16、FP8 E4M3 和 FP8 E5M2。</em><br>
+<em>为了展示精度差异，每个格式中均显示了与0.3952最接近的表示。</em><br>
+<em>图像来源：<a href="https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html">Nvidia</a></em></p>
+
+<p>我们在推理和正向传递训练中使用 E4M3，因为它具有更高的精度；在反向传递训练中使用 E5M2，因为它具有更宽的动态范围。Nvidia 设计了他们的 H100 FP8 Tensor Core，以提供峰值 3958 TFLOPS，<strong>2 倍</strong>于 FP16 Tensor Core 的 FLOPS。</p>
+
+<p>我们在设计 Triton 内核时考虑了这些硬件创新，在接下来的博客中，我们将讨论如何利用和验证这些特性确实被 Triton 编译器所使用。</p>
+
+<h2 id="30-triton-hopper-support-and-fp8-tensor-core-instruction">3.0 特里顿 跳跃式 支持和 FP8 张量核心指令</h2>
+
+<p>跳跃式 GPU 架构增加了以下<a href="https://arxiv.org/abs/2402.13499">新特性 </a>，我们预计这些特性将加速 FP8 GEMM。</p>
+
+<ul>
+  <li>张量内存加速器（TMA）硬件单元</li>
+  <li>线程组矩阵乘累加指令（WGMMA）</li>
+  <li>线程块集群</li>
+</ul>
+
+<p>目前 Triton 利用了这些特性中的一个，即 <em>wgmma</em> 指令，而 PyTorch（调用 cuBLAS）则利用了全部 3 个，这使得这些加速效果更加令人印象深刻。为了充分利用 Hopper FP8 张量核心，即使旧的 mma.sync 指令仍然得到支持，wgmma 也是必要的。</p>
+
+<p>mma 和 wgmma 指令之间的关键区别在于，不再是 1 个 CUDA 线程束负责一个输出碎片，而是整个线程束组，即 4 个 CUDA 线程束<em>异步</em>地贡献到一个输出碎片。</p>
+
+<p>为了了解这个指令在实际中的样子，并验证我们的 Triton 内核确实利用了这个特性，我们使用了 <a href="https://developer.nvidia.com/nsight-compute">nsight compute</a> 分析了 PTX 和 SASS 汇编代码。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig3.png" alt="PTX Assembly" style="width:100%;display:block;max-width:600px;margin-left:auto;margin-right:auto;"></p>
+
+<p><strong>图 2.</strong> PTX 汇编</p>
+
+<p>此指令进一步降低为 SASS 中的 QGMMA 指令。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig4.png" alt="SASS Assembly" style="width:100%;display:block;max-width:600px;margin-left:auto;margin-right:auto;"></p>
+
+<p><strong>图 3.</strong> SASS 汇编</p>
+
+<p>这两条指令告诉我们正在对两个 FP8 E4M3 输入张量进行乘法运算，并在 F32 中进行累加，这证实了 TK-GEMM 内核正在使用 FP8 张量核心，并且降低操作正在正确进行。</p>
+
+<h2 id="40-splitk-work-decomposition">4.0 分割 K 工作分解</h2>
+
+<p><img src="/assets/images/accelerating-llama3/fig5.png" alt="TK-GEMM vs Base Triton GEMM TFLOPS for M = 1-64" style="width:100%;display:block;max-width:600px;margin-left:auto;margin-right:auto;"></p>
+
+<p><strong>图 4.</strong> TK-GEMM 与基础 Triton GEMM TFLOPS 对比，M = 1-64</p>
+
+<p>基础 Triton FP8 GEMM 实现对于小 M 范围的表现不佳，对于矩阵乘法 A (<em>MxN</em>) x B (<em>NxK</em>)，<em>M</em> &lt; <em>N</em>，<em>K</em>。为了优化此类矩阵配置文件，我们采用了分割 K 工作分解，而不是基础 Triton 内核中找到的数据并行分解。这大大提高了小 M 范围中的延迟。</p>
+
+<p>关于背景，分割 K 在 k 维度上启动额外的线程块来计算部分输出和。然后使用原子减少来对每个线程块的部分结果进行求和。这允许进行更细粒度的工作分解，从而提高性能。更多关于分割 K 的详细信息请参阅我们的 <a href="https://arxiv.org/abs/2402.00025">arXiv 论文 </a>。</p>
+
+<p>经过仔细调整其他相关超参数，如瓦片大小、线程束数量和管道阶段数量到 Llama3-70B 问题规模，我们能够实现高达 1.94 倍的速度提升，超过 Triton<a href="https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html"> 基础实现 </a>。有关超参数调整的更全面介绍，请参阅我们的<a href="https://pytorch.org/blog/accelerating-moe-model/#30-work-decomposition---splitk">博客 </a>。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig6.png" alt="NCU profiler times for TK-GEMM under varying batch sizes, and compared with PyTorch (calling cuBLAS) FP8 and FP16." style="width:100%;"></p>
+
+<p><strong>以上 </strong>：TK-GEMM 在不同批处理大小下的 NCU 分析器时间，以及与 PyTorch（调用 cuBLAS）FP8 和 FP16 的比较。</p>
+
+<p>注意，从 M=32 开始，cuBLAS FP8 内核开始优于 TK-GEMM。对于 M &gt;= 32，我们怀疑我们找到的超参数不是最优的，因此需要另一组实验来确定中等规模 M 的最佳参数。</p>
+
+<h2 id="50-cuda-graphs-to-enable-end-to-end-speedup">5.0 使用 CUDA Graph 实现端到端加速</h2>
+
+<p>为了在端到端环境中实现这些加速，我们必须同时考虑内核执行时间（GPU 持续时间）以及墙时间（CPU+GPU 持续时间）。与 torch 编译生成的内核相比，手写的 Triton 内核众所周知存在高内核启动延迟。如果我们使用 <a href="https://pytorch.org/docs/stable/profiler.html">torch 分析器</a>来跟踪 TK-GEMM 内核，我们可以在 CPU 端看到调用堆栈，从而精确地找出导致速度降低的原因。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig7.png" alt="CPU Launch Overhead: 2.413ms" style="width:100%;"></p>
+
+<p><strong>图 5。</strong> CPU 启动开销：2.413ms</p>
+
+<p>从上面的分析中，我们可以看到我们优化内核的墙时间主要受 JIT（即时）编译开销的影响。为了解决这个问题，我们可以使用 CUDA 图。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig8.png" alt="CUDA Graphs Visualization" style="width:100%;"></p>
+
+<p><strong>图 6。</strong> CUDA 图可视化<br>
+<em>图像来源：<a href="https://pytorch.org/blog/accelerating-pytorch-with-cuda-graphs/">PyTorch</a></em></p>
+
+<p>关键思想是，我们不再进行多次内核启动，而是创建并实例化一个图（1 次成本），然后提交该图的实例进行执行。为了说明这一点，我们模拟了一个 Llama3-70B 注意力层，如图所示，使用 <a href="https://developer.nvidia.com/nsight-systems">nsight systems</a> 生成的以下图中，每次 GEMM 之间的时间间隔为 <em>165us</em>，而实际矩阵乘法花费的时间为 <em>12us</em>，这是由于 CPU 内核启动开销。这意味着在注意力层中，GPU 有 92%的时间处于空闲状态，没有进行任何工作。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig9.png" alt="Simulated Llama3-70B Attention Layer with TK-GEMM" style="width:100%;"></p>
+
+<p><strong>图 7. 模拟的 Llama3-70B 注意力层与 TK-GEMM</strong></p>
+
+<p>为了展示 CUDA 图的影响，我们随后在玩具注意力层中创建了一个 TK-GEMM 内核的图，并回放了该图。下面，我们可以看到内核执行之间的间隔减少到了 6.65us。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig10.png" alt="Simulated Llama3-70B Attention Layer with TK-GEMM and CUDA Graphs" style="width:100%;"></p>
+
+<p><strong>图 8.</strong> 模拟的 Llama3-70B 注意力层与 TK-GEMM 和 CUDA 图</p>
+
+<p>实际上，这种优化将导致 Llama3-70B 中单个注意力层比在无 CUDA 图模型中天真地使用 TK-GEMM 提高 6.4 倍的速度。</p>
+
+<h2 id="60-potential-future-optimization-paths">6.0 未来潜在优化路径</h2>
+
+<p><img src="/assets/images/accelerating-llama3/fig11.png" alt="TMA Hardware Unit" style="width:100%;"></p>
+
+<p><strong>图 9.</strong> TMA 硬件单元<br>
+<em>图像来源：<a href="https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/">Nvidia</a></em></p>
+
+<p>Nvidia H100 搭载了 TMA 硬件单元。专门的 TMA 单元释放了寄存器和线程以执行其他工作，因为地址生成完全由 TMA 处理。对于内存受限的问题规模，当 Triton 启用对此功能的支持时，这可以提供更大的收益。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig12.png" alt="Tensor Core Utilization (Arrows Indicate Degrees of Freedom)" style="width:100%;"></p>
+
+<p><strong>图 10。</strong> 张量核心利用率（箭头表示自由度）</p>
+
+<p>为了了解我们如何利用张量核心，我们可以分析屋顶线图。注意，对于小的 M，我们处于预期的内存受限区域。为了提高内核延迟，我们可以通过增加算术强度来提高内核延迟，在固定问题规模下，这只能通过利用数据局部性和其他循环 <a href="https://www.codee.com/is-your-algorithm-running-at-peak-performance-the-roofline-model/"> 优化 </a> 或增加内存吞吐量来实现。这需要更优化的并行算法，该算法专门针对 FP8 数据类型以及我们预期在 FP8 推理中看到的问题规模特征。</p>
+
+<p><img src="/assets/images/accelerating-llama3/fig13.png" alt="DRAM Throughput Circled, 1.65TB/s vs Peak 3.35TB/s on H100 (M=16, N=8192, K=8192)" style="width:100%;"></p>
+
+<p><strong>图 11.</strong> DRAM 吞吐量圈出，1.65TB/s 与 H100（M=16，N=8192，K=8192）峰值 3.35TB/s 相比</p>
+
+<p>最后，我们可以看到，我们在 NVIDIA H100 上仅实现了约 <strong>50%</strong> 的峰值 DRAM 吞吐量。高性能 GEMM 内核通常能实现约 <strong>70-80%</strong> 的峰值吞吐量。这意味着仍有很大的提升空间，上述提到的技术（循环展开、优化并行化）需要进一步改进。</p>
+
+<h2 id="70-future-work">7.0 未来工作</h2>
+
+<p>对于未来的研究，我们希望探索 <a href="https://github.com/NVIDIA/cutlass/tree/main">CUTLASS</a> 3.x 和 <a href="https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute">CuTe</a>，以利用对 Hopper 特性的更直接控制，特别是在获取直接 TMA 控制和探索 pingpong 架构方面，这些架构在 FP8 GEMM 方面已显示出有希望的结果。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

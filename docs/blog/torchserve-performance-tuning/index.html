@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Torchserve Performance Tuning, Animated Drawings Case-Study | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="In this post we discuss performance tuning of Torchserve for serving your models in production. One of the biggest challenges in the life cycle of a ML project is deploying models in production.  This requires a reliable serving solution along with solutions that address the MLOps needs. A robust serving solution needs to provide support for multi model serving, model versioning, metric logging, monitoring and scaling to serve the peak traffic. In this post, we will have an overview of Torchserve and how to tune its performance for production use-cases. We discuss the Animated Drawings app from Meta that can turn your human figure sketches to animations and how it could serve the peak traffic with Torchserve. The Animated Drawing’s workflow is below.
+
+
+
+
+
+https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/
+
+Many AI systems and tools are designed to handle realistic images of humans, children’s drawings add a level of complexity and unpredictability as they are often constructed in abstract, fanciful ways. These types of morphological and stylistic variations can confuse even state-of-the-art AI systems that excel at spotting objects in photorealistic images and drawings.
+Meta AI researchers are working to overcome this challenge so that AI systems will be better able to recognize drawings of human figures in the wildly varied ways that children create them. This great blog post provides more details about the Animated Drawings and the approach taken.
+
+Torchserve
+
+
+
+Fig1. Overall flow of Torchserve performance tuning 
+
+
+Once you have trained your model, it needs to be integrated into a larger system to have a full-fledged application, we use the term “model serving” to refer to this integration. Basically model serving is making your trained model available to run inferences and subsequent use of the model.
+
+Torchserve is the Pytorch preferred solution for serving models in production. It is a performant and scalable tool that wraps your model in a HTTP or HTTPS API. It has a frontend implemented in Java that handles multiple tasks from assigning workers for serving models to handling the connection between client and server. Torchserve has a Python backend that is responsible for handling the inference service.
+
+Torchserve supports multi model serving and versioning for AB test, dynamic batching, logging and metrics. It exposes four APIs for inference, explanations, management and metrics.
+
+Inference API is listening on port 8080 and accessible through localhost by default, this can be configured in Torchserve configuration and enable getting predictions from the model.
+
+Explanation API uses  Captum under the hood to provide explanations of the model that is being served and listens to the port 8080 as well.
+
+Management API allows to register or unregister and describe a model. It also enables users to  scale up or down the number of workers that serve the model.
+
+Metric API by default listens to port 8082 and enables us to monitor the model that is being served.
+
+Torchserve let you scale your model serving and handle the peak traffic by supporting batch inference and multiple  workers that serve your model. Scaling can be done through management  API and settings through a configuration file. Also, metric API helps you to monitor your model serving through default and customizable metrics.
+
+Other advanced settings such as the length of the queue for the received requests, maximum wait time for a batch of inputs and many other properties are configurable through a config file that can be passed to Torchserve when it is started.
+
+Steps to serve your model with Torchserve
+
+
+  Install Torchserve, model archiver and its requirements.
+  Choose a default handler that fits your task (e.g image classification, etc) or author a custom handler.
+  Package your model artifacts (trained model checkpoint and all other necessary files for loading and running your model) and the handler into a “.mar” file using Torcharchive and place it in the model store.
+  Start serving your model.
+  Run inference.
+We will discuss model handlers and metrics in more detail here.
+
+
+Model handlers
+
+Torchserve uses a handler in the backend to load the models, preprocess the received data, run inference and post-process the response. Handler in torchserve is a python script that all the model initialization, preprocessing, inference and post processing logic goes into.
+
+Torchserve provides an out of the box handler for a number of applications like image classification, segmentation, object detection and text classification. It also supports custom handlers, in case your use case is not supported in default handlers.
+
+It provides a great flexibility in custom handlers, this potentially make Torchserve as multi-framework serving tool. Custom handlers let you define your custom logic to initialize a model that can be used also to load models from other frameworks such as ONNX.
+
+Torchserve handler is made of four main functions, initialize, preprocess, inference and postprocess that each return a list. The code snippet below shows an example of a custom handler.Custom handlers inherit from BaseHandler in Torchserve and can overwrite any of the main functions.  Here is an example of the handler used for loading the Detectron2 model for figure detection, this model has been exported to Torchscript and uses model.half() to run the inference with FP16, details are explained in another section in this post.
+
+
+class MyModelHandler(BaseHandler):
+    def initialize(self, context):
+        self.manifest = ctx.manifest
+        properties = ctx.system_properties
+        model_dir = properties.get(" model_dir")="" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.device="torch.device(" "cuda:"="" +="" str(properties.get("gpu_id"))="" if="" torch.cuda.is_available()="" and="" properties.get("gpu_id")="" is="" not="" none="" else="" "cpu"="" )="" self.model="torch.jit.load(model_pt_path," map_location="self.device)" def="" preprocess(self,="" data):="" inputs="[]" for="" request="" in="" batch:="" request_body="request.get(&quot;body&quot;)" input_="io.BytesIO(request_body)" image="cv2.imdecode(np.fromstring(input_.read()," np.uint8),="" 1)="" input="torch.Tensor(image).permute(2," 0,="" inputs.append({"image":="" input})="" return="" inference(self,inputs):="" predictions="self.model(**inputs)" postprocess(self,="" output):="" responses="[]" inference_output="" inference_outputs:="" responses_json="{" 'classes':="" inference_output['pred_classes'].tolist(),="" 'scores':="" inference_output['scores'].tolist(),="" "boxes":="" inference_output['pred_boxes'].tolist()="" }="" responses.append(json.dumps(responses_json))="" metrics="" an="" essential="" component="" serving="" models="" production="" the="" ability="" to="" monitor="" them.="" torchserve="" collects="" system="" level="" regularly="" allows="" adding="" custom="" as="" well.="" consist="" of="" cpu="" utilization,="" available="" used="" disk="" space="" memory="" on="" host="" machine="" along="" with="" number="" requests="" different="" response="" codes="" (e.g="" 200-300,="" 400-500="" above="" 500).="" can="" be="" added="" explained="" here.="" logs="" these="" two="" sets="" log="" files.="" are="" collected="" by="" default="" at:="" -="" log_directory="" ts_metrics.log="" directory="" model_metrics.log="" mentioned="" before,="" also="" exposes="" metric="" api,="" that="" listens="" port="" 8082="" enables="" users="" query="" metrics.="" endpoint="" returns="" prometheus="" formatted="" you="" using="" curl="" or="" point="" a="" server="" use="" grafana="" dashboards.="" while="" model="" follows:="" http:="" 127.0.0.1:8082="" case="" looking="" into="" exporting="" logged="" metrics,="" please="" refer="" this="" example="" uses="" mtail="" export="" prometheus.="" tracking="" dashboard="" performance="" regressions="" may="" have="" been="" sporadic="" hard="" spot="" during="" offline="" benchmark="" run.="" what="" consider="" tuning="" workflow="" suggested="" fig="" 1,="" general="" idea="" how="" approach="" deployment="" torchserve.="" many="" cases="" optimized="" based="" throughput="" latency="" service="" agreement="" (sla)s.="" usually="" real-time="" applications="" more="" concerned="" about="" whereas="" off-line="" care="" higher="" throughput.="" there="" main="" factors="" contributing="" production.="" particular,="" we="" focusing="" pytorch="" here,="" however="" most="" generalize="" all="" from="" other="" frameworks="" optimizations:="" pre-step="" deploying="" very="" broad="" discussion="" will="" get="" series="" future="" blogs.="" includes="" techniques="" like="" quantization,="" pruning="" decrease="" size="" model,="" intermediate="" representations="" (ir="" graphs)="" such="" torchscript="" pytorch,="" fusing="" kernels="" others.="" currently="" torchprep="" provides="" cli="" tool.="" batch="" inference:="" it="" refers="" feeding="" multiple="" training,="" helpful="" manage="" cost="" at="" inference="" time="" hardware="" accelerators="" parallelism="" batching="" helps="" saturate="" compute="" capacity="" often="" leads="" difference="" can’t="" wait="" too="" long="" filled="" clients,="" something="" call="" dynamic="" workers="" :="" serve="" models.="" python="" processes="" hold="" copy="" weights="" running="" inference.="" few="" means="" you’re="" benefitting="" enough="" but="" cause="" worker="" contention="" degrade="" end="" performance.="" choosing="" appropriate="" application="" latency,="" budget.="" could="" one="" supported="" hardwares="" torchserve,="" cpu,="" gpu,="" aws="" inferentia.="" some="" configurations="" intended="" best="" class="" others="" better="" suited="" effective="" our="" experiments="" we’ve="" found="" gpus="" shine="" larger="" sizes="" right="" cpus="" inferentia="" far="" lower="" low="" latency.="" practices="" out="" your="" sharing="" suite="" insight="" make="" informed="" decisions="" choices="" detailed="" below.="" optimize="" first="" step,="" optimization="" tutorials.="" closely="" tied="" choice.="" discuss="" detail="" another="" blog="" post.="" deciding="" related="" budget="" per="" depending="" vary,="" computer="" vision="" has="" historically="" affordable="" run="" cpu.="" however,="" having="" optimizations="" ipex="" recently="" much="" beneficial="" learn="" investigative="" study="" provide="" parallelism,="" setting="" should="" done="" carefully.="" launch="" equal="" vcpus="" host,="" add="" considerable="" amount="" start.="" config="" property="" set="" workers.="" efficient="" through="" avoiding="" them="" compete="" over="" resources,="" baseline="" recommend="" following="" gpu:="" handler,="" torch.set_num_threads(1)="" then="" num="" physical="" cores="" 2.="" threading="" achieved="" leveraging="" intel="" launcher="" script.="" number_gpus="" config.properties.="" round="" robin="" assign="" gpus.="" follows.="" gpus)="" (number="" unique="" models).="" note="" pre-ampere="" do="" any="" resource="" isolation="" multi="" instance="" directly="" affect="" utilize="" resources="" needs="" increased.="" tradeoff="" between="" increase="" results="" ways,="" either="" config.properties="" registering="" management="" api.="" next="" section,="" going="" decide="" combination="" optimization,="" hardware,="" workers,="" size.="" animated="" drawings="" suite,="" need="" archived="" file,="" “.mar”="" file="" discussed="" above,="" contains="" handler="" artifacts="" load="" detectron2’s="" implementation="" mask-rcnn="" object="" detection="" model.="" automated="" let="" including="" finally="" generate="" report="" you.="" started:="" git="" clone="" https:="" github.com="" serve.git="" cd="" benchmarks="" pip="" install="" -r="" requirements-ab.txt="" apt-get="" apache2-utils="" settings="" configured="" yaml="" similar="" model_name:="" eager_mode:="" benchmark_engine:="" "ab"="" url:="" "path="" .mar="" file"="" workers:="" 1="" 4="" batch_delay:="" 100="" batch_size:="" 2="" 8="" requests:="" 10000="" concurrency:="" 10="" input:="" input"="" backend_profiling:="" false="" exec_env:="" "local"="" processors:="" "gpus":="" "all"="" referenced="" benchmark_config_template.yaml="" generating="" reports,="" optionally="" work="" cloud="" watch="" auto_benchmark.py="" --input="" benchmarks,="" written="" “csv”="" “_="" tmp="" ab_report.csv_”="" full="" “="" ts_benchmark="" report.md”.="" include="" items="" average="" p99="" throughput,="" concurrency,="" requests,="" time,="" here="" focus="" important="" ones="" track="" tune="" which="" are,="" look="" numbers="" specifically="" size,="" device,="" done.="" sla="" ms,="" earlier,="" concern="" ideally="" high="" possible="" does="" violate="" sla.="" searching="" space,="" (1-32),="" (1-16)="" devices="" (cpu,gpu),="" summarized="" table="" device="" concurrency="" #="" #workers="" payload="" 1000="" small="" n="" 3.45="" 305.3="" ms="" 291.8="" gpu="" 41.05="" 25.48="" 42.21="" 23.6="" 54.78="" 73.62="" model.half()="" 78.62="" 50.69="" 85.29="" 94.4="" tried="" terms="" did="" meet="" sla,="" fact="" ~13x="" higher.="" moving="" immediately="" improve="" ~**13x="" **from="" 305="" down="" ms.="" simplest="" was="" lowering="" its="" precision="" fp16,="" liner="" (model.half())="" reduce="" **by="" **32%="" almost="" same="" amount.="" torchscripting="" optimize_for_inference="" tricks="" onnx="" tensorrt="" runtime="" leverage="" aggressive="" fusions="" scope="" separate="" both="" ,="" **number="" **worked="" case.="" increased="" ~12x="" compared="" ~13x.="" model.half(),="" yielded="" tolerable="" ~25x="" still="" meeting="" (94.4ms).="" note:="" sure="" proper="" batch_delay="" proportional="" concurrent="" being="" sent="" server.="" conclusion="" post,="" considerations="" knobs="" expose="" insights="" optimizations,="" choice="" general.="" app="" case-study="" showcase="" suite.="" details="" documentation="" feel="" free="" open="" ticket="" repo="" further="" questions="" feedback.="" acknowledgement="" would="" thank="" somya="" jain="" (meta),="" christopher="" gustave="" (meta)="" their="" great="" support="" guidance="" throughout="" steps="" providing="" sketch="" animator="" workflow.="" also,="" special="" thanks="" li="" ning="" efforts="" easier="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/sketch_animator.png">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/sketch_animator.png">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Torchserve Performance Tuning, Animated Drawings Case-Study">
+<meta property="og:description" content="In this post we discuss performance tuning of Torchserve for serving your models in production. One of the biggest challenges in the life cycle of a ML project is deploying models in production.  This requires a reliable serving solution along with solutions that address the MLOps needs. A robust serving solution needs to provide support for multi model serving, model versioning, metric logging, monitoring and scaling to serve the peak traffic. In this post, we will have an overview of Torchserve and how to tune its performance for production use-cases. We discuss the Animated Drawings app from Meta that can turn your human figure sketches to animations and how it could serve the peak traffic with Torchserve. The Animated Drawing’s workflow is below.
+
+
+
+
+
+https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/
+
+Many AI systems and tools are designed to handle realistic images of humans, children’s drawings add a level of complexity and unpredictability as they are often constructed in abstract, fanciful ways. These types of morphological and stylistic variations can confuse even state-of-the-art AI systems that excel at spotting objects in photorealistic images and drawings.
+Meta AI researchers are working to overcome this challenge so that AI systems will be better able to recognize drawings of human figures in the wildly varied ways that children create them. This great blog post provides more details about the Animated Drawings and the approach taken.
+
+Torchserve
+
+
+
+Fig1. Overall flow of Torchserve performance tuning 
+
+
+Once you have trained your model, it needs to be integrated into a larger system to have a full-fledged application, we use the term “model serving” to refer to this integration. Basically model serving is making your trained model available to run inferences and subsequent use of the model.
+
+Torchserve is the Pytorch preferred solution for serving models in production. It is a performant and scalable tool that wraps your model in a HTTP or HTTPS API. It has a frontend implemented in Java that handles multiple tasks from assigning workers for serving models to handling the connection between client and server. Torchserve has a Python backend that is responsible for handling the inference service.
+
+Torchserve supports multi model serving and versioning for AB test, dynamic batching, logging and metrics. It exposes four APIs for inference, explanations, management and metrics.
+
+Inference API is listening on port 8080 and accessible through localhost by default, this can be configured in Torchserve configuration and enable getting predictions from the model.
+
+Explanation API uses  Captum under the hood to provide explanations of the model that is being served and listens to the port 8080 as well.
+
+Management API allows to register or unregister and describe a model. It also enables users to  scale up or down the number of workers that serve the model.
+
+Metric API by default listens to port 8082 and enables us to monitor the model that is being served.
+
+Torchserve let you scale your model serving and handle the peak traffic by supporting batch inference and multiple  workers that serve your model. Scaling can be done through management  API and settings through a configuration file. Also, metric API helps you to monitor your model serving through default and customizable metrics.
+
+Other advanced settings such as the length of the queue for the received requests, maximum wait time for a batch of inputs and many other properties are configurable through a config file that can be passed to Torchserve when it is started.
+
+Steps to serve your model with Torchserve
+
+
+  Install Torchserve, model archiver and its requirements.
+  Choose a default handler that fits your task (e.g image classification, etc) or author a custom handler.
+  Package your model artifacts (trained model checkpoint and all other necessary files for loading and running your model) and the handler into a “.mar” file using Torcharchive and place it in the model store.
+  Start serving your model.
+  Run inference.
+We will discuss model handlers and metrics in more detail here.
+
+
+Model handlers
+
+Torchserve uses a handler in the backend to load the models, preprocess the received data, run inference and post-process the response. Handler in torchserve is a python script that all the model initialization, preprocessing, inference and post processing logic goes into.
+
+Torchserve provides an out of the box handler for a number of applications like image classification, segmentation, object detection and text classification. It also supports custom handlers, in case your use case is not supported in default handlers.
+
+It provides a great flexibility in custom handlers, this potentially make Torchserve as multi-framework serving tool. Custom handlers let you define your custom logic to initialize a model that can be used also to load models from other frameworks such as ONNX.
+
+Torchserve handler is made of four main functions, initialize, preprocess, inference and postprocess that each return a list. The code snippet below shows an example of a custom handler.Custom handlers inherit from BaseHandler in Torchserve and can overwrite any of the main functions.  Here is an example of the handler used for loading the Detectron2 model for figure detection, this model has been exported to Torchscript and uses model.half() to run the inference with FP16, details are explained in another section in this post.
+
+
+class MyModelHandler(BaseHandler):
+    def initialize(self, context):
+        self.manifest = ctx.manifest
+        properties = ctx.system_properties
+        model_dir = properties.get(" model_dir")="" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.device="torch.device(" "cuda:"="" +="" str(properties.get("gpu_id"))="" if="" torch.cuda.is_available()="" and="" properties.get("gpu_id")="" is="" not="" none="" else="" "cpu"="" )="" self.model="torch.jit.load(model_pt_path," map_location="self.device)" def="" preprocess(self,="" data):="" inputs="[]" for="" request="" in="" batch:="" request_body="request.get(&quot;body&quot;)" input_="io.BytesIO(request_body)" image="cv2.imdecode(np.fromstring(input_.read()," np.uint8),="" 1)="" input="torch.Tensor(image).permute(2," 0,="" inputs.append({"image":="" input})="" return="" inference(self,inputs):="" predictions="self.model(**inputs)" postprocess(self,="" output):="" responses="[]" inference_output="" inference_outputs:="" responses_json="{" 'classes':="" inference_output['pred_classes'].tolist(),="" 'scores':="" inference_output['scores'].tolist(),="" "boxes":="" inference_output['pred_boxes'].tolist()="" }="" responses.append(json.dumps(responses_json))="" metrics="" an="" essential="" component="" serving="" models="" production="" the="" ability="" to="" monitor="" them.="" torchserve="" collects="" system="" level="" regularly="" allows="" adding="" custom="" as="" well.="" consist="" of="" cpu="" utilization,="" available="" used="" disk="" space="" memory="" on="" host="" machine="" along="" with="" number="" requests="" different="" response="" codes="" (e.g="" 200-300,="" 400-500="" above="" 500).="" can="" be="" added="" explained="" here.="" logs="" these="" two="" sets="" log="" files.="" are="" collected="" by="" default="" at:="" -="" log_directory="" ts_metrics.log="" directory="" model_metrics.log="" mentioned="" before,="" also="" exposes="" metric="" api,="" that="" listens="" port="" 8082="" enables="" users="" query="" metrics.="" endpoint="" returns="" prometheus="" formatted="" you="" using="" curl="" or="" point="" a="" server="" use="" grafana="" dashboards.="" while="" model="" follows:="" http:="" 127.0.0.1:8082="" case="" looking="" into="" exporting="" logged="" metrics,="" please="" refer="" this="" example="" uses="" mtail="" export="" prometheus.="" tracking="" dashboard="" performance="" regressions="" may="" have="" been="" sporadic="" hard="" spot="" during="" offline="" benchmark="" run.="" what="" consider="" tuning="" workflow="" suggested="" fig="" 1,="" general="" idea="" how="" approach="" deployment="" torchserve.="" many="" cases="" optimized="" based="" throughput="" latency="" service="" agreement="" (sla)s.="" usually="" real-time="" applications="" more="" concerned="" about="" whereas="" off-line="" care="" higher="" throughput.="" there="" main="" factors="" contributing="" production.="" particular,="" we="" focusing="" pytorch="" here,="" however="" most="" generalize="" all="" from="" other="" frameworks="" optimizations:="" pre-step="" deploying="" very="" broad="" discussion="" will="" get="" series="" future="" blogs.="" includes="" techniques="" like="" quantization,="" pruning="" decrease="" size="" model,="" intermediate="" representations="" (ir="" graphs)="" such="" torchscript="" pytorch,="" fusing="" kernels="" others.="" currently="" torchprep="" provides="" cli="" tool.="" batch="" inference:="" it="" refers="" feeding="" multiple="" training,="" helpful="" manage="" cost="" at="" inference="" time="" hardware="" accelerators="" parallelism="" batching="" helps="" saturate="" compute="" capacity="" often="" leads="" difference="" can’t="" wait="" too="" long="" filled="" clients,="" something="" call="" dynamic="" workers="" :="" serve="" models.="" python="" processes="" hold="" copy="" weights="" running="" inference.="" few="" means="" you’re="" benefitting="" enough="" but="" cause="" worker="" contention="" degrade="" end="" performance.="" choosing="" appropriate="" application="" latency,="" budget.="" could="" one="" supported="" hardwares="" torchserve,="" cpu,="" gpu,="" aws="" inferentia.="" some="" configurations="" intended="" best="" class="" others="" better="" suited="" effective="" our="" experiments="" we’ve="" found="" gpus="" shine="" larger="" sizes="" right="" cpus="" inferentia="" far="" lower="" low="" latency.="" practices="" out="" your="" sharing="" suite="" insight="" make="" informed="" decisions="" choices="" detailed="" below.="" optimize="" first="" step,="" optimization="" tutorials.="" closely="" tied="" choice.="" discuss="" detail="" another="" blog="" post.="" deciding="" related="" budget="" per="" depending="" vary,="" computer="" vision="" has="" historically="" affordable="" run="" cpu.="" however,="" having="" optimizations="" ipex="" recently="" much="" beneficial="" learn="" investigative="" study="" provide="" parallelism,="" setting="" should="" done="" carefully.="" launch="" equal="" vcpus="" host,="" add="" considerable="" amount="" start.="" config="" set="" workers.="" efficient="" through="" avoiding="" them="" compete="" over="" resources,="" baseline="" recommend="" following="" gpu:="" handler,="" torch.set_num_threads(1)="" then="" num="" physical="" cores="" 2.="" threading="" achieved="" leveraging="" intel="" launcher="" script.="" number_gpus="" config.properties.="" round="" robin="" assign="" gpus.="" follows.="" gpus)="" (number="" unique="" models).="" note="" pre-ampere="" do="" any="" resource="" isolation="" multi="" instance="" directly="" affect="" utilize="" resources="" needs="" increased.="" tradeoff="" between="" increase="" results="" ways,="" either="" config.properties="" registering="" management="" api.="" next="" section,="" going="" decide="" combination="" optimization,="" hardware,="" workers,="" size.="" animated="" drawings="" suite,="" need="" archived="" file,="" “.mar”="" file="" discussed="" above,="" contains="" handler="" artifacts="" load="" detectron2’s="" implementation="" mask-rcnn="" object="" detection="" model.="" automated="" let="" including="" finally="" generate="" report="" you.="" started:="" git="" clone="" https:="" github.com="" serve.git="" cd="" benchmarks="" pip="" install="" -r="" requirements-ab.txt="" apt-get="" apache2-utils="" settings="" configured="" yaml="" similar="" model_name:="" eager_mode:="" benchmark_engine:="" "ab"="" url:="" "path="" .mar="" file"="" workers:="" 1="" 4="" batch_delay:="" 100="" batch_size:="" 2="" 8="" requests:="" 10000="" concurrency:="" 10="" input:="" input"="" backend_profiling:="" false="" exec_env:="" "local"="" processors:="" "gpus":="" "all"="" referenced="" benchmark_config_template.yaml="" generating="" reports,="" optionally="" work="" cloud="" watch="" auto_benchmark.py="" --input="" benchmarks,="" written="" “csv”="" “_="" tmp="" ab_report.csv_”="" full="" “="" ts_benchmark="" report.md”.="" include="" items="" average="" p99="" throughput,="" concurrency,="" requests,="" time,="" here="" focus="" important="" ones="" track="" tune="" which="" are,="" look="" numbers="" specifically="" size,="" device,="" done.="" sla="" ms,="" earlier,="" concern="" ideally="" high="" possible="" does="" violate="" sla.="" searching="" space,="" (1-32),="" (1-16)="" devices="" (cpu,gpu),="" summarized="" table="" device="" concurrency="" #="" #workers="" payload="" 1000="" small="" n="" 3.45="" 305.3="" ms="" 291.8="" gpu="" 41.05="" 25.48="" 42.21="" 23.6="" 54.78="" 73.62="" model.half()="" 78.62="" 50.69="" 85.29="" 94.4="" tried="" terms="" did="" meet="" sla,="" fact="" ~13x="" higher.="" moving="" immediately="" improve="" ~**13x="" **from="" 305="" down="" ms.="" simplest="" was="" lowering="" its="" precision="" fp16,="" liner="" (model.half())="" reduce="" **by="" **32%="" almost="" same="" amount.="" torchscripting="" optimize_for_inference="" tricks="" onnx="" tensorrt="" runtime="" leverage="" aggressive="" fusions="" scope="" separate="" both="" ,="" **number="" **worked="" case.="" increased="" ~12x="" compared="" ~13x.="" model.half(),="" yielded="" tolerable="" ~25x="" still="" meeting="" (94.4ms).="" note:="" sure="" proper="" batch_delay="" proportional="" concurrent="" being="" sent="" server.="" conclusion="" post,="" considerations="" knobs="" expose="" insights="" optimizations,="" choice="" general.="" app="" case-study="" showcase="" suite.="" details="" documentation="" feel="" free="" open="" ticket="" repo="" further="" questions="" feedback.="" acknowledgement="" would="" thank="" somya="" jain="" (meta),="" christopher="" gustave="" (meta)="" their="" great="" support="" guidance="" throughout="" steps="" providing="" sketch="" animator="" workflow.="" also,="" special="" thanks="" li="" ning="" efforts="" easier="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Torchserve Performance Tuning, Animated Drawings Case-Study">
+<meta name="twitter:description" content="In this post we discuss performance tuning of Torchserve for serving your models in production. One of the biggest challenges in the life cycle of a ML project is deploying models in production.  This requires a reliable serving solution along with solutions that address the MLOps needs. A robust serving solution needs to provide support for multi model serving, model versioning, metric logging, monitoring and scaling to serve the peak traffic. In this post, we will have an overview of Torchserve and how to tune its performance for production use-cases. We discuss the Animated Drawings app from Meta that can turn your human figure sketches to animations and how it could serve the peak traffic with Torchserve. The Animated Drawing’s workflow is below.
+
+
+
+
+
+https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/
+
+Many AI systems and tools are designed to handle realistic images of humans, children’s drawings add a level of complexity and unpredictability as they are often constructed in abstract, fanciful ways. These types of morphological and stylistic variations can confuse even state-of-the-art AI systems that excel at spotting objects in photorealistic images and drawings.
+Meta AI researchers are working to overcome this challenge so that AI systems will be better able to recognize drawings of human figures in the wildly varied ways that children create them. This great blog post provides more details about the Animated Drawings and the approach taken.
+
+Torchserve
+
+
+
+Fig1. Overall flow of Torchserve performance tuning 
+
+
+Once you have trained your model, it needs to be integrated into a larger system to have a full-fledged application, we use the term “model serving” to refer to this integration. Basically model serving is making your trained model available to run inferences and subsequent use of the model.
+
+Torchserve is the Pytorch preferred solution for serving models in production. It is a performant and scalable tool that wraps your model in a HTTP or HTTPS API. It has a frontend implemented in Java that handles multiple tasks from assigning workers for serving models to handling the connection between client and server. Torchserve has a Python backend that is responsible for handling the inference service.
+
+Torchserve supports multi model serving and versioning for AB test, dynamic batching, logging and metrics. It exposes four APIs for inference, explanations, management and metrics.
+
+Inference API is listening on port 8080 and accessible through localhost by default, this can be configured in Torchserve configuration and enable getting predictions from the model.
+
+Explanation API uses  Captum under the hood to provide explanations of the model that is being served and listens to the port 8080 as well.
+
+Management API allows to register or unregister and describe a model. It also enables users to  scale up or down the number of workers that serve the model.
+
+Metric API by default listens to port 8082 and enables us to monitor the model that is being served.
+
+Torchserve let you scale your model serving and handle the peak traffic by supporting batch inference and multiple  workers that serve your model. Scaling can be done through management  API and settings through a configuration file. Also, metric API helps you to monitor your model serving through default and customizable metrics.
+
+Other advanced settings such as the length of the queue for the received requests, maximum wait time for a batch of inputs and many other properties are configurable through a config file that can be passed to Torchserve when it is started.
+
+Steps to serve your model with Torchserve
+
+
+  Install Torchserve, model archiver and its requirements.
+  Choose a default handler that fits your task (e.g image classification, etc) or author a custom handler.
+  Package your model artifacts (trained model checkpoint and all other necessary files for loading and running your model) and the handler into a “.mar” file using Torcharchive and place it in the model store.
+  Start serving your model.
+  Run inference.
+We will discuss model handlers and metrics in more detail here.
+
+
+Model handlers
+
+Torchserve uses a handler in the backend to load the models, preprocess the received data, run inference and post-process the response. Handler in torchserve is a python script that all the model initialization, preprocessing, inference and post processing logic goes into.
+
+Torchserve provides an out of the box handler for a number of applications like image classification, segmentation, object detection and text classification. It also supports custom handlers, in case your use case is not supported in default handlers.
+
+It provides a great flexibility in custom handlers, this potentially make Torchserve as multi-framework serving tool. Custom handlers let you define your custom logic to initialize a model that can be used also to load models from other frameworks such as ONNX.
+
+Torchserve handler is made of four main functions, initialize, preprocess, inference and postprocess that each return a list. The code snippet below shows an example of a custom handler.Custom handlers inherit from BaseHandler in Torchserve and can overwrite any of the main functions.  Here is an example of the handler used for loading the Detectron2 model for figure detection, this model has been exported to Torchscript and uses model.half() to run the inference with FP16, details are explained in another section in this post.
+
+
+class MyModelHandler(BaseHandler):
+    def initialize(self, context):
+        self.manifest = ctx.manifest
+        properties = ctx.system_properties
+        model_dir = properties.get(" model_dir")="" serialized_file="self.manifest[&quot;model&quot;][&quot;serializedFile&quot;]" model_pt_path="os.path.join(model_dir," serialized_file)="" self.device="torch.device(" "cuda:"="" +="" str(properties.get("gpu_id"))="" if="" torch.cuda.is_available()="" and="" properties.get("gpu_id")="" is="" not="" none="" else="" "cpu"="" )="" self.model="torch.jit.load(model_pt_path," map_location="self.device)" def="" preprocess(self,="" data):="" inputs="[]" for="" request="" in="" batch:="" request_body="request.get(&quot;body&quot;)" input_="io.BytesIO(request_body)" image="cv2.imdecode(np.fromstring(input_.read()," np.uint8),="" 1)="" input="torch.Tensor(image).permute(2," 0,="" inputs.append({"image":="" input})="" return="" inference(self,inputs):="" predictions="self.model(**inputs)" postprocess(self,="" output):="" responses="[]" inference_output="" inference_outputs:="" responses_json="{" 'classes':="" inference_output['pred_classes'].tolist(),="" 'scores':="" inference_output['scores'].tolist(),="" "boxes":="" inference_output['pred_boxes'].tolist()="" }="" responses.append(json.dumps(responses_json))="" metrics="" an="" essential="" component="" serving="" models="" production="" the="" ability="" to="" monitor="" them.="" torchserve="" collects="" system="" level="" regularly="" allows="" adding="" custom="" as="" well.="" consist="" of="" cpu="" utilization,="" available="" used="" disk="" space="" memory="" on="" host="" machine="" along="" with="" number="" requests="" different="" response="" codes="" (e.g="" 200-300,="" 400-500="" above="" 500).="" can="" be="" added="" explained="" here.="" logs="" these="" two="" sets="" log="" files.="" are="" collected="" by="" default="" at:="" -="" log_directory="" ts_metrics.log="" directory="" model_metrics.log="" mentioned="" before,="" also="" exposes="" metric="" api,="" that="" listens="" port="" 8082="" enables="" users="" query="" metrics.="" endpoint="" returns="" prometheus="" formatted="" you="" using="" curl="" or="" point="" a="" server="" use="" grafana="" dashboards.="" while="" model="" follows:="" http:="" 127.0.0.1:8082="" case="" looking="" into="" exporting="" logged="" metrics,="" please="" refer="" this="" example="" uses="" mtail="" export="" prometheus.="" tracking="" dashboard="" performance="" regressions="" may="" have="" been="" sporadic="" hard="" spot="" during="" offline="" benchmark="" run.="" what="" consider="" tuning="" workflow="" suggested="" fig="" 1,="" general="" idea="" how="" approach="" deployment="" torchserve.="" many="" cases="" optimized="" based="" throughput="" latency="" service="" agreement="" (sla)s.="" usually="" real-time="" applications="" more="" concerned="" about="" whereas="" off-line="" care="" higher="" throughput.="" there="" main="" factors="" contributing="" production.="" particular,="" we="" focusing="" pytorch="" here,="" however="" most="" generalize="" all="" from="" other="" frameworks="" optimizations:="" pre-step="" deploying="" very="" broad="" discussion="" will="" get="" series="" future="" blogs.="" includes="" techniques="" like="" quantization,="" pruning="" decrease="" size="" model,="" intermediate="" representations="" (ir="" graphs)="" such="" torchscript="" pytorch,="" fusing="" kernels="" others.="" currently="" torchprep="" provides="" cli="" tool.="" batch="" inference:="" it="" refers="" feeding="" multiple="" training,="" helpful="" manage="" cost="" at="" inference="" time="" hardware="" accelerators="" parallelism="" batching="" helps="" saturate="" compute="" capacity="" often="" leads="" difference="" can’t="" wait="" too="" long="" filled="" clients,="" something="" call="" dynamic="" workers="" :="" serve="" models.="" python="" processes="" hold="" copy="" weights="" running="" inference.="" few="" means="" you’re="" benefitting="" enough="" but="" cause="" worker="" contention="" degrade="" end="" performance.="" choosing="" appropriate="" application="" latency,="" budget.="" could="" one="" supported="" hardwares="" torchserve,="" cpu,="" gpu,="" aws="" inferentia.="" some="" configurations="" intended="" best="" class="" others="" better="" suited="" effective="" our="" experiments="" we’ve="" found="" gpus="" shine="" larger="" sizes="" right="" cpus="" inferentia="" far="" lower="" low="" latency.="" practices="" out="" your="" sharing="" suite="" insight="" make="" informed="" decisions="" choices="" detailed="" below.="" optimize="" first="" step,="" optimization="" tutorials.="" closely="" tied="" choice.="" discuss="" detail="" another="" blog="" post.="" deciding="" related="" budget="" per="" depending="" vary,="" computer="" vision="" has="" historically="" affordable="" run="" cpu.="" however,="" having="" optimizations="" ipex="" recently="" much="" beneficial="" learn="" investigative="" study="" provide="" parallelism,="" setting="" should="" done="" carefully.="" launch="" equal="" vcpus="" host,="" add="" considerable="" amount="" start.="" config="" property="" set="" workers.="" efficient="" through="" avoiding="" them="" compete="" over="" resources,="" baseline="" recommend="" following="" gpu:="" handler,="" torch.set_num_threads(1)="" then="" num="" physical="" cores="" 2.="" threading="" achieved="" leveraging="" intel="" launcher="" script.="" number_gpus="" config.properties.="" round="" robin="" assign="" gpus.="" follows.="" gpus)="" (number="" unique="" models).="" note="" pre-ampere="" do="" any="" resource="" isolation="" multi="" instance="" directly="" affect="" utilize="" resources="" needs="" increased.="" tradeoff="" between="" increase="" results="" ways,="" either="" config.properties="" registering="" management="" api.="" next="" section,="" going="" decide="" combination="" optimization,="" hardware,="" workers,="" size.="" animated="" drawings="" suite,="" need="" archived="" file,="" “.mar”="" file="" discussed="" above,="" contains="" handler="" artifacts="" load="" detectron2’s="" implementation="" mask-rcnn="" object="" detection="" model.="" automated="" let="" including="" finally="" generate="" report="" you.="" started:="" git="" clone="" https:="" github.com="" serve.git="" cd="" benchmarks="" pip="" install="" -r="" requirements-ab.txt="" apt-get="" apache2-utils="" settings="" configured="" yaml="" similar="" model_name:="" eager_mode:="" benchmark_engine:="" "ab"="" url:="" "path="" .mar="" file"="" workers:="" 1="" 4="" batch_delay:="" 100="" batch_size:="" 2="" 8="" requests:="" 10000="" concurrency:="" 10="" input:="" input"="" backend_profiling:="" false="" exec_env:="" "local"="" processors:="" "gpus":="" "all"="" referenced="" benchmark_config_template.yaml="" generating="" reports,="" optionally="" work="" cloud="" watch="" auto_benchmark.py="" --input="" benchmarks,="" written="" “csv”="" “_="" tmp="" ab_report.csv_”="" full="" “="" ts_benchmark="" report.md”.="" include="" items="" average="" p99="" throughput,="" concurrency,="" requests,="" time,="" here="" focus="" important="" ones="" track="" tune="" which="" are,="" look="" numbers="" specifically="" size,="" device,="" done.="" sla="" ms,="" earlier,="" concern="" ideally="" high="" possible="" does="" violate="" sla.="" searching="" space,="" (1-32),="" (1-16)="" devices="" (cpu,gpu),="" summarized="" table="" device="" concurrency="" #="" #workers="" payload="" 1000="" small="" n="" 3.45="" 305.3="" ms="" 291.8="" gpu="" 41.05="" 25.48="" 42.21="" 23.6="" 54.78="" 73.62="" model.half()="" 78.62="" 50.69="" 85.29="" 94.4="" tried="" terms="" did="" meet="" sla,="" fact="" ~13x="" higher.="" moving="" immediately="" improve="" ~**13x="" **from="" 305="" down="" ms.="" simplest="" was="" lowering="" its="" precision="" fp16,="" liner="" (model.half())="" reduce="" **by="" **32%="" almost="" same="" amount.="" torchscripting="" optimize_for_inference="" tricks="" onnx="" tensorrt="" runtime="" leverage="" aggressive="" fusions="" scope="" separate="" both="" ,="" **number="" **worked="" case.="" increased="" ~12x="" compared="" ~13x.="" model.half(),="" yielded="" tolerable="" ~25x="" still="" meeting="" (94.4ms).="" note:="" sure="" proper="" batch_delay="" proportional="" concurrent="" being="" sent="" server.="" conclusion="" post,="" considerations="" knobs="" expose="" insights="" optimizations,="" choice="" general.="" app="" case-study="" showcase="" suite.="" details="" documentation="" feel="" free="" open="" ticket="" repo="" further="" questions="" feedback.="" acknowledgement="" would="" thank="" somya="" jain="" (meta),="" christopher="" gustave="" (meta)="" their="" great="" support="" guidance="" throughout="" steps="" providing="" sketch="" animator="" workflow.="" also,="" special="" thanks="" li="" ning="" efforts="" easier="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。CFP 现已开放！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容是什么</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年12月28日</p>
+            <h1>
+                <a class="blog-title">火炬服务性能调优，动画绘图案例研究</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Hamid Shojanazeri、Geeta Chauhan、Mark Saroufim、Jesse Smith 所著</p>
+                    <p>在本文中，我们讨论了 Torchserve 的性能调优，以便在生产环境中部署模型。机器学习项目生命周期中最大的挑战之一是将模型部署到生产环境中。这需要可靠的托管解决方案以及解决 MLOps 需求的方法。一个健壮的托管解决方案需要支持多模型托管、模型版本控制、指标记录、监控和扩展以应对高峰流量。本文将概述 Torchserve 及其性能调优方法，以便用于生产场景。我们将讨论 Meta 的<a href="https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/">动画绘图应用 </a>，该应用可以将您的素描人物转换为动画，并探讨它如何使用 Torchserve 应对高峰流量。动画绘图的流程如下。</p>
+
+<p>
+<img src="/assets/images/sketch_animator.png" width="90%">
+</p>
+
+<p><a href="https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/">https://ai.facebook.com/blog/using-ai-to-bring-childrens-drawings-to-life/</a></p>
+
+<p>许多 AI 系统和工具旨在处理人类的真实图像，而儿童的画作则增加了复杂性和不可预测性，因为它们通常以抽象、幻想的方式构建。这类形态和风格的变异甚至可能让擅长在逼真图像和绘画中识别对象的顶尖 AI 系统感到困惑。Meta AI 研究人员正在努力克服这一挑战，以便 AI 系统能够更好地识别儿童以各种方式创作的描绘人类形象的画作。这篇精彩的博客文章提供了更多关于动画绘画和所采取方法的细节。</p>
+
+<h2 id="torchserve">Torchserve</h2>
+
+<p>
+<img src="/assets/images/Tuning-flow-chart.png" width="90%">
+</p><center><i>图 1. Torchserve 性能调优的整体流程</i> </center>
+<p></p>
+
+<p>一旦训练好模型，就需要将其集成到更大的系统中，以便拥有完整的应用，我们使用“模型服务”一词来指代这种集成。基本上，模型服务就是使您的训练模型可供运行推理和后续使用。</p>
+
+<p>Torchserve 是 PyTorch 推荐的模型生产部署解决方案。它是一个性能出色且可扩展的工具，可以将您的模型封装在 HTTP 或 HTTPS API 中。它有一个用 Java 实现的用户界面，负责处理多个任务，包括为模型服务分配工作者以及处理客户端和服务器之间的连接。Torchserve 有一个 Python 后端，负责处理推理服务。</p>
+
+<p>Torchserve 支持多模型服务以及用于 A/B 测试的版本控制、动态批处理、日志记录和指标。它公开了四个 API，分别为<a href="https://github.com/pytorch/serve/blob/master/docs/inference_api.md">推理 </a>、<a href="https://github.com/pytorch/serve/blob/master/docs/inference_api.md#explanations-api"> 解释 </a>、<a href="https://github.com/pytorch/serve/blob/master/docs/management_api.md"> 管理</a>和<a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md">指标 </a>。</p>
+
+<p><a href="https://github.com/pytorch/serve/blob/master/docs/inference_api.md">推理 </a> API 默认监听 8080 端口，可以通过 localhost 访问，这可以在 <a href="https://github.com/pytorch/serve/blob/master/docs/configuration.md">Torchserve 配置</a>中进行配置，从而启用从模型获取预测。</p>
+
+<p><a href="https://github.com/pytorch/serve/blob/master/docs/inference_api.md#explanations-api">解释 </a> API 在底层使用 Captum 提供被服务模型的解释，并监听 8080 端口。</p>
+
+<p>管理 API 允许注册或注销并描述模型。它还使用户能够根据需要扩展或缩减服务模型的工人数量。</p>
+
+<p>默认情况下，<a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md"> 指标 </a> API 监听 8082 端口，使我们能够监控正在服务的模型。</p>
+
+<p>Torchserve 让您能够扩展模型服务并处理高峰流量，支持<a href="https://github.com/pytorch/serve/blob/master/docs/batch_inference_with_ts.md">批量推理</a>和多个服务您模型的工人。扩展可以通过<a href="https://github.com/pytorch/serve/blob/master/docs/management_api.md">管理 </a> API 和通过<a href="https://github.com/pytorch/serve/blob/master/docs/configuration.md">配置</a>文件进行设置。此外，指标 API 可以帮助您通过默认和可自定义的指标监控模型服务。</p>
+
+<p>其他高级设置，如接收请求的队列长度、输入批次的最大等待时间以及许多其他属性，都可以通过在启动 Torchserve 时传递的<a href="https://github.com/pytorch/serve/blob/master/docs/configuration.md">配置文件</a>进行配置。</p>
+
+<p><strong>在 Torchserve 中部署你的模型的步骤</strong></p>
+
+<ol>
+  <li>安装 Torchserve、模型归档器及其依赖项。</li>
+  <li>选择适合你任务的默认处理器（例如图像分类等）或编写一个<a href="https://github.com/pytorch/serve/blob/master/docs/custom_service.md#custom-handlers">自定义处理器 </a>。</li>
+  <li>使用 <a href="https://github.com/pytorch/serve/tree/master/examples/Huggingface_Transformers#create-model-archive-eager-mode">Torcharchive</a> 将模型工件（训练好的模型检查点和加载和运行模型所需的所有其他文件）和处理器打包成“.mar”文件，并将其放置在模型存储中。</li>
+  <li><a href="https://github.com/pytorch/serve/blob/master/docs/getting_started.md">开始部署您的模型 </a>.</li>
+  <li><a href="https://github.com/pytorch/serve/blob/master/docs/getting_started.md#get-predictions-from-a-model">运行推理 </a>。在这里我们将更详细地讨论模型处理器和指标。</li>
+</ol>
+
+<h2 id="model-handlers">模型处理器</h2>
+
+<p>Torchserve 在后台使用处理器来加载模型、预处理接收到的数据、运行推理和后处理响应。Torchserve 中的处理器是一个包含所有模型初始化、预处理、推理和后处理逻辑的 <strong>Python 脚本 </strong>。</p>
+
+<p>Torchserve 为图像分类、分割、目标检测和文本分类等多种应用提供开箱即用的处理器。它还支持自定义处理器，以防默认处理器不支持您的用例。</p>
+
+<p>它在自定义处理器方面提供了极大的灵活性，这使得 Torchserve 成为了一个多框架的<strong>服务工具 。自定义处理器允许您定义自定义逻辑来初始化模型，这些模型还可以用于加载来自其他框架（如 ONNX）的模型。</strong></p>
+
+<p>Torchserve <strong>handler</strong> 由四个主要 <strong> 函数 </strong> 组成，分别是 <strong>initialize</strong>、<strong>preprocess</strong>、<strong>inference</strong> 和 <strong>postprocess</strong>，每个函数都返回一个列表。下面的代码片段展示了自定义 handler 的一个示例。<strong> 自定义 handler 继承自 </strong> Torchserve 中的 <strong>BaseHandler</strong>，并且可以 <strong> 重写 </strong> 任何 <strong> 主要</strong><strong>函数 </strong>。以下是用于加载 <a href="https://github.com/facebookresearch/detectron2">Detectron2</a> 模型进行图像检测的 handler 示例，此模型已导出为 Torchscript，并使用 model.half()以 FP16 运行推理，详细信息将在本帖的另一 <a href=""> 部分 </a> 中解释。</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="k">class</span> <span class="nc">MyModelHandler</span><span class="p">(</span><span class="n">BaseHandler</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">initialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">manifest</span> <span class="o">=</span> <span class="n">ctx</span><span class="p">.</span><span class="n">manifest</span>
+        <span class="n">properties</span> <span class="o">=</span> <span class="n">ctx</span><span class="p">.</span><span class="n">system_properties</span>
+        <span class="n">model_dir</span> <span class="o">=</span> <span class="n">properties</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"model_dir"</span><span class="p">)</span>
+        <span class="n">serialized_file</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">manifest</span><span class="p">[</span><span class="s">"model"</span><span class="p">][</span><span class="s">"serializedFile"</span><span class="p">]</span>
+        <span class="n">model_pt_path</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">model_dir</span><span class="p">,</span> <span class="n">serialized_file</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="p">.</span><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">device</span><span class="p">(</span>
+        <span class="s">"cuda:"</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">properties</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"gpu_id"</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">torch</span><span class="p">.</span><span class="n">cuda</span><span class="p">.</span><span class="n">is_available</span><span class="p">()</span> <span class="ow">and</span> <span class="n">properties</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"gpu_id"</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span>
+        <span class="k">else</span> <span class="s">"cpu"</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="p">.</span><span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">jit</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">model_pt_path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="bp">self</span><span class="p">.</span><span class="n">device</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="p">.</span><span class="n">model</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">model</span><span class="p">.</span><span class="n">half</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">preprocess</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+
+        <span class="n">inputs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">request</span> <span class="ow">in</span> <span class="n">batch</span><span class="p">:</span>
+
+            <span class="n">request_body</span> <span class="o">=</span> <span class="n">request</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="s">"body"</span><span class="p">)</span>
+
+            <span class="n">input_</span> <span class="o">=</span> <span class="n">io</span><span class="p">.</span><span class="n">BytesIO</span><span class="p">(</span><span class="n">request_body</span><span class="p">)</span>
+            <span class="n">image</span> <span class="o">=</span> <span class="n">cv2</span><span class="p">.</span><span class="n">imdecode</span><span class="p">(</span><span class="n">np</span><span class="p">.</span><span class="n">fromstring</span><span class="p">(</span><span class="n">input_</span><span class="p">.</span><span class="n">read</span><span class="p">(),</span> <span class="n">np</span><span class="p">.</span><span class="n">uint8</span><span class="p">),</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="nb">input</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">Tensor</span><span class="p">(</span><span class="n">image</span><span class="p">).</span><span class="n">permute</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="nb">input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">.</span><span class="n">to</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">device</span><span class="p">)</span>
+            <span class="nb">input</span> <span class="o">=</span> <span class="nb">input</span><span class="p">.</span><span class="n">half</span><span class="p">()</span>
+            <span class="n">inputs</span><span class="p">.</span><span class="n">append</span><span class="p">({</span><span class="s">"image"</span><span class="p">:</span> <span class="nb">input</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="n">inputs</span>
+
+    <span class="k">def</span> <span class="nf">inference</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="n">inputs</span><span class="p">):</span>
+        <span class="n">predictions</span> <span class="o">=</span> <span class="bp">self</span><span class="p">.</span><span class="n">model</span><span class="p">(</span><span class="o">**</span><span class="n">inputs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">predictions</span>
+
+    <span class="k">def</span> <span class="nf">postprocess</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">):</span>
+        <span class="n">responses</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">inference_output</span> <span class="ow">in</span> <span class="n">inference_outputs</span><span class="p">:</span>
+            <span class="n">responses_json</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s">'classes'</span><span class="p">:</span> <span class="n">inference_output</span><span class="p">[</span><span class="s">'pred_classes'</span><span class="p">].</span><span class="n">tolist</span><span class="p">(),</span>
+            <span class="s">'scores'</span><span class="p">:</span> <span class="n">inference_output</span><span class="p">[</span><span class="s">'scores'</span><span class="p">].</span><span class="n">tolist</span><span class="p">(),</span>
+            <span class="s">"boxes"</span><span class="p">:</span> <span class="n">inference_output</span><span class="p">[</span><span class="s">'pred_boxes'</span><span class="p">].</span><span class="n">tolist</span><span class="p">()</span>
+            <span class="p">}</span>
+            <span class="n">responses</span><span class="p">.</span><span class="n">append</span><span class="p">(</span><span class="n">json</span><span class="p">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">responses_json</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">responses</span>
+</code></pre></div></div>
+
+<h2 id="metrics">指标</h2>
+
+<p>在生产环境中部署模型时，一个重要的组件是能够监控它们。<strong>Torchserve</strong> 会定期收集系统级 <strong> 指标 </strong>，并且允许添加 <strong> 自定义指标 </strong>。</p>
+
+<p><strong><a href="https://github.com/pytorch/serve/blob/master/docs/metrics.md#system-metrics">系统级指标</a></strong>包括主机机器的 CPU 利用率、可用和已用磁盘空间以及内存，以及不同响应代码（例如 200-300、400-500 和 500 以上）的请求数量。<strong> 自定义指标</strong>可以如<a href="https://github.com/pytorch/serve/blob/master/docs/metrics.md#custom-metrics-api">此处</a>所述添加到指标中。TorchServe 将这些两组指标记录到不同的日志文件中。默认情况下，指标在以下位置收集：</p>
+
+<ul>
+  <li>系统指标 - log_directory/ts_metrics.log</li>
+  <li>自定义指标 - log directory/model_metrics.log</li>
+</ul>
+
+<p>如前所述，TorchServe 还公开了<a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md">指标 API</a>，默认监听端口 8082，允许用户查询和监控收集的指标。默认的指标端点返回 Prometheus 格式的指标。您可以使用 curl 请求查询指标，或将 <a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md#prometheus-server">Prometheus 服务器</a>指向端点，并使用 <a href="https://github.com/pytorch/serve/blob/master/docs/metrics_api.md#grafana">Grafana</a> 进行仪表板。</p>
+
+<p>在服务模型时，您可以使用以下 curl 请求查询指标：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>curl http://127.0.0.1:8082/metrics
+</code></pre></div></div>
+
+<p>如果您想导出已记录的指标，请参考此<a href="https://github.com/google/mtail">示例 </a>，该示例使用 mtail 将指标导出到 Prometheus。在仪表板上跟踪这些指标，可以帮助您监控性能回归，这些回归可能在离线基准测试运行期间是零星的或难以发现。</p>
+
+<h2 id="what-to-consider-for-tuning-performance-of-a-model-in-production">调整生产中模型性能时需要考虑的因素</h2>
+
+<p>图 1 中建议的工作流程是关于如何在生产中使用 Torchserve 进行模型部署的一般思路。</p>
+
+<p>在许多情况下，在生产中部署模型是针对 <strong> 优化</strong><strong>基于 </strong> <strong> 吞吐量 </strong> 或 <strong> 延迟 </strong> 服务等级协议（<strong>SLA</strong>）的。通常，<strong> 实时</strong><strong>应用 </strong> 更关注 <strong> 延迟 </strong>，而 <strong> 离线</strong><strong>应用 </strong> 可能更关注更高的 <strong id="10"> 吞吐量 </strong>。</p>
+
+<p>影响生产中服务模型性能的主要因素有很多。特别是，我们在这里关注使用 Torchserve 部署 Pytorch 模型，然而，这些因素大多也适用于其他框架的模型。</p>
+
+<ul>
+  <li><strong>模型优化 </strong>：这是将模型部署到生产前的预步骤。这是一个非常广泛的讨论，我们将在一系列未来的博客中深入探讨。这包括量化、剪枝以减小模型大小、使用中间表示（IR 图）如 Pytorch 中的 Torchscript、内核融合等多种技术。目前，<a href="https://github.com/msaroufim/torchprep">torchprep</a> 提供了许多这些技术作为 CLI 工具。</li>
+  <li><strong>批量推理：</strong> 这指的是将多个输入输入到模型中，虽然在训练过程中这是必要的，但在推理时间管理成本方面也非常有帮助。硬件加速器针对并行性进行了优化，批处理有助于充分利用计算能力，通常会导致更高的吞吐量。推理的主要区别在于，你不能等待太长时间从客户端填充一个批次，我们称之为动态批处理。</li>
+  <li>
+    <p><strong>工作进程数量：</strong> Torchserve 使用工作进程来提供服务。Torchserve 的工作进程是 Python 进程，它们持有模型权重的副本以进行推理。工作进程太少意味着你没有充分利用并行性，但太多可能会导致工作进程竞争并降低端到端性能。</p>
+  </li>
+  <li><strong>硬件：</strong> 根据模型、应用和延迟、吞吐量预算选择合适的硬件。这可能是 Torchserve 中支持的<strong>硬件</strong>之一，<strong>CPU、GPU、AWS Inferentia</strong>。某些硬件配置旨在实现最佳性能，而其他配置则更适合成本效益推理。从我们的实验中我们发现，GPU 在较大的批量大小上表现最佳，而合适的 CPU 和 AWS Inferentia 在较小的批量大小和低延迟方面可以更加经济高效。</li>
+</ul>
+
+<h2 id="best-practices-for-performance-tuning-on-torchserve">Torchserve 性能调优的最佳实践</h2>
+
+<p>为了在 Torchserve 上提供最佳性能，我们在此分享一些最佳实践。Torchserve 提供了一个<a href="https://github.com/pytorch/serve/tree/c87bfec8916d340de5de5810b14a016049b0e395/benchmarks#benchmarking-with-apache-bench">基准测试</a>套件，它提供了有价值的见解，有助于在不同选择上做出明智的决定，详情如下。</p>
+
+<ul>
+  <li>首先优化您的模型 <strong>，Pytorch 模型优化<a href="https://maskerprc.github.io/tutorials/">教程 </a>。模型优化选择也与所选择的 <strong> 硬件 </strong> 密切相关。我们将在另一篇博客文章中更详细地讨论这个问题。</strong></li>
+  <li><strong>选择</strong>模型部署的 <strong> 硬件 </strong> 可能与延迟、吞吐量和每推理成本密切相关。根据模型大小和应用，这可能会变化，对于一些模型，例如计算机视觉模型，在 CPU 上生产运行在历史上并不经济。然而，通过拥有像最近添加到 Torchserve 中的 <a href="https://github.com/pytorch/serve/blob/c87bfec8916d340de5de5810b14a016049b0e395/examples/intel_extension_for_pytorch/README.md">IPEX</a> 这样的优化，这已经变得更加经济实惠，并且具有成本效益，您可以在这项调查<a href="https://maskerprc.github.io/tutorials/intermediate/torchserve_with_ipex.html">案例研究</a>中了解更多信息。</li>
+  <li>
+    <p>Torchserve 中的 <strong> 工作者 </strong> 是 Python 进程，提供并行性，设置工作者数量应谨慎进行。默认情况下，Torchserve 启动的工作者数量等于主机的 VCPUs 或可用的 GPU 数量，这可能会给 Torchserve 启动增加相当多的时间。</p>
+
+    <p>Torchserve 提供了一个<a href="https://github.com/pytorch/serve/blob/c87bfec8916d340de5de5810b14a016049b0e395/docs/configuration.md#config-model">配置属性</a>来设置工作进程的数量。为了通过<strong>高效的并行性通过多个工作进程并避免它们在资源上竞争，我们作为基准推荐以下设置在 CPU 和 GPU 上：</strong></p>
+
+    <p><strong>CPU</strong>：在处理器中，先执行 <code class="language-plaintext highlighter-rouge">torch.set_num_threads(1)</code> 然后设置工作进程数为<code class="language-plaintext highlighter-rouge">物理核心数/2</code>。但最佳线程配置可以通过利用 Intel CPU 启动脚本来实现。</p>
+
+    <p><strong>GPU</strong>：可以通过 config.properties 中的 <a href="https://github.com/pytorch/serve/blob/c87bfec8916d340de5de5810b14a016049b0e395/docs/configuration.md#limit-gpu-usage">number_gpus</a> 设置可用的 GPU 数量。Torchserve 使用轮询算法将工作进程分配给 GPU。我们建议按照以下设置工作进程数。 <code class="language-plaintext highlighter-rouge">Number of worker = (Number of available GPUs) / (Number of Unique Models). </code> 注意，预 Ampere 的 GPU 与多实例 GPU 不提供任何资源隔离。</p>
+  </li>
+  <li><strong>批处理大小</strong>会直接影响到延迟和吞吐量。为了更好地利用计算资源，批处理大小需要增加。然而，延迟和吞吐量之间存在权衡。 <strong> 较大的批处理大小</strong>可以 <strong> 提高 </strong> <strong> 吞吐量 </strong>，但同时也导致更高的延迟。在 Torchserve 中可以通过两种方式设置批处理大小，一种是通过 config.properties 中的<a href="https://github.com/pytorch/serve/blob/c87bfec8916d340de5de5810b14a016049b0e395/docs/configuration.md#config-model">模型配置 </a>，另一种是在注册模型时使用<a href="https://github.com/pytorch/serve/blob/c87bfec8916d340de5de5810b14a016049b0e395/docs/management_api.md#scale-workers">管理 API</a>。</li>
+</ul>
+
+<p>在下一节中，我们将使用 Torchserve 基准测试套件来确定模型优化、硬件、工作者和批处理大小的最佳组合。</p>
+
+<h2 id="animated-drawings-performance-tuning">动画绘图性能调优</h2>
+
+<p>要使用 Torchserve 基准测试套件，首先我们需要一个归档文件，即上面讨论过的“.mar”文件，它包含模型、处理器以及所有其他用于加载和运行推理的工件。动画绘图使用 Detectron2 的 Mask-RCNN 实现作为目标检测模型。</p>
+
+<h3 id="how-to-run-benchmark-suite">如何运行基准测试套件</h3>
+
+<p>在 Torchserve 中的<a href="https://github.com/pytorch/serve/tree/master/benchmarks#auto-benchmarking-with-apache-bench">自动化基准测试套件</a>允许您使用不同的设置（包括批量大小和工作者数量）对多个模型进行基准测试，并最终为您生成报告。要开始：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git clone https://github.com/pytorch/serve.git
+
+cd serve/benchmarks
+
+pip install -r requirements-ab.txt
+
+apt-get install apache2-utils
+</code></pre></div></div>
+
+<p>模型级别的设置可以在一个类似于 yaml 的文件中进行配置</p>
+
+<div class="language-yaml highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
+<span class="na">Model_name</span><span class="pi">:</span>
+    <span class="na">eager_mode</span><span class="pi">:</span>
+        <span class="na">benchmark_engine</span><span class="pi">:</span> <span class="s2">"</span><span class="s">ab"</span>
+        <span class="na">url</span><span class="pi">:</span> <span class="s2">"</span><span class="s">Path</span><span class="nv"> </span><span class="s">to</span><span class="nv"> </span><span class="s">.mar</span><span class="nv"> </span><span class="s">file"</span>
+        <span class="na">workers</span><span class="pi">:</span>
+            <span class="pi">-</span> <span class="m">1</span>
+            <span class="pi">-</span> <span class="m">4</span>
+        <span class="na">batch_delay</span><span class="pi">:</span> <span class="m">100</span>
+        <span class="na">batch_size</span><span class="pi">:</span>
+            <span class="pi">-</span> <span class="m">1</span>
+            <span class="pi">-</span> <span class="m">2</span>
+            <span class="pi">-</span> <span class="m">4</span>
+            <span class="pi">-</span> <span class="m">8</span>
+        <span class="na">requests</span><span class="pi">:</span> <span class="m">10000</span>
+        <span class="na">concurrency</span><span class="pi">:</span> <span class="m">10</span>
+        <span class="na">input</span><span class="pi">:</span> <span class="s2">"</span><span class="s">Path</span><span class="nv"> </span><span class="s">to</span><span class="nv"> </span><span class="s">model</span><span class="nv"> </span><span class="s">input"</span>
+        <span class="na">backend_profiling</span><span class="pi">:</span> <span class="s">False</span>
+        <span class="na">exec_env</span><span class="pi">:</span> <span class="s2">"</span><span class="s">local"</span>
+        <span class="na">processors</span><span class="pi">:</span>
+            <span class="pi">-</span> <span class="s2">"</span><span class="s">cpu"</span>
+            <span class="pi">-</span> <span class="s2">"</span><span class="s">gpus"</span><span class="pi">:</span> <span class="s2">"</span><span class="s">all"</span>
+
+</code></pre></div></div>
+
+<p>此 yaml 文件将在<a href="https://github.com/pytorch/serve/blob/master/benchmarks/benchmark_config_template.yaml#L12">基准配置模板 </a>.yaml 文件中引用，该文件包含生成报告的其他设置，并且可以与 AWS 云监控一起使用进行日志记录。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>python benchmarks/auto_benchmark.py --input benchmark_config_template.yaml
+</code></pre></div></div>
+
+<p>运行 <strong> 基准测试 </strong>，结果将写入“csv”文件，可在“_ /tmp/benchmark/ab_report.csv_”和完整报告“/tmp/ts_benchmark/report.md”中找到。它将包括 Torchserve 平均延迟、模型 P99 延迟、吞吐量、并发数、请求数、处理器时间以及其他一些指标。在这里，我们关注一些重要的跟踪指标，以调整性能，这些指标包括，<strong> 并发数 </strong>、<strong> 模型 P99</strong> 延迟、<strong> 吞吐量 </strong>。我们特别关注这些数字与 <strong> 组合 </strong> <strong> 批处理大小 </strong>、使用的 <strong> 设备、工作者数量 </strong> 以及是否进行了 <strong> 模型优化 </strong>。</p>
+
+<p>此模型的 <strong> 延迟 SLA</strong> 已设置为 <strong>100 毫秒 </strong>，这是一个实时应用程序，正如我们之前讨论的，延迟更为关键，而 <strong> 吞吐量 </strong> 理想情况下应尽可能高，同时不违反 <strong> 延迟 SLA</strong>。</p>
+
+<p>通过搜索空间，在不同批大小（1-32）、工作线程数量（1-16）和设备（CPU、GPU）的情况下，我们进行了一系列实验，并在下表中总结了最佳结果。</p>
+
+<table>
+  <tbody><tr>
+   <td>设备</td>
+   <td>并发</td>
+   <td># 请求</td>
+   <td>#workers
+   </td>
+   <td>批次大小</td>
+   <td>有效载荷/图像</td>
+   <td>优化</td>
+   <td>吞吐量</td>
+   <td>延迟 P99</td>
+  </tr>
+  <tr>
+   <td>CPU
+   </td>
+   <td>10
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>小型</td>
+   <td>无效</td>
+   <td>3.45
+   </td>
+   <td>305.3 毫秒</td>
+  </tr>
+  <tr>
+   <td>CPU
+   </td>
+   <td>1
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>小型</td>
+   <td>无效</td>
+   <td>3.45
+   </td>
+   <td>291.8 毫秒</td>
+  </tr>
+  <tr>
+   <td>GPU
+   </td>
+   <td>10
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>小</td>
+   <td>无效</td>
+   <td>41.05
+   </td>
+   <td>25.48 毫秒</td>
+  </tr>
+  <tr>
+   <td>GPU
+   </td>
+   <td>1
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>1
+   </td>
+   <td>小</td>
+   <td>无效</td>
+   <td>42.21
+   </td>
+   <td>23.6 毫秒</td>
+  </tr>
+  <tr>
+   <td>GPU
+   </td>
+   <td>10
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>4
+   </td>
+   <td>小</td>
+   <td>无效</td>
+   <td>54.78
+   </td>
+   <td>73.62 毫秒</td>
+  </tr>
+  <tr>
+   <td>GPU
+   </td>
+   <td>10
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>4
+   </td>
+   <td>小</td>
+   <td>model.half()
+   </td>
+   <td>78.62
+   </td>
+   <td>50.69 毫秒</td>
+  </tr>
+  <tr>
+   <td>GPU
+   </td>
+   <td>10
+   </td>
+   <td>1000
+   </td>
+   <td>1
+   </td>
+   <td>8
+   </td>
+   <td>小型</td>
+   <td>model.half()
+   </td>
+   <td>85.29
+   </td>
+   <td>94.4 毫秒</td>
+  </tr>
+</tbody></table>
+
+<p>在所有尝试过的批处理大小、并发性和工作者数量设置下，该模型在 CPU 上的延迟没有达到服务等级协议（SLA），实际上高出了约 13 倍。</p>
+
+<p><strong>将</strong>模型服务<strong>迁移</strong>到 GPU，可以立即<strong>提高</strong>延迟，从 305 毫秒降低到 23.6 毫秒，约**提高 13 倍**。</p>
+
+<p>我们可以为该模型进行的<strong>最简单</strong>的优化之一是将它的精度降低到 <strong>fp16</strong>，这是一个单行代码（<strong>model.half()</strong>），可以将模型的 P99 延迟**降低**32%，并且几乎同样程度地提高吞吐量。</p>
+
+<p>可能还有其他优化可以通过 Torchscripting 模型来实现，或者使用 <a href="https://github.com/pytorch/pytorch/blob/master/torch/jit/_freeze.py#L168">optimize_for_inference</a> 或其他技巧，包括 ONNX 或 TensorRT 运行时优化，这些优化利用了激进的融合，但这些内容超出了本文的范围。我们将在另一篇博文中讨论模型优化。</p>
+
+<p>我们发现无论是 CPU 还是 GPU，设置**number of workers=1**在这个情况下效果最好。</p>
+
+<ul>
+  <li>将模型迁移到 GPU，使用 <strong>number of workers = 1</strong>，以及 <strong>batch size = 1</strong>，与 CPU 相比，提高了 <strong>Throughput ~12x</strong>，并且降低了 <strong>latency ~13x。</strong></li>
+  <li>将模型迁移到 GPU，使用 <strong>model.half()</strong>，<strong>number of workers = 1</strong>，以及 <strong>batch size = 8</strong> 在吞吐量和可接受的延迟方面取得了最佳结果。<strong>Throughput</strong> 比 CPU 提高了 <strong>~25x</strong>，同时延迟仍然满足服务等级协议（94.4ms）。</li>
+</ul>
+
+<p><em>注意：如果您正在运行基准测试套件，请确保您设置了适当的 <code class="language-plaintext highlighter-rouge">batch_delay</code> 并将请求的并发数设置为与您的批量大小成比例的数字。这里的并发数指的是同时发送到服务器的请求数量。</em></p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>在本文中，我们讨论了 Torchserve 暴露的考虑因素和旋钮，以调整生产中的性能。我们讨论了 Torchserve 基准测试套件作为调整性能和获取关于模型优化、硬件选择和成本的一般见解的手段。我们使用了 Animated Drawings 应用程序作为案例研究，该应用程序使用 Detectron2 的 Mask-RCNN 模型，以展示如何使用基准测试套件进行性能调整。</p>
+
+<p>有关 Torchserve 性能调整的更多详细信息，请参阅我们的文档<a href="https://github.com/pytorch/serve/blob/master/docs/performance_guide.md">此处 </a>。如有任何进一步的问题和反馈，请随时在 <a href="https://github.com/pytorch/serve/issues">Torchserve 仓库</a>上提交工单。</p>
+
+<h3 id="acknowledgement">致谢</h3>
+
+<p>我们想感谢 Somya Jain（Meta）、Christopher Gustave（Meta）在撰写本博客的许多步骤中提供的巨大支持和指导，以及为 Sketch Animator 工作流程提供见解。此外，特别感谢来自 AWS 的<a href="https://www.linkedin.com/in/li-ning-7274604/">李宁</a>在使 Torchserve 的性能调优通过自动基准测试套件变得更加容易方面付出的巨大努力。</p>
+
+<style>
+
+    td{
+        border: 1px solid black;
+    }
+    
+    /* article.pytorch-article table tr td:first-of-type{
+        padding: 0.3125rem;
+    }
+
+    article.pytorch-article table td {
+    padding: 0.3125rem;
+    } */
+
+   li a:focus, li a:hover, li a:active{
+    cursor: pointer;
+    text-decoration: underline;
+    }
+
+    ol a:hover, ol a:active{
+    cursor: pointer;
+    text-decoration: underline;
+    }
+
+}
+
+</style>
+
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

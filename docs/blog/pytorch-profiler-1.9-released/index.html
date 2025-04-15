@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      What’s New in PyTorch Profiler 1.9? | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="PyTorch Profiler v1.9 has been released! The goal of this new release (previous PyTorch Profiler release) is to provide you with new state-of-the-art tools to help diagnose and fix machine learning performance issues regardless of whether you are working on one or numerous machines. The objective is to target the execution steps that are the most costly in time and/or memory, and visualize the work load distribution between GPUs and CPUs.
+
+Here is a summary of the five major features being released:
+
+
+  Distributed Training View: This helps you understand how much time and memory is consumed in your distributed training job. Many issues occur when you take a training model and split the load into worker nodes to be run in parallel as it can be a black box. The overall model goal is to speed up model training. This distributed training view will help you diagnose and debug issues within individual nodes.
+  Memory View: This view allows you to understand your memory usage better. This tool will help you avoid the famously pesky Out of Memory error by showing active memory allocations at various points of your program run.
+  GPU Utilization Visualization: This tool helps you make sure that your GPU is being fully utilized.
+  Cloud Storage Support: Tensorboard plugin can now read profiling data from Azure Blob Storage, Amazon S3, and Google Cloud Platform.
+  Jump to Source Code: This feature allows you to visualize stack tracing information and jump directly into the source code. This helps you quickly optimize and iterate on your code based on your profiling results.
+
+
+Getting Started with PyTorch Profiling Tool
+PyTorch includes a profiling functionality called « PyTorch Profiler ». The PyTorch Profiler tutorial can be found here.
+
+To instrument your PyTorch code for profiling, you must:
+
+$ pip install torch-tb-profiler
+
+import torch.profiler as profiler
+With profiler.profile(XXXX)
+
+
+Comments:
+
+• For CUDA and CPU profiling, see below:
+with torch.profiler.profile( 
+activities=[ 
+torch.profiler.ProfilerActivity.CPU, 
+torch.profiler.ProfilerActivity.CUDA], 
+
+
+•	With profiler.record_function(“$NAME”): allows putting a decorator (a tag associated to a name) for a block of function
+
+•	Profile_memory=True parameter under profiler.profile allows you to profile CPU and GPU memory footprint
+
+Visualizing PyTorch Model Performance using PyTorch Profiler
+
+Distributed Training
+
+Recent advances in deep learning argue for the value of large datasets and large models, which requires you to scale out model training to more computational resources. Distributed Data Parallel (DDP) and NVIDIA Collective Communications Library (NCCL) are the widely adopted paradigms in PyTorch for accelerating your deep learning training.
+
+In this release of PyTorch Profiler, DDP with NCCL backend is now supported.
+
+
+  
+
+
+Computation/Communication Overview
+
+In the Computation/Communication overview under the Distributed training view, you can observe the computation-to-communication ratio of each worker and [load balancer](https://en.wikipedia.org/wiki/Load_balancing_(computing) nodes between worker as measured by granularity.
+
+Scenario 1:
+
+If the computation and overlapping time of one worker is much larger than the others, this may suggest an issue in the workload balance or worker being a straggler. Computation is the sum of kernel time on GPU minus the overlapping time. The overlapping time is the time saved by interleaving communications during computation. The more overlapping time represents better parallelism between computation and communication. Ideally the computation and communication completely overlap with each other. Communication is the total communication time minus the overlapping time. The example image below displays how this scenario appears on Tensorboard.
+
+
+  
+  Figure: A straggler example
+
+
+Scenario 2:
+
+If there is a small batch size (i.e. less computation on each worker) or the data to be transferred is large, the computation-to-communication may also be small and be seen in the profiler with low GPU utilization and long waiting times. This computation/communication view will allow you to diagnose your code to reduce communication by adopting gradient accumulation, or to decrease the communication proportion by increasing batch size. DDP communication time depends on model size. Batch size has no relationship with model size. So increasing batch size could make computation time longer and make computation-to-communication ratio bigger.
+
+Synchronizing/Communication Overview
+
+In the Synchronizing/Communication view, you can observe the efficiency of communication. This is done by taking the step time minus computation and communication time. Synchronizing time is part of the total communication time for waiting and synchronizing with other workers. The Synchronizing/Communication view includes initialization, data loader, CPU computation, and so on Insights like what is the ratio of total communication is really used for exchanging data and what is the idle time of waiting for data from other workers can be drawn from this view.
+
+
+  
+
+
+For example, if there is an inefficient workload balance or straggler issue, you’ll be able to identify it in this Synchronizing/Communication view. This view will show several workers’ waiting time being longer than others.
+
+
+  
+
+
+This table view above allows you to see the detailed statistics of all communication ops in each node. This allows you to see what operation types are being called, how many times each op is called, what is the size of the data being transferred by each op, etc.
+
+Memory View:
+
+This memory view tool helps you understand the hardware resource consumption of the operators in your model. Understanding the time and memory consumption on the operator-level allows you to resolve performance bottlenecks and in turn, allow your model to execute faster. Given limited GPU memory size, optimizing the memory usage can:
+
+
+  Allow bigger model which can potentially generalize better on end level tasks.
+  Allow bigger batch size. Bigger batch sizes increase the training speed.
+
+
+The profiler records all the memory allocation during the profiler interval. Selecting the “Device” will allow you to see each operator’s memory usage on the GPU side or host side. You must enable profile_memory=True to generate the below memory data as shown here.
+
+With torch.profiler.profile(
+Profiler_memory=True # this will take 1 – 2 minutes to complete. 
+)
+
+
+Important Definitions:
+
+•	“Size Increase” displays the sum of all allocation bytes and minus all the memory release bytes.
+
+•	“Allocation Size” shows the sum of all allocation bytes without considering the memory release.
+
+•	“Self” means the allocated memory is not from any child operators, instead by the operator itself.
+
+
+  
+
+
+GPU Metric on Timeline:
+
+This feature will help you debug performance issues when one or more GPU are underutilized. Ideally, your program should have high GPU utilization (aiming for 100% GPU utilization), minimal CPU to GPU communication, and no overhead.
+
+Overview:
+The overview page highlights the results of three important GPU usage metrics at different levels (i.e. GPU Utilization, Est. SM Efficiency, and Est. Achieved Occupancy). Essentially, each GPU has a bunch of SM each with a bunch of warps that can execute a bunch of threads concurrently. Warps execute a bunch because the amount depends on the GPU. But at a high level, this GPU Metric on Timeline tool allows you can see the whole stack, which is useful.
+
+If the GPU utilization result is low, this suggests a potential bottleneck is present in your model. Common reasons:
+
+•Insufficient parallelism in kernels (i.e., low batch size)
+
+•Small kernels called in a loop. This is to say the launch overheads are not amortized
+
+•CPU or I/O bottlenecks lead to the GPU not receiving enough work to keep busy
+
+Looking of the overview page where the performance recommendation section is where you’ll find potential suggestions on how to increase that GPU utilization. In this example, GPU utilization is low so the performance recommendation was to increase batch size. Increasing batch size 4 to 32, as per the performance recommendation, increased the GPU Utilization by 60.68%.
+
+GPU Utilization: the step interval time in the profiler when a GPU engine was executing a workload. The high the utilization %, the better. The drawback of using GPU utilization solely to diagnose performance bottlenecks is it is too high-level and coarse. It won’t be able to tell you how many Streaming Multiprocessors are in use. Note that while this metric is useful for detecting periods of idleness, a high value does not indicate efficient use of the GPU, only that it is doing anything at all. For instance, a kernel with a single thread running continuously will get a GPU Utilization of 100%
+
+Estimated Stream Multiprocessor Efficiency (Est. SM Efficiency) is a finer grained metric, it indicates what percentage of SMs are in use at any point in the trace This metric reports the percentage of time where there is at least one active warp on a SM and those that are stalled (NVIDIA doc). Est. SM Efficiency also has it’s limitation. For instance, a kernel with only one thread per block can’t fully use each SM. SM Efficiency does not tell us how busy each SM is, only that they are doing anything at all, which can include stalling while waiting on the result of a memory load. To keep an SM busy, it is necessary to have a sufficient number of ready warps that can be run whenever a stall occurs
+
+Estimated Achieved Occupancy (Est. Achieved Occupancy) is a layer deeper than Est. SM Efficiency and GPU Utilization for diagnosing performance issues. Estimated Achieved Occupancy indicates how many warps can be active at once per SMs. Having a sufficient number of active warps is usually key to achieving good throughput. Unlike GPU Utilization and SM Efficiency, it is not a goal to make this value as high as possible. As a rule of thumb, good throughput gains can be had by improving this metric to 15% and above. But at some point you will hit diminishing returns. If the value is already at 30% for example, further gains will be uncertain. This metric reports the average values of all warp schedulers for the kernel execution period (NVIDIA doc). The larger the Est. Achieve Occupancy value is the better.
+
+
+  
+  Overview details: Resnet50_batchsize4
+
+
+
+  
+  Overview details: Resnet50_batchsize32
+
+
+Kernel View
+The kernel has “Blocks per SM” and “Est. Achieved Occupancy” which is a great tool to compare model runs.
+
+
+  
+
+
+Mean Blocks per SM:
+Blocks per SM = Blocks of this kernel / SM number of this GPU. If this number is less than 1, it indicates the GPU multiprocessors are not fully utilized. “Mean Blocks per SM” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Mean Est. Achieved Occupancy:
+Est. Achieved Occupancy is defined as above in overview. “Mean Est. Achieved Occupancy” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Trace View
+This trace view displays a timeline that shows the duration of operators in your model and which system executed the operation. This view can help you identify whether the high consumption and long execution is because of input or model training. Currently, this trace view shows GPU Utilization and Est. SM Efficiency on a timeline.
+
+
+  
+
+
+GPU utilization is calculated independently and divided into multiple 10 millisecond buckets. The buckets’ GPU utilization values are drawn alongside the timeline between 0 – 100%. In the above example, the “ProfilerStep5” GPU utilization during thread 28022’s busy time is higher than the following the one during “Optimizer.step”. This is where you can zoom-in to investigate why that is.
+
+
+  
+
+
+From above, we can see the former’s kernels are longer than the later’s kernels. The later’s kernels are too short in execution, which results in lower GPU utilization.
+
+Est. SM Efficiency: Each kernel has a calculated est. SM efficiency between 0 – 100%. For example, the below kernel has only 64 blocks, while the SMs in this GPU is 80. Then its “Est. SM Efficiency” is 64/80, which is 0.8.
+
+
+  
+
+
+Cloud Storage Support
+
+After running pip install tensorboard, to have data be read through these cloud providers, you can now run:
+
+torch-tb-profiler[blob] 
+torch-tb-profiler[gs] 
+torch-tb-profiler[s3] 
+
+pip install torch-tb-profiler[blob], pip install torch-tb-profiler[gs], or pip install torch-tb-profiler[S3] to have data be read through these cloud providers. For more information, please refer to this README.
+
+Jump to Source Code:
+
+One of the great benefits of having both TensorBoard and the PyTorch Profiler being integrated directly in Visual Studio Code (VS Code) is the ability to directly jump to the source code (file and line) from the profiler stack traces. VS Code Python Extension now supports TensorBoard Integration.
+
+Jump to source is ONLY available when Tensorboard is launched within VS Code. Stack tracing will appear on the plugin UI if the profiling with_stack=True. When you click on a stack trace from the PyTorch Profiler, VS Code will automatically open the corresponding file side by side and jump directly to the line of code of interest for you to debug. This allows you to quickly make actionable optimizations and changes to your code based on the profiling results and suggestions.
+
+
+  
+  Gify: Jump to Source using Visual Studio Code Plug In UI 
+
+
+For how to optimize batch size performance, check out the step-by-step tutorial here. PyTorch Profiler is also integrated with PyTorch Lightning and you can simply launch your lightning training jobs with –trainer.profiler=pytorch flag to generate the traces.
+
+What’s Next for the PyTorch Profiler?
+You just saw how PyTorch Profiler can help optimize a model. You can now try the Profiler by pip install torch-tb-profiler to optimize your PyTorch model.
+
+Look out for an advanced version of this tutorial in the future. We are also thrilled to continue to bring state-of-the-art tool to PyTorch users to improve ML performance. We’d love to hear from you. Feel free to open an issue here.
+
+For new and exciting features coming up with PyTorch Profiler, follow @PyTorch on Twitter and check us out on pytorch.org.
+
+Acknowledgements
+
+The author would like to thank the contributions of the following individuals to this piece. From the Facebook side: Geeta Chauhan, Gisle Dankel, Woo Kim, Sam Farahzad, and Mark Saroufim. On the Microsoft side: AI Framework engineers (Teng Gao, Mike Guo, and Yang Gu), Guoliang Hua, and Thuy Nguyen.
+
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="What’s New in PyTorch Profiler 1.9?">
+<meta property="og:description" content="PyTorch Profiler v1.9 has been released! The goal of this new release (previous PyTorch Profiler release) is to provide you with new state-of-the-art tools to help diagnose and fix machine learning performance issues regardless of whether you are working on one or numerous machines. The objective is to target the execution steps that are the most costly in time and/or memory, and visualize the work load distribution between GPUs and CPUs.
+
+Here is a summary of the five major features being released:
+
+
+  Distributed Training View: This helps you understand how much time and memory is consumed in your distributed training job. Many issues occur when you take a training model and split the load into worker nodes to be run in parallel as it can be a black box. The overall model goal is to speed up model training. This distributed training view will help you diagnose and debug issues within individual nodes.
+  Memory View: This view allows you to understand your memory usage better. This tool will help you avoid the famously pesky Out of Memory error by showing active memory allocations at various points of your program run.
+  GPU Utilization Visualization: This tool helps you make sure that your GPU is being fully utilized.
+  Cloud Storage Support: Tensorboard plugin can now read profiling data from Azure Blob Storage, Amazon S3, and Google Cloud Platform.
+  Jump to Source Code: This feature allows you to visualize stack tracing information and jump directly into the source code. This helps you quickly optimize and iterate on your code based on your profiling results.
+
+
+Getting Started with PyTorch Profiling Tool
+PyTorch includes a profiling functionality called « PyTorch Profiler ». The PyTorch Profiler tutorial can be found here.
+
+To instrument your PyTorch code for profiling, you must:
+
+$ pip install torch-tb-profiler
+
+import torch.profiler as profiler
+With profiler.profile(XXXX)
+
+
+Comments:
+
+• For CUDA and CPU profiling, see below:
+with torch.profiler.profile( 
+activities=[ 
+torch.profiler.ProfilerActivity.CPU, 
+torch.profiler.ProfilerActivity.CUDA], 
+
+
+•	With profiler.record_function(“$NAME”): allows putting a decorator (a tag associated to a name) for a block of function
+
+•	Profile_memory=True parameter under profiler.profile allows you to profile CPU and GPU memory footprint
+
+Visualizing PyTorch Model Performance using PyTorch Profiler
+
+Distributed Training
+
+Recent advances in deep learning argue for the value of large datasets and large models, which requires you to scale out model training to more computational resources. Distributed Data Parallel (DDP) and NVIDIA Collective Communications Library (NCCL) are the widely adopted paradigms in PyTorch for accelerating your deep learning training.
+
+In this release of PyTorch Profiler, DDP with NCCL backend is now supported.
+
+
+  
+
+
+Computation/Communication Overview
+
+In the Computation/Communication overview under the Distributed training view, you can observe the computation-to-communication ratio of each worker and [load balancer](https://en.wikipedia.org/wiki/Load_balancing_(computing) nodes between worker as measured by granularity.
+
+Scenario 1:
+
+If the computation and overlapping time of one worker is much larger than the others, this may suggest an issue in the workload balance or worker being a straggler. Computation is the sum of kernel time on GPU minus the overlapping time. The overlapping time is the time saved by interleaving communications during computation. The more overlapping time represents better parallelism between computation and communication. Ideally the computation and communication completely overlap with each other. Communication is the total communication time minus the overlapping time. The example image below displays how this scenario appears on Tensorboard.
+
+
+  
+  Figure: A straggler example
+
+
+Scenario 2:
+
+If there is a small batch size (i.e. less computation on each worker) or the data to be transferred is large, the computation-to-communication may also be small and be seen in the profiler with low GPU utilization and long waiting times. This computation/communication view will allow you to diagnose your code to reduce communication by adopting gradient accumulation, or to decrease the communication proportion by increasing batch size. DDP communication time depends on model size. Batch size has no relationship with model size. So increasing batch size could make computation time longer and make computation-to-communication ratio bigger.
+
+Synchronizing/Communication Overview
+
+In the Synchronizing/Communication view, you can observe the efficiency of communication. This is done by taking the step time minus computation and communication time. Synchronizing time is part of the total communication time for waiting and synchronizing with other workers. The Synchronizing/Communication view includes initialization, data loader, CPU computation, and so on Insights like what is the ratio of total communication is really used for exchanging data and what is the idle time of waiting for data from other workers can be drawn from this view.
+
+
+  
+
+
+For example, if there is an inefficient workload balance or straggler issue, you’ll be able to identify it in this Synchronizing/Communication view. This view will show several workers’ waiting time being longer than others.
+
+
+  
+
+
+This table view above allows you to see the detailed statistics of all communication ops in each node. This allows you to see what operation types are being called, how many times each op is called, what is the size of the data being transferred by each op, etc.
+
+Memory View:
+
+This memory view tool helps you understand the hardware resource consumption of the operators in your model. Understanding the time and memory consumption on the operator-level allows you to resolve performance bottlenecks and in turn, allow your model to execute faster. Given limited GPU memory size, optimizing the memory usage can:
+
+
+  Allow bigger model which can potentially generalize better on end level tasks.
+  Allow bigger batch size. Bigger batch sizes increase the training speed.
+
+
+The profiler records all the memory allocation during the profiler interval. Selecting the “Device” will allow you to see each operator’s memory usage on the GPU side or host side. You must enable profile_memory=True to generate the below memory data as shown here.
+
+With torch.profiler.profile(
+Profiler_memory=True # this will take 1 – 2 minutes to complete. 
+)
+
+
+Important Definitions:
+
+•	“Size Increase” displays the sum of all allocation bytes and minus all the memory release bytes.
+
+•	“Allocation Size” shows the sum of all allocation bytes without considering the memory release.
+
+•	“Self” means the allocated memory is not from any child operators, instead by the operator itself.
+
+
+  
+
+
+GPU Metric on Timeline:
+
+This feature will help you debug performance issues when one or more GPU are underutilized. Ideally, your program should have high GPU utilization (aiming for 100% GPU utilization), minimal CPU to GPU communication, and no overhead.
+
+Overview:
+The overview page highlights the results of three important GPU usage metrics at different levels (i.e. GPU Utilization, Est. SM Efficiency, and Est. Achieved Occupancy). Essentially, each GPU has a bunch of SM each with a bunch of warps that can execute a bunch of threads concurrently. Warps execute a bunch because the amount depends on the GPU. But at a high level, this GPU Metric on Timeline tool allows you can see the whole stack, which is useful.
+
+If the GPU utilization result is low, this suggests a potential bottleneck is present in your model. Common reasons:
+
+•Insufficient parallelism in kernels (i.e., low batch size)
+
+•Small kernels called in a loop. This is to say the launch overheads are not amortized
+
+•CPU or I/O bottlenecks lead to the GPU not receiving enough work to keep busy
+
+Looking of the overview page where the performance recommendation section is where you’ll find potential suggestions on how to increase that GPU utilization. In this example, GPU utilization is low so the performance recommendation was to increase batch size. Increasing batch size 4 to 32, as per the performance recommendation, increased the GPU Utilization by 60.68%.
+
+GPU Utilization: the step interval time in the profiler when a GPU engine was executing a workload. The high the utilization %, the better. The drawback of using GPU utilization solely to diagnose performance bottlenecks is it is too high-level and coarse. It won’t be able to tell you how many Streaming Multiprocessors are in use. Note that while this metric is useful for detecting periods of idleness, a high value does not indicate efficient use of the GPU, only that it is doing anything at all. For instance, a kernel with a single thread running continuously will get a GPU Utilization of 100%
+
+Estimated Stream Multiprocessor Efficiency (Est. SM Efficiency) is a finer grained metric, it indicates what percentage of SMs are in use at any point in the trace This metric reports the percentage of time where there is at least one active warp on a SM and those that are stalled (NVIDIA doc). Est. SM Efficiency also has it’s limitation. For instance, a kernel with only one thread per block can’t fully use each SM. SM Efficiency does not tell us how busy each SM is, only that they are doing anything at all, which can include stalling while waiting on the result of a memory load. To keep an SM busy, it is necessary to have a sufficient number of ready warps that can be run whenever a stall occurs
+
+Estimated Achieved Occupancy (Est. Achieved Occupancy) is a layer deeper than Est. SM Efficiency and GPU Utilization for diagnosing performance issues. Estimated Achieved Occupancy indicates how many warps can be active at once per SMs. Having a sufficient number of active warps is usually key to achieving good throughput. Unlike GPU Utilization and SM Efficiency, it is not a goal to make this value as high as possible. As a rule of thumb, good throughput gains can be had by improving this metric to 15% and above. But at some point you will hit diminishing returns. If the value is already at 30% for example, further gains will be uncertain. This metric reports the average values of all warp schedulers for the kernel execution period (NVIDIA doc). The larger the Est. Achieve Occupancy value is the better.
+
+
+  
+  Overview details: Resnet50_batchsize4
+
+
+
+  
+  Overview details: Resnet50_batchsize32
+
+
+Kernel View
+The kernel has “Blocks per SM” and “Est. Achieved Occupancy” which is a great tool to compare model runs.
+
+
+  
+
+
+Mean Blocks per SM:
+Blocks per SM = Blocks of this kernel / SM number of this GPU. If this number is less than 1, it indicates the GPU multiprocessors are not fully utilized. “Mean Blocks per SM” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Mean Est. Achieved Occupancy:
+Est. Achieved Occupancy is defined as above in overview. “Mean Est. Achieved Occupancy” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Trace View
+This trace view displays a timeline that shows the duration of operators in your model and which system executed the operation. This view can help you identify whether the high consumption and long execution is because of input or model training. Currently, this trace view shows GPU Utilization and Est. SM Efficiency on a timeline.
+
+
+  
+
+
+GPU utilization is calculated independently and divided into multiple 10 millisecond buckets. The buckets’ GPU utilization values are drawn alongside the timeline between 0 – 100%. In the above example, the “ProfilerStep5” GPU utilization during thread 28022’s busy time is higher than the following the one during “Optimizer.step”. This is where you can zoom-in to investigate why that is.
+
+
+  
+
+
+From above, we can see the former’s kernels are longer than the later’s kernels. The later’s kernels are too short in execution, which results in lower GPU utilization.
+
+Est. SM Efficiency: Each kernel has a calculated est. SM efficiency between 0 – 100%. For example, the below kernel has only 64 blocks, while the SMs in this GPU is 80. Then its “Est. SM Efficiency” is 64/80, which is 0.8.
+
+
+  
+
+
+Cloud Storage Support
+
+After running pip install tensorboard, to have data be read through these cloud providers, you can now run:
+
+torch-tb-profiler[blob] 
+torch-tb-profiler[gs] 
+torch-tb-profiler[s3] 
+
+pip install torch-tb-profiler[blob], pip install torch-tb-profiler[gs], or pip install torch-tb-profiler[S3] to have data be read through these cloud providers. For more information, please refer to this README.
+
+Jump to Source Code:
+
+One of the great benefits of having both TensorBoard and the PyTorch Profiler being integrated directly in Visual Studio Code (VS Code) is the ability to directly jump to the source code (file and line) from the profiler stack traces. VS Code Python Extension now supports TensorBoard Integration.
+
+Jump to source is ONLY available when Tensorboard is launched within VS Code. Stack tracing will appear on the plugin UI if the profiling with_stack=True. When you click on a stack trace from the PyTorch Profiler, VS Code will automatically open the corresponding file side by side and jump directly to the line of code of interest for you to debug. This allows you to quickly make actionable optimizations and changes to your code based on the profiling results and suggestions.
+
+
+  
+  Gify: Jump to Source using Visual Studio Code Plug In UI 
+
+
+For how to optimize batch size performance, check out the step-by-step tutorial here. PyTorch Profiler is also integrated with PyTorch Lightning and you can simply launch your lightning training jobs with –trainer.profiler=pytorch flag to generate the traces.
+
+What’s Next for the PyTorch Profiler?
+You just saw how PyTorch Profiler can help optimize a model. You can now try the Profiler by pip install torch-tb-profiler to optimize your PyTorch model.
+
+Look out for an advanced version of this tutorial in the future. We are also thrilled to continue to bring state-of-the-art tool to PyTorch users to improve ML performance. We’d love to hear from you. Feel free to open an issue here.
+
+For new and exciting features coming up with PyTorch Profiler, follow @PyTorch on Twitter and check us out on pytorch.org.
+
+Acknowledgements
+
+The author would like to thank the contributions of the following individuals to this piece. From the Facebook side: Geeta Chauhan, Gisle Dankel, Woo Kim, Sam Farahzad, and Mark Saroufim. On the Microsoft side: AI Framework engineers (Teng Gao, Mike Guo, and Yang Gu), Guoliang Hua, and Thuy Nguyen.
+
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="What’s New in PyTorch Profiler 1.9?">
+<meta name="twitter:description" content="PyTorch Profiler v1.9 has been released! The goal of this new release (previous PyTorch Profiler release) is to provide you with new state-of-the-art tools to help diagnose and fix machine learning performance issues regardless of whether you are working on one or numerous machines. The objective is to target the execution steps that are the most costly in time and/or memory, and visualize the work load distribution between GPUs and CPUs.
+
+Here is a summary of the five major features being released:
+
+
+  Distributed Training View: This helps you understand how much time and memory is consumed in your distributed training job. Many issues occur when you take a training model and split the load into worker nodes to be run in parallel as it can be a black box. The overall model goal is to speed up model training. This distributed training view will help you diagnose and debug issues within individual nodes.
+  Memory View: This view allows you to understand your memory usage better. This tool will help you avoid the famously pesky Out of Memory error by showing active memory allocations at various points of your program run.
+  GPU Utilization Visualization: This tool helps you make sure that your GPU is being fully utilized.
+  Cloud Storage Support: Tensorboard plugin can now read profiling data from Azure Blob Storage, Amazon S3, and Google Cloud Platform.
+  Jump to Source Code: This feature allows you to visualize stack tracing information and jump directly into the source code. This helps you quickly optimize and iterate on your code based on your profiling results.
+
+
+Getting Started with PyTorch Profiling Tool
+PyTorch includes a profiling functionality called « PyTorch Profiler ». The PyTorch Profiler tutorial can be found here.
+
+To instrument your PyTorch code for profiling, you must:
+
+$ pip install torch-tb-profiler
+
+import torch.profiler as profiler
+With profiler.profile(XXXX)
+
+
+Comments:
+
+• For CUDA and CPU profiling, see below:
+with torch.profiler.profile( 
+activities=[ 
+torch.profiler.ProfilerActivity.CPU, 
+torch.profiler.ProfilerActivity.CUDA], 
+
+
+•	With profiler.record_function(“$NAME”): allows putting a decorator (a tag associated to a name) for a block of function
+
+•	Profile_memory=True parameter under profiler.profile allows you to profile CPU and GPU memory footprint
+
+Visualizing PyTorch Model Performance using PyTorch Profiler
+
+Distributed Training
+
+Recent advances in deep learning argue for the value of large datasets and large models, which requires you to scale out model training to more computational resources. Distributed Data Parallel (DDP) and NVIDIA Collective Communications Library (NCCL) are the widely adopted paradigms in PyTorch for accelerating your deep learning training.
+
+In this release of PyTorch Profiler, DDP with NCCL backend is now supported.
+
+
+  
+
+
+Computation/Communication Overview
+
+In the Computation/Communication overview under the Distributed training view, you can observe the computation-to-communication ratio of each worker and [load balancer](https://en.wikipedia.org/wiki/Load_balancing_(computing) nodes between worker as measured by granularity.
+
+Scenario 1:
+
+If the computation and overlapping time of one worker is much larger than the others, this may suggest an issue in the workload balance or worker being a straggler. Computation is the sum of kernel time on GPU minus the overlapping time. The overlapping time is the time saved by interleaving communications during computation. The more overlapping time represents better parallelism between computation and communication. Ideally the computation and communication completely overlap with each other. Communication is the total communication time minus the overlapping time. The example image below displays how this scenario appears on Tensorboard.
+
+
+  
+  Figure: A straggler example
+
+
+Scenario 2:
+
+If there is a small batch size (i.e. less computation on each worker) or the data to be transferred is large, the computation-to-communication may also be small and be seen in the profiler with low GPU utilization and long waiting times. This computation/communication view will allow you to diagnose your code to reduce communication by adopting gradient accumulation, or to decrease the communication proportion by increasing batch size. DDP communication time depends on model size. Batch size has no relationship with model size. So increasing batch size could make computation time longer and make computation-to-communication ratio bigger.
+
+Synchronizing/Communication Overview
+
+In the Synchronizing/Communication view, you can observe the efficiency of communication. This is done by taking the step time minus computation and communication time. Synchronizing time is part of the total communication time for waiting and synchronizing with other workers. The Synchronizing/Communication view includes initialization, data loader, CPU computation, and so on Insights like what is the ratio of total communication is really used for exchanging data and what is the idle time of waiting for data from other workers can be drawn from this view.
+
+
+  
+
+
+For example, if there is an inefficient workload balance or straggler issue, you’ll be able to identify it in this Synchronizing/Communication view. This view will show several workers’ waiting time being longer than others.
+
+
+  
+
+
+This table view above allows you to see the detailed statistics of all communication ops in each node. This allows you to see what operation types are being called, how many times each op is called, what is the size of the data being transferred by each op, etc.
+
+Memory View:
+
+This memory view tool helps you understand the hardware resource consumption of the operators in your model. Understanding the time and memory consumption on the operator-level allows you to resolve performance bottlenecks and in turn, allow your model to execute faster. Given limited GPU memory size, optimizing the memory usage can:
+
+
+  Allow bigger model which can potentially generalize better on end level tasks.
+  Allow bigger batch size. Bigger batch sizes increase the training speed.
+
+
+The profiler records all the memory allocation during the profiler interval. Selecting the “Device” will allow you to see each operator’s memory usage on the GPU side or host side. You must enable profile_memory=True to generate the below memory data as shown here.
+
+With torch.profiler.profile(
+Profiler_memory=True # this will take 1 – 2 minutes to complete. 
+)
+
+
+Important Definitions:
+
+•	“Size Increase” displays the sum of all allocation bytes and minus all the memory release bytes.
+
+•	“Allocation Size” shows the sum of all allocation bytes without considering the memory release.
+
+•	“Self” means the allocated memory is not from any child operators, instead by the operator itself.
+
+
+  
+
+
+GPU Metric on Timeline:
+
+This feature will help you debug performance issues when one or more GPU are underutilized. Ideally, your program should have high GPU utilization (aiming for 100% GPU utilization), minimal CPU to GPU communication, and no overhead.
+
+Overview:
+The overview page highlights the results of three important GPU usage metrics at different levels (i.e. GPU Utilization, Est. SM Efficiency, and Est. Achieved Occupancy). Essentially, each GPU has a bunch of SM each with a bunch of warps that can execute a bunch of threads concurrently. Warps execute a bunch because the amount depends on the GPU. But at a high level, this GPU Metric on Timeline tool allows you can see the whole stack, which is useful.
+
+If the GPU utilization result is low, this suggests a potential bottleneck is present in your model. Common reasons:
+
+•Insufficient parallelism in kernels (i.e., low batch size)
+
+•Small kernels called in a loop. This is to say the launch overheads are not amortized
+
+•CPU or I/O bottlenecks lead to the GPU not receiving enough work to keep busy
+
+Looking of the overview page where the performance recommendation section is where you’ll find potential suggestions on how to increase that GPU utilization. In this example, GPU utilization is low so the performance recommendation was to increase batch size. Increasing batch size 4 to 32, as per the performance recommendation, increased the GPU Utilization by 60.68%.
+
+GPU Utilization: the step interval time in the profiler when a GPU engine was executing a workload. The high the utilization %, the better. The drawback of using GPU utilization solely to diagnose performance bottlenecks is it is too high-level and coarse. It won’t be able to tell you how many Streaming Multiprocessors are in use. Note that while this metric is useful for detecting periods of idleness, a high value does not indicate efficient use of the GPU, only that it is doing anything at all. For instance, a kernel with a single thread running continuously will get a GPU Utilization of 100%
+
+Estimated Stream Multiprocessor Efficiency (Est. SM Efficiency) is a finer grained metric, it indicates what percentage of SMs are in use at any point in the trace This metric reports the percentage of time where there is at least one active warp on a SM and those that are stalled (NVIDIA doc). Est. SM Efficiency also has it’s limitation. For instance, a kernel with only one thread per block can’t fully use each SM. SM Efficiency does not tell us how busy each SM is, only that they are doing anything at all, which can include stalling while waiting on the result of a memory load. To keep an SM busy, it is necessary to have a sufficient number of ready warps that can be run whenever a stall occurs
+
+Estimated Achieved Occupancy (Est. Achieved Occupancy) is a layer deeper than Est. SM Efficiency and GPU Utilization for diagnosing performance issues. Estimated Achieved Occupancy indicates how many warps can be active at once per SMs. Having a sufficient number of active warps is usually key to achieving good throughput. Unlike GPU Utilization and SM Efficiency, it is not a goal to make this value as high as possible. As a rule of thumb, good throughput gains can be had by improving this metric to 15% and above. But at some point you will hit diminishing returns. If the value is already at 30% for example, further gains will be uncertain. This metric reports the average values of all warp schedulers for the kernel execution period (NVIDIA doc). The larger the Est. Achieve Occupancy value is the better.
+
+
+  
+  Overview details: Resnet50_batchsize4
+
+
+
+  
+  Overview details: Resnet50_batchsize32
+
+
+Kernel View
+The kernel has “Blocks per SM” and “Est. Achieved Occupancy” which is a great tool to compare model runs.
+
+
+  
+
+
+Mean Blocks per SM:
+Blocks per SM = Blocks of this kernel / SM number of this GPU. If this number is less than 1, it indicates the GPU multiprocessors are not fully utilized. “Mean Blocks per SM” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Mean Est. Achieved Occupancy:
+Est. Achieved Occupancy is defined as above in overview. “Mean Est. Achieved Occupancy” is weighted average of all runs of this kernel name, using each run’s duration as weight.
+
+Trace View
+This trace view displays a timeline that shows the duration of operators in your model and which system executed the operation. This view can help you identify whether the high consumption and long execution is because of input or model training. Currently, this trace view shows GPU Utilization and Est. SM Efficiency on a timeline.
+
+
+  
+
+
+GPU utilization is calculated independently and divided into multiple 10 millisecond buckets. The buckets’ GPU utilization values are drawn alongside the timeline between 0 – 100%. In the above example, the “ProfilerStep5” GPU utilization during thread 28022’s busy time is higher than the following the one during “Optimizer.step”. This is where you can zoom-in to investigate why that is.
+
+
+  
+
+
+From above, we can see the former’s kernels are longer than the later’s kernels. The later’s kernels are too short in execution, which results in lower GPU utilization.
+
+Est. SM Efficiency: Each kernel has a calculated est. SM efficiency between 0 – 100%. For example, the below kernel has only 64 blocks, while the SMs in this GPU is 80. Then its “Est. SM Efficiency” is 64/80, which is 0.8.
+
+
+  
+
+
+Cloud Storage Support
+
+After running pip install tensorboard, to have data be read through these cloud providers, you can now run:
+
+torch-tb-profiler[blob] 
+torch-tb-profiler[gs] 
+torch-tb-profiler[s3] 
+
+pip install torch-tb-profiler[blob], pip install torch-tb-profiler[gs], or pip install torch-tb-profiler[S3] to have data be read through these cloud providers. For more information, please refer to this README.
+
+Jump to Source Code:
+
+One of the great benefits of having both TensorBoard and the PyTorch Profiler being integrated directly in Visual Studio Code (VS Code) is the ability to directly jump to the source code (file and line) from the profiler stack traces. VS Code Python Extension now supports TensorBoard Integration.
+
+Jump to source is ONLY available when Tensorboard is launched within VS Code. Stack tracing will appear on the plugin UI if the profiling with_stack=True. When you click on a stack trace from the PyTorch Profiler, VS Code will automatically open the corresponding file side by side and jump directly to the line of code of interest for you to debug. This allows you to quickly make actionable optimizations and changes to your code based on the profiling results and suggestions.
+
+
+  
+  Gify: Jump to Source using Visual Studio Code Plug In UI 
+
+
+For how to optimize batch size performance, check out the step-by-step tutorial here. PyTorch Profiler is also integrated with PyTorch Lightning and you can simply launch your lightning training jobs with –trainer.profiler=pytorch flag to generate the traces.
+
+What’s Next for the PyTorch Profiler?
+You just saw how PyTorch Profiler can help optimize a model. You can now try the Profiler by pip install torch-tb-profiler to optimize your PyTorch model.
+
+Look out for an advanced version of this tutorial in the future. We are also thrilled to continue to bring state-of-the-art tool to PyTorch users to improve ML performance. We’d love to hear from you. Feel free to open an issue here.
+
+For new and exciting features coming up with PyTorch Profiler, follow @PyTorch on Twitter and check us out on pytorch.org.
+
+Acknowledgements
+
+The author would like to thank the contributions of the following individuals to this piece. From the Facebook side: Geeta Chauhan, Gisle Dankel, Woo Kim, Sam Farahzad, and Mark Saroufim. On the Microsoft side: AI Framework engineers (Teng Gao, Mike Guo, and Yang Gu), Guoliang Hua, and Thuy Nguyen.
+
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">新闻简报</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年8月3日</p>
+            <h1>
+                <a class="blog-title">PyTorch Profiler 1.9 新功能介绍</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由萨布丽娜·斯迈，微软 AI 框架团队项目经理撰写</p>
+                    <p>PyTorch Profiler v1.9 已发布！本次新版本的目标（之前的 <a href="https://pytorch.org/blog/introducing-pytorch-profiler-the-new-and-improved-performance-tool/">PyTorch Profiler 版本 </a>）是为您提供最新的工具，帮助诊断和修复机器学习性能问题，无论您是在一台或多台机器上工作。目标是针对耗时和/或内存消耗最大的执行步骤，并可视化 GPU 和 CPU 之间的工作负载分布。</p>
+
+<p>下面是即将发布的五个主要功能的总结：</p>
+
+<ol>
+  <li><strong>分布式训练视图 </strong>：这有助于您了解分布式训练作业消耗了多少时间和内存。当您将训练模型分割成并行运行的节点时，许多问题都会发生，因为这些节点可能是一个黑盒。整体模型目标是加速模型训练。这个分布式训练视图将帮助您诊断和调试单个节点内的问题。</li>
+  <li><strong>内存视图 </strong>：此视图可帮助您更好地理解内存使用情况。此工具将帮助您通过显示程序运行过程中的活动内存分配来避免著名的“内存不足”错误。</li>
+  <li><strong>GPU 利用率可视化 </strong>：此工具可帮助您确保 GPU 得到充分利用。</li>
+  <li><strong>云存储支持 </strong>：Tensorboard 插件现在可以读取来自 Azure Blob 存储、Amazon S3 和 Google Cloud Platform 的配置文件数据。</li>
+  <li><strong>跳转到源代码 </strong>：此功能允许您可视化堆栈跟踪信息并直接跳转到源代码。这有助于您根据配置文件结果快速优化和迭代代码。</li>
+</ol>
+
+<h2 id="getting-started-with-pytorch-profiling-tool">使用 PyTorch 性能分析工具入门</h2>
+<p>PyTorch 包含一个名为“PyTorch Profiler”的性能分析功能。PyTorch Profiler 教程可在此处找到 <a href="https://maskerprc.github.io/tutorials/intermediate/tensorboard_profiler_tutorial.html"> 这里 </a>。</p>
+
+<p>要为您的 PyTorch 代码进行性能分析，您必须：</p>
+
+<p>$ pip install torch-tb-profiler</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch.profiler</span> <span class="k">as</span> <span class="n">profiler</span>
+<span class="n">With</span> <span class="n">profiler</span><span class="p">.</span><span class="n">profile</span><span class="p">(</span><span class="n">XXXX</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p><strong>评论 </strong>:</p>
+
+<p>• 关于 CUDA 和 CPU 性能分析，请参阅<a href="https://github.com/pytorch/kineto/blob/master/tb_plugin/examples/resnet50_profiler_api.py">以下内容 </a>：</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>with torch.profiler.profile( 
+activities=[ 
+torch.profiler.ProfilerActivity.CPU, 
+torch.profiler.ProfilerActivity.CUDA], 
+</code></pre></div></div>
+
+<p>• 使用 profiler.record_function(“$NAME”)：允许为函数块添加装饰器（与名称关联的标签）</p>
+
+<p>• 在 profiler.profile 下，Profile_memory=True 参数允许您分析 CPU 和 GPU 内存占用情况</p>
+
+<h2 id="visualizing-pytorch-model-performance-using-pytorch-profiler">使用 PyTorch Profiler 可视化 PyTorch 模型性能</h2>
+
+<h3 id="distributed-training">分布式训练</h3>
+
+<p>深度学习领域的最新进展表明，大型数据集和大型模型具有价值，这需要您将模型训练扩展到更多的计算资源。分布式数据并行（DDP）和 NVIDIA 集体通信库（NCCL）是 PyTorch 中广泛采用的加速深度学习训练的范式。</p>
+
+<p>在本版 PyTorch Profiler 中，现在支持使用 NCCL 后端的 DDP。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image1.png" width="100%">
+</div>
+
+<h3 id="computationcommunication-overview">计算与通信概述</h3>
+
+<p>在计算/通信概览下的分布式训练视图中，您可以观察到每个工作节点以及工作节点之间[负载均衡器](https://en.wikipedia.org/wiki/Load_balancing_(computing)节点的计算到通信比，该比是按粒度测量的。</p>
+
+<p><strong>场景 1</strong>：</p>
+
+<p>如果一个工作节点的计算和重叠时间远大于其他节点，这可能会表明工作负载平衡存在问题或该工作节点是落后者。计算是 GPU 上内核时间的总和减去重叠时间。重叠时间是计算期间通过交错通信节省的时间。重叠时间越多，表示计算和通信之间的并行性越好。理想情况下，计算和通信完全重叠。通信是总通信时间减去重叠时间。下面的示例图像显示了该场景在 Tensorboard 上的显示方式。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image2.png" width="100%">
+  <p>图：落后者示例</p>
+</div>
+
+<p><strong>场景 2</strong>:</p>
+
+<p>如果批次大小较小（即每个工作者的计算量较少）或要传输的数据量较大，计算与通信的比例也可能较小，这在性能分析器中表现为较低的 GPU 利用率和较长的等待时间。这种计算/通信视图将允许您诊断代码以减少通信，通过采用梯度累积来减少通信，或者通过增加批次大小来降低通信比例。DDP 通信时间取决于模型大小。批次大小与模型大小无关。因此，增加批次大小可能会使计算时间更长，并使计算与通信的比例更大。</p>
+
+<h3 id="synchronizingcommunication-overview">同步/通信概述</h3>
+
+<p>在同步/通信视图中，您可以观察到通信的效率。这是通过减去步骤时间、计算和通信时间来实现的。同步时间是等待和与其他工作者同步的总通信时间的一部分。同步/通信视图包括初始化、数据加载器、CPU 计算等。从这个视图中可以得出一些见解，例如，总通信中有多少比例真正用于交换数据，以及等待其他工作者数据的空闲时间是多少。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image4.png" width="100%">
+</div>
+
+<p>例如，如果存在不均衡的工作负载或拖沓问题，您将能够在同步/通信视图中识别出来。这个视图将显示几个工作者的等待时间比其他人更长。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image5.png" width="100%">
+</div>
+
+<p>上面的表格视图允许您查看每个节点中所有通信操作的详细统计信息。这使您可以看到正在调用哪些操作类型，每个操作被调用的次数，每个操作传输的数据大小等。</p>
+
+<h3 id="memory-view">内存视图：</h3>
+
+<p>这个内存视图工具可以帮助您了解模型中操作员的硬件资源消耗。在操作员级别上理解时间和内存消耗，可以让你解决性能瓶颈，从而让你的模型执行得更快。鉴于有限的 GPU 内存大小，优化内存使用可以：</p>
+
+<ol>
+  <li>允许更大的模型，这可能会在末端任务上更好地泛化。</li>
+  <li>允许更大的批量大小。更大的批量大小可以加快训练速度。</li>
+</ol>
+
+<p>分析器记录分析器间隔期间的所有内存分配。选择“设备”将允许您查看每个操作员在 GPU 端或主机端的内存使用情况。您必须启用 <code class="language-plaintext highlighter-rouge">profile_memory=True</code> 以生成如下所示的内存数据，如<a href="https://github.com/pytorch/kineto/blob/master/tb_plugin/examples/resnet50_profiler_api.py#L39">此处</a>所示。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>With torch.profiler.profile(
+Profiler_memory=True # this will take 1 – 2 minutes to complete. 
+)
+</code></pre></div></div>
+
+<p><strong>重要定义 </strong>:</p>
+
+<p>• “大小增加”显示所有分配字节数之和减去所有内存释放字节数。</p>
+
+<p>• “分配大小”显示所有分配字节数之和，不考虑内存释放。</p>
+
+<p>• “自身”表示分配的内存不是来自任何子操作符，而是由操作符本身分配。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image6.png" width="100%">
+</div>
+
+<h3 id="gpu-metric-on-timeline">GPU 指标在时间轴上：</h3>
+
+<p>此功能将帮助您调试当一个或多个 GPU 未充分利用时的性能问题。理想情况下，您的程序应具有高 GPU 利用率（目标为 100% GPU 利用率），最小化 CPU 与 GPU 的通信，以及无开销。</p>
+
+<p><strong>概述 </strong>：概述页面突出显示三个重要 GPU 使用指标在不同级别（即 GPU 利用率、估计 SM 效率以及估计实现占用率）的结果。本质上，每个 GPU 都有一系列 SM，每个 SM 都有一系列可以并发执行大量线程的 warps。Warps 执行大量操作，因为数量取决于 GPU。但从高层次来看，此 GPU 指标在时间轴上的工具允许您看到整个堆栈，这很有用。</p>
+
+<p>如果 GPU 利用率结果较低，这表明您的模型中可能存在瓶颈。常见原因：</p>
+
+<p>•内核并行度不足（即批量大小低）</p>
+
+<p>•循环调用的小内核。也就是说，启动开销没有得到摊销</p>
+
+<p>•CPU 或 I/O 瓶颈导致 GPU 无法获得足够的工作以保持忙碌</p>
+
+<p>查看概述页面，性能建议部分是您将找到有关如何提高 GPU 利用率的潜在建议的地方。在此示例中，GPU 利用率低，因此性能建议是增加批量大小。根据性能建议，将批量大小从 4 增加到 32，GPU 利用率提高了 60.68%。</p>
+
+<p>GPU 利用率：在分析器中，GPU 引擎执行工作负载时的步骤间隔时间。利用率百分比越高，越好。仅使用 GPU 利用率来诊断性能瓶颈的缺点是它过于高级和粗糙。它无法告诉你有多少个流多处理器正在使用。请注意，虽然这个指标对于检测空闲期很有用，但高值并不表示 GPU 的高效使用，只是表明它在做任何事情。例如，一个单线程持续运行的内核将获得 100%的 GPU 利用率。</p>
+
+<p>估计流多处理器效率（Est. SM 效率）是一个更细粒度的指标，它表示在任何时刻有多少比例的 SM 正在使用。此指标报告了至少有一个活动 warp 在 SM 上运行的时间百分比以及那些停滞的（NVIDIA <a href="https://forums.developer.nvidia.com/t/nvprof-question-about-the-sm-efficiency-metric/72640#:~:text=My%20understanding%20from%20the%20profiler%20documentation%20is%20that,that%20%E2%80%9Cactive%20warps%E2%80%9D%20include%20warps%20that%20are%20stalled."> 文档 </a>）。估计 SM 效率也有其局限性。例如，每个块只有一个线程的内核无法充分利用每个 SM。SM 效率并不能告诉我们每个 SM 有多忙，只能说明它们正在做任何事情，这可能包括在等待内存加载结果时停滞。为了保持 SM 忙碌，需要足够的就绪 warp，以便在发生停滞时随时运行。</p>
+
+<p>预计实现占用率（预计实现占用率）比预计 SM 效率（Est. SM Efficiency）和 GPU 利用率（GPU Utilization）更深一层，用于诊断性能问题。预计实现占用率表示每个 SM 上可以同时激活的 warp 数量。拥有足够数量的激活 warp 通常是实现良好吞吐量的关键。与 GPU 利用率和 SM 效率不同，并不以尽可能提高此值为目标。一般来说，通过将此指标提高到 15%以上，可以获得良好的吞吐量提升。但到了某个点，收益将逐渐减少。例如，如果此值已经达到 30%，那么进一步的提升将是不确定的。此指标报告了内核执行周期（NVIDIA <a href="https://docs.nvidia.com/gameworks/content/developertools/desktop/analysis/report/cudaexperiments/kernellevel/achievedoccupancy.htm">doc</a>）内所有 warp 调度器的平均值。预计实现占用率值越大越好。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image7.png" width="100%">
+  <p>概述详情：Resnet50_batchsize4</p>
+</div>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image8.png" width="100%">
+  <p>概述详情：Resnet50_batchsize32</p>
+</div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><em>内核视图</em>
+内核有“每 SM 的块数”和“估计的占用率”，这是比较模型运行的一个很好的工具。</font></font></font></p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image9.png" width="100%">
+</div>
+
+<p>平均每 SM 的块数：</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">每 SM 的块数 = 该内核的块数 / 该 GPU 的 SM 数量。如果这个数字小于 1，表示 GPU 多处理器没有得到充分利用。“平均每 SM 的块数”是所有该内核名称运行的加权平均值，使用每个运行的持续时间作为权重。</p>
+
+<p>平均估计的占用率：</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">达成的平均占用率定义为概述中所述。 “平均达成的占用率” 是所有此内核名称运行的加权平均值，每个运行的持续时间作为权重。</p>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><em>跟踪视图</em>
+此跟踪视图显示一个时间线，显示您模型中操作员的持续时间以及哪个系统执行了操作。此视图可以帮助您确定高消耗和长时间执行是否由于输入或模型训练。目前，此跟踪视图显示时间线上的 GPU 利用率和估计 SM 效率。</font></font></font></p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image10.png" width="100%">
+</div>
+
+<p>GPU 利用率独立计算，并分为多个 10 毫秒的桶。桶的 GPU 利用率值绘制在时间线 0-100% 之间。在上面的示例中，“ProfilerStep5” 在线程 28022 的繁忙时间内的 GPU 利用率高于“Optimizer.step”之后的那个。这就是您可以放大以调查原因的地方。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image11.png" width="100%">
+</div>
+
+<p>从上方看，我们可以看到前者的内核比后者的内核长。后者的内核执行时间太短，导致 GPU 利用率降低。</p>
+
+<p>预计 SM 效率：每个内核都有一个计算出的预计 SM 效率，介于 0%到 100%之间。例如，下面的内核只有 64 个块，而这块 GPU 的 SM 数量是 80。那么它的“预计 SM 效率”是 64/80，即 0.8。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image12.png" width="100%">
+</div>
+
+<h3 id="cloud-storage-support">云存储支持</h3>
+
+<p>运行 pip install tensorboard 后，为了通过这些云提供商读取数据，现在可以运行：</p>
+
+<div class="language-sh highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch-tb-profiler[blob] 
+torch-tb-profiler[gs] 
+torch-tb-profiler[s3] 
+</code></pre></div></div>
+<p>使用 <code class="language-plaintext highlighter-rouge">pip install torch-tb-profiler[blob]</code> 、 <code class="language-plaintext highlighter-rouge">pip install torch-tb-profiler[gs]</code> 或 <code class="language-plaintext highlighter-rouge">pip install torch-tb-profiler[S3]</code> 来通过这些云服务提供商读取数据。更多信息，请参阅此 <a href="https://github.com/pytorch/kineto/tree/main/tb_plugin">README</a>。</p>
+
+<h3 id="jump-to-source-code">跳转到源代码：</h3>
+
+<p>将 TensorBoard 和 PyTorch Profiler 直接集成到 Visual Studio Code (VS Code) 中的巨大好处之一是能够直接从分析堆栈跟踪跳转到源代码（文件和行）。现在 VS Code Python 扩展 <a href="https://devblogs.microsoft.com/python/python-in-visual-studio-code-february-2021-release/"> 支持 TensorBoard 集成 </a>。</p>
+
+<p>仅当在 VS Code 中启动 Tensorboard 时，跳转到源代码功能才可用。如果使用_with_stack=True 进行分析，堆栈跟踪将显示在插件 UI 上。当您从 PyTorch Profiler 点击堆栈跟踪时，VS Code 将自动打开相应的文件并并排显示，直接跳转到您感兴趣的代码行进行调试。这允许您根据分析结果和建议快速进行可操作的优化和代码更改。</p>
+
+<div class="text-center">
+  <img src="/assets/images/profiler_1.9_image13.png" width="100%">
+  <p>Gify：使用 Visual Studio Code 插件 UI 跳转到源代码</p>
+</div>
+
+<p>想要了解如何优化批处理大小性能，请查看<a href="https://opendatascience.com/optimizing-pytorch-performance-batch-size-with-pytorch-profiler/">这里</a>的逐步教程。PyTorch Profiler 还与 PyTorch Lightning 集成，您只需使用 <code class="language-plaintext highlighter-rouge">trainer.profiler=pytorch</code> 标志即可启动 lightning 训练任务以生成跟踪。</p>
+
+<h2 id="whats-next-for-the-pytorch-profiler">PyTorch Profiler 的未来是什么？</h2>
+<p>您刚刚看到了 PyTorch Profiler 如何帮助优化模型。现在您可以尝试使用 <code class="language-plaintext highlighter-rouge">pip install torch-tb-profiler</code> 来安装 Profiler，以优化您的 PyTorch 模型。</p>
+
+<p>未来我们将推出本教程的高级版本。我们也非常高兴继续为 PyTorch 用户提供最先进的工具，以提升机器学习性能。我们非常期待您的反馈。欢迎您在此<a href="https://github.com/pytorch/kineto/issues">处</a>提交问题。</p>
+
+<p>想了解 PyTorch Profiler 即将推出的新功能和亮点，请关注@PyTorch 在 Twitter 上的动态，并访问 pytorch.org 了解更多信息。</p>
+
+<h2 id="acknowledgements">致谢</h2>
+
+<p>作者感谢以下个人对本作品的贡献。来自 Facebook 方面：Geeta Chauhan、Gisle Dankel、Woo Kim、Sam Farahzad 和 Mark Saroufim。来自微软方面：AI Framework 工程师（Teng Gao、Mike Guo 和 Yang Gu）、Guoliang Hua 和 Thuy Nguyen。</p>
+
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">新闻简报</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      PyTorch 1.9 Release, including torch.linalg and Mobile Interpreter | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are excited to announce the release of PyTorch 1.9. The release is composed of more than 3,400 commits since 1.8, made by 398 contributors. The release notes are available here. Highlights include:
+
+  Major improvements to support scientific computing, including torch.linalg, torch.special, and Complex Autograd
+  Major improvements in on-device binary size with Mobile Interpreter
+  Native support for elastic-fault tolerance training through the upstreaming of TorchElastic into PyTorch Core
+  Major updates to the PyTorch RPC framework to support large scale distributed training with GPU support
+  New APIs to optimize performance and packaging for model inference deployment
+  Support for Distributed training, GPU utilization and SM efficiency in the PyTorch Profiler
+
+
+Along with 1.9, we are also releasing major updates to the PyTorch libraries, which you can read about in this blog post.
+
+We’d like to thank the community for their support and work on this latest release. We’d especially like to thank Quansight and Microsoft for their contributions.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+Frontend APIs
+
+(Stable) torch.linalg
+
+In 1.9, the torch.linalg module is moving to a stable release. Linear algebra is essential to deep learning and scientific computing, and the torch.linalg module extends PyTorch’s support for it with implementations of every function from NumPy’s linear algebra module (now with support for accelerators and autograd) and more, like torch.linalg.matrix_norm and torch.linalg.householder_product. This makes the module immediately familiar to users who have worked with NumPy. Refer to the documentation here.
+
+We plan to publish another blog post with more details on the torch.linalg module next week!
+
+(Stable) Complex Autograd
+
+The Complex Autograd feature, released as a beta in PyTorch 1.8, is now stable. Since the beta release, we have extended support for Complex Autograd for over 98% operators in PyTorch 1.9, improved testing for complex operators by adding more OpInfos, and added greater validation through TorchAudio migration to native complex tensors (refer to this issue).
+
+This feature provides users the functionality to calculate complex gradients and optimize real valued loss functions with complex variables. This is a required feature for multiple current and downstream prospective users of complex numbers in PyTorch like TorchAudio, ESPNet, Asteroid, and FastMRI. Refer to the documentation for more details.
+
+(Stable) torch.use_deterministic_algorithms()
+
+To help with debugging and writing reproducible programs, PyTorch 1.9 includes a torch.use_determinstic_algorithms option. When this setting is enabled, operations will behave deterministically, if possible, or throw a runtime error if they might behave nondeterministically. Here are a couple examples:
+
+>>> a = torch.randn(100, 100, 100, device='cuda').to_sparse()
+>>> b = torch.randn(100, 100, 100, device='cuda')
+
+# Sparse-dense CUDA bmm is usually nondeterministic
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+False
+
+>>> torch.use_deterministic_algorithms(True)
+
+# Now torch.bmm gives the same result each time, but with reduced performance
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+True
+
+# CUDA kthvalue has no deterministic algorithm, so it throws a runtime error
+>>> torch.zeros(10000, device='cuda').kthvalue(1)
+RuntimeError: kthvalue CUDA does not have a deterministic implementation...
+
+
+PyTorch 1.9 adds deterministic implementations for a number of indexing operations, too, including index_add, index_copy, and index_put with accum=False. For more details, refer to the documentation and reproducibility note.
+
+(Beta) torch.special
+
+A torch.special module, analogous to SciPy’s special module, is now available in beta. This module contains many functions useful for scientific computing and working with distributions such as iv, ive, erfcx, logerfc, and logerfcx. Refer to the documentation for more details.
+
+(Beta) nn.Module parameterization
+
+nn.Module parameterization allows users to parametrize any parameter or buffer of an nn.Module without modifying the nn.Module itself. It allows you to constrain the space in which your parameters live without the need for special optimization methods.
+
+This also contains a new implementation of the spectral_norm parametrization for PyTorch 1.9. More parametrization will be added to this feature (weight_norm, matrix constraints and part of pruning) for the feature to become stable in 1.10. For more details, refer to the documentation and tutorial.
+
+PyTorch Mobile
+
+(Beta) Mobile Interpreter
+
+We are releasing Mobile Interpreter, a streamlined version of the PyTorch runtime, in beta. The Interpreter will execute PyTorch programs in edge devices, with reduced binary size footprint.
+
+Mobile Interpreter is one of the top requested features for PyTorch Mobile. This new release will significantly reduce binary size compared with the current on-device runtime. In order for you to get the binary size improvements with our interpreter (which can reduce the binary size up to ~75% for a typical application) follow these instructions. As an example, using Mobile Interpreter, we can reach 2.6 MB compressed with MobileNetV2 in arm64-v7a Android. With this latest release we are making it much simpler to integrate the interpreter by providing pre-built libraries for iOS and Android.
+
+TorchVision Library
+
+Starting from 1.9, users can use the TorchVision library on their iOS/Android apps. The Torchvision library contains the C++ TorchVision ops and needs to be linked together with the main PyTorch library for iOS, for Android it can be added as a gradle dependency. This allows using TorchVision prebuilt MaskRCNN operators for object detections and segmentation. To learn more about the library, please refer to our tutorials and demo apps.
+
+Demo apps
+
+We are releasing a new video app based on PyTorch Video library and an updated speech recognition app based on the latest torchaudio, wave2vec model. Both are available on iOS and Android. In addition, we have updated the seven Computer Vision and three Natural Language Processing demo apps, including the HuggingFace DistilBERT, and the DeiT vision transformer models, with PyTorch Mobile v1.9. With the addition of these two apps, we now offer a full suite of demo apps covering image, text, audio, and video. To get started check out our iOS demo apps and Android demo apps.
+
+
+  
+
+
+Distributed Training
+
+(Beta) TorchElastic is now part of core
+
+TorchElastic, which was open sourced over a year ago in the pytorch/elastic github repository, is a runner and coordinator for PyTorch worker processes. Since then, it has been adopted by various distributed torch use-cases: 1) deepspeech.pytorch 2) pytorch-lightning 3) Kubernetes CRD. Now, it is part of PyTorch core.
+
+As its name suggests, the core function of TorcheElastic is to gracefully handle scaling events. A notable corollary of elasticity is that peer discovery and rank assignment are built into TorchElastic enabling users to run distributed training on preemptible instances without requiring a gang scheduler. As a side note, etcd used to be a hard dependency of TorchElastic. With the upstream, this is no longer the case since we have added a “standalone” rendezvous based on c10d::Store. For more details, refer to the documentation.
+
+(Beta) Distributed Training Updates
+
+In addition to TorchElastic, there are a number of beta features available in the distributed package:
+
+
+  
+    (Beta) CUDA support is available in RPC: Compared to CPU RPC and general-purpose RPC frameworks, CUDA RPC is a much more efficient way for P2P Tensor communication. It is built on top of TensorPipe which can automatically choose a communication channel for each Tensor based on Tensor device type and channel availability on both the caller and the callee. Existing TensorPipe channels cover NVLink, InfiniBand, SHM, CMA, TCP, etc. See this recipe for how CUDA RPC helps to attain 34x speedup compared to CPU RPC.
+  
+  
+    (Beta) ZeroRedundancyOptimizer: ZeroRedundancyOptimizer can be used in conjunction with DistributedDataParallel to reduce the size of per-process optimizer states. The idea of ZeroRedundancyOptimizer comes from DeepSpeed/ZeRO project and Marian, where the optimizer in each process owns a shard of model parameters and their corresponding optimizer states. When running step(), each optimizer only updates its own parameters, and then uses collective communication to synchronize updated parameters across all processes. Refer to this documentation and this tutorial to learn more.
+  
+  
+    (Beta) Support for profiling distributed collectives: PyTorch’s profiler tools, torch.profiler and torch.autograd.profiler, are able to profile distributed collectives and point to point communication primitives including allreduce, alltoall, allgather, send/recv, etc. This is enabled for all backends supported natively by PyTorch: gloo, mpi, and nccl. This can be used to debug performance issues, analyze traces that contain distributed communication, and gain insight into performance of applications that use distributed training. To learn more, refer to this documentation.
+  
+
+
+Performance Optimization and Tooling
+
+(Stable) Freezing API
+
+Module Freezing is the process of inlining module parameters and attributes values as constants into the TorchScript internal representation. This allows further optimization and specialization of your program, both for TorchScript optimizations and lowering to other backends. It is used by optimize_for_mobile API, ONNX, and others.
+
+Freezing is recommended for model deployment. It helps TorchScript JIT optimizations optimize away overhead and bookkeeping that is necessary for training, tuning, or debugging PyTorch models. It enables graph fusions that are not semantically valid on non-frozen graphs - such as fusing Conv-BN. For more details, refer to the documentation.
+
+(Beta) PyTorch Profiler
+
+
+  
+
+
+The new PyTorch Profiler graduates to beta and leverages Kineto for GPU profiling, TensorBoard for visualization and is now the standard across our tutorials and documentation.
+
+PyTorch 1.9 extends support for the new torch.profiler API to more builds, including Windows and Mac and is recommended in most cases instead of the previous torch.autograd.profiler API. The new API supports existing profiler features, integrates with CUPTI library (Linux-only) to trace on-device CUDA kernels and provides support for long-running jobs, e.g.:
+
+def trace_handler(p):
+    output = p.key_averages().table(sort_by=" self_cuda_time_total",="" row_limit="10)" print(output)="" p.export_chrome_trace("="" tmp="" trace_"="" +="" str(p.step_num)="" ".json")="" with="" profile(="" activities="[ProfilerActivity.CPU," profileractivity.cuda],="" #="" schedule="" argument="" specifies="" the="" iterations="" on="" which="" profiler="" is="" active="" wait="1," warmup="1," on_trace_ready="" handler="" for="" traces="" )="" as="" p:="" idx="" in="" range(8):="" model(inputs)="" will="" trace="" 2="" and="" 3,="" then="" 6="" 7="" (counting="" from="" zero)="" p.step()="" more="" usage="" examples="" can="" be="" found="" recipe="" page.="" pytorch="" tensorboard="" plugin="" has="" new="" features="" for:="" distributed="" training="" summary="" view="" communications="" overview="" nccl="" gpu="" utilization="" sm="" efficiency="" operators="" memory="" profiling="" jump="" to="" source="" when="" launched="" microsoft="" vscode="" ability="" load="" cloud="" object="" storage="" systems="" (beta)="" inference="" mode="" api="" allows="" significant="" speed-up="" workloads="" while="" remaining="" safe="" ensuring="" no="" incorrect="" gradients="" ever="" computed.="" it="" offers="" best="" possible="" performance="" autograd="" required.="" details,="" refer="" documentation="" itself="" explaining="" use="" difference="" no_grad="" mode.="" torch.package="" a="" way="" package="" models="" self-contained,="" stable="" format.="" include="" both="" model’s="" data="" (e.g.="" parameters,="" buffers)="" its="" code="" (model="" architecture).="" packaging="" model="" full="" set="" of="" python="" dependencies,="" combined="" description="" conda="" environment="" pinned="" versions,="" used="" easily="" reproduce="" training.="" representing="" self-contained="" artifact="" also="" allow="" published="" transferred="" throughout="" production="" ml="" pipeline="" retaining="" flexibility="" pure-python="" representation.="" documentation.="" (prototype)="" prepare_for_inference="" prototype="" feature="" that="" takes="" module="" performs="" graph-level="" optimizations="" improve="" performance,="" depending="" device.="" meant="" pytorch-native="" option="" requires="" minimal="" changes="" user’s="" workflows.="" see="" torchscript="" version="" here="" or="" fx="" here.="" profile-directed="" typing="" hard="" requirement="" have="" type="" annotations="" order="" compilation="" successful.="" long="" time,="" was="" only="" add="" missing="" through="" trial="" error="" (i.e.,="" by="" fixing="" type-checking="" errors="" generated="" torch.jit.script="" one="" one),="" inefficient="" time="" consuming.="" now,="" we="" enabled="" profile="" directed="" leveraging="" existing="" tools="" like="" monkeytype,="" makes="" process="" much="" easier,="" faster,="" efficient.="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PyTorch 1.9 Release, including torch.linalg and Mobile Interpreter">
+<meta property="og:description" content="We are excited to announce the release of PyTorch 1.9. The release is composed of more than 3,400 commits since 1.8, made by 398 contributors. The release notes are available here. Highlights include:
+
+  Major improvements to support scientific computing, including torch.linalg, torch.special, and Complex Autograd
+  Major improvements in on-device binary size with Mobile Interpreter
+  Native support for elastic-fault tolerance training through the upstreaming of TorchElastic into PyTorch Core
+  Major updates to the PyTorch RPC framework to support large scale distributed training with GPU support
+  New APIs to optimize performance and packaging for model inference deployment
+  Support for Distributed training, GPU utilization and SM efficiency in the PyTorch Profiler
+
+
+Along with 1.9, we are also releasing major updates to the PyTorch libraries, which you can read about in this blog post.
+
+We’d like to thank the community for their support and work on this latest release. We’d especially like to thank Quansight and Microsoft for their contributions.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+Frontend APIs
+
+(Stable) torch.linalg
+
+In 1.9, the torch.linalg module is moving to a stable release. Linear algebra is essential to deep learning and scientific computing, and the torch.linalg module extends PyTorch’s support for it with implementations of every function from NumPy’s linear algebra module (now with support for accelerators and autograd) and more, like torch.linalg.matrix_norm and torch.linalg.householder_product. This makes the module immediately familiar to users who have worked with NumPy. Refer to the documentation here.
+
+We plan to publish another blog post with more details on the torch.linalg module next week!
+
+(Stable) Complex Autograd
+
+The Complex Autograd feature, released as a beta in PyTorch 1.8, is now stable. Since the beta release, we have extended support for Complex Autograd for over 98% operators in PyTorch 1.9, improved testing for complex operators by adding more OpInfos, and added greater validation through TorchAudio migration to native complex tensors (refer to this issue).
+
+This feature provides users the functionality to calculate complex gradients and optimize real valued loss functions with complex variables. This is a required feature for multiple current and downstream prospective users of complex numbers in PyTorch like TorchAudio, ESPNet, Asteroid, and FastMRI. Refer to the documentation for more details.
+
+(Stable) torch.use_deterministic_algorithms()
+
+To help with debugging and writing reproducible programs, PyTorch 1.9 includes a torch.use_determinstic_algorithms option. When this setting is enabled, operations will behave deterministically, if possible, or throw a runtime error if they might behave nondeterministically. Here are a couple examples:
+
+>>> a = torch.randn(100, 100, 100, device='cuda').to_sparse()
+>>> b = torch.randn(100, 100, 100, device='cuda')
+
+# Sparse-dense CUDA bmm is usually nondeterministic
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+False
+
+>>> torch.use_deterministic_algorithms(True)
+
+# Now torch.bmm gives the same result each time, but with reduced performance
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+True
+
+# CUDA kthvalue has no deterministic algorithm, so it throws a runtime error
+>>> torch.zeros(10000, device='cuda').kthvalue(1)
+RuntimeError: kthvalue CUDA does not have a deterministic implementation...
+
+
+PyTorch 1.9 adds deterministic implementations for a number of indexing operations, too, including index_add, index_copy, and index_put with accum=False. For more details, refer to the documentation and reproducibility note.
+
+(Beta) torch.special
+
+A torch.special module, analogous to SciPy’s special module, is now available in beta. This module contains many functions useful for scientific computing and working with distributions such as iv, ive, erfcx, logerfc, and logerfcx. Refer to the documentation for more details.
+
+(Beta) nn.Module parameterization
+
+nn.Module parameterization allows users to parametrize any parameter or buffer of an nn.Module without modifying the nn.Module itself. It allows you to constrain the space in which your parameters live without the need for special optimization methods.
+
+This also contains a new implementation of the spectral_norm parametrization for PyTorch 1.9. More parametrization will be added to this feature (weight_norm, matrix constraints and part of pruning) for the feature to become stable in 1.10. For more details, refer to the documentation and tutorial.
+
+PyTorch Mobile
+
+(Beta) Mobile Interpreter
+
+We are releasing Mobile Interpreter, a streamlined version of the PyTorch runtime, in beta. The Interpreter will execute PyTorch programs in edge devices, with reduced binary size footprint.
+
+Mobile Interpreter is one of the top requested features for PyTorch Mobile. This new release will significantly reduce binary size compared with the current on-device runtime. In order for you to get the binary size improvements with our interpreter (which can reduce the binary size up to ~75% for a typical application) follow these instructions. As an example, using Mobile Interpreter, we can reach 2.6 MB compressed with MobileNetV2 in arm64-v7a Android. With this latest release we are making it much simpler to integrate the interpreter by providing pre-built libraries for iOS and Android.
+
+TorchVision Library
+
+Starting from 1.9, users can use the TorchVision library on their iOS/Android apps. The Torchvision library contains the C++ TorchVision ops and needs to be linked together with the main PyTorch library for iOS, for Android it can be added as a gradle dependency. This allows using TorchVision prebuilt MaskRCNN operators for object detections and segmentation. To learn more about the library, please refer to our tutorials and demo apps.
+
+Demo apps
+
+We are releasing a new video app based on PyTorch Video library and an updated speech recognition app based on the latest torchaudio, wave2vec model. Both are available on iOS and Android. In addition, we have updated the seven Computer Vision and three Natural Language Processing demo apps, including the HuggingFace DistilBERT, and the DeiT vision transformer models, with PyTorch Mobile v1.9. With the addition of these two apps, we now offer a full suite of demo apps covering image, text, audio, and video. To get started check out our iOS demo apps and Android demo apps.
+
+
+  
+
+
+Distributed Training
+
+(Beta) TorchElastic is now part of core
+
+TorchElastic, which was open sourced over a year ago in the pytorch/elastic github repository, is a runner and coordinator for PyTorch worker processes. Since then, it has been adopted by various distributed torch use-cases: 1) deepspeech.pytorch 2) pytorch-lightning 3) Kubernetes CRD. Now, it is part of PyTorch core.
+
+As its name suggests, the core function of TorcheElastic is to gracefully handle scaling events. A notable corollary of elasticity is that peer discovery and rank assignment are built into TorchElastic enabling users to run distributed training on preemptible instances without requiring a gang scheduler. As a side note, etcd used to be a hard dependency of TorchElastic. With the upstream, this is no longer the case since we have added a “standalone” rendezvous based on c10d::Store. For more details, refer to the documentation.
+
+(Beta) Distributed Training Updates
+
+In addition to TorchElastic, there are a number of beta features available in the distributed package:
+
+
+  
+    (Beta) CUDA support is available in RPC: Compared to CPU RPC and general-purpose RPC frameworks, CUDA RPC is a much more efficient way for P2P Tensor communication. It is built on top of TensorPipe which can automatically choose a communication channel for each Tensor based on Tensor device type and channel availability on both the caller and the callee. Existing TensorPipe channels cover NVLink, InfiniBand, SHM, CMA, TCP, etc. See this recipe for how CUDA RPC helps to attain 34x speedup compared to CPU RPC.
+  
+  
+    (Beta) ZeroRedundancyOptimizer: ZeroRedundancyOptimizer can be used in conjunction with DistributedDataParallel to reduce the size of per-process optimizer states. The idea of ZeroRedundancyOptimizer comes from DeepSpeed/ZeRO project and Marian, where the optimizer in each process owns a shard of model parameters and their corresponding optimizer states. When running step(), each optimizer only updates its own parameters, and then uses collective communication to synchronize updated parameters across all processes. Refer to this documentation and this tutorial to learn more.
+  
+  
+    (Beta) Support for profiling distributed collectives: PyTorch’s profiler tools, torch.profiler and torch.autograd.profiler, are able to profile distributed collectives and point to point communication primitives including allreduce, alltoall, allgather, send/recv, etc. This is enabled for all backends supported natively by PyTorch: gloo, mpi, and nccl. This can be used to debug performance issues, analyze traces that contain distributed communication, and gain insight into performance of applications that use distributed training. To learn more, refer to this documentation.
+  
+
+
+Performance Optimization and Tooling
+
+(Stable) Freezing API
+
+Module Freezing is the process of inlining module parameters and attributes values as constants into the TorchScript internal representation. This allows further optimization and specialization of your program, both for TorchScript optimizations and lowering to other backends. It is used by optimize_for_mobile API, ONNX, and others.
+
+Freezing is recommended for model deployment. It helps TorchScript JIT optimizations optimize away overhead and bookkeeping that is necessary for training, tuning, or debugging PyTorch models. It enables graph fusions that are not semantically valid on non-frozen graphs - such as fusing Conv-BN. For more details, refer to the documentation.
+
+(Beta) PyTorch Profiler
+
+
+  
+
+
+The new PyTorch Profiler graduates to beta and leverages Kineto for GPU profiling, TensorBoard for visualization and is now the standard across our tutorials and documentation.
+
+PyTorch 1.9 extends support for the new torch.profiler API to more builds, including Windows and Mac and is recommended in most cases instead of the previous torch.autograd.profiler API. The new API supports existing profiler features, integrates with CUPTI library (Linux-only) to trace on-device CUDA kernels and provides support for long-running jobs, e.g.:
+
+def trace_handler(p):
+    output = p.key_averages().table(sort_by=" self_cuda_time_total",="" row_limit="10)" print(output)="" p.export_chrome_trace("="" tmp="" trace_"="" +="" str(p.step_num)="" ".json")="" with="" profile(="" activities="[ProfilerActivity.CPU," profileractivity.cuda],="" #="" schedule="" argument="" specifies="" the="" iterations="" on="" which="" profiler="" is="" active="" wait="1," warmup="1," on_trace_ready="" handler="" for="" traces="" )="" as="" p:="" idx="" in="" range(8):="" model(inputs)="" will="" trace="" 2="" and="" 3,="" then="" 6="" 7="" (counting="" from="" zero)="" p.step()="" more="" usage="" examples="" can="" be="" found="" recipe="" page.="" pytorch="" tensorboard="" plugin="" has="" new="" features="" for:="" distributed="" training="" summary="" view="" communications="" overview="" nccl="" gpu="" utilization="" sm="" efficiency="" operators="" memory="" profiling="" jump="" to="" source="" when="" launched="" microsoft="" vscode="" ability="" load="" cloud="" object="" storage="" systems="" (beta)="" inference="" mode="" api="" allows="" significant="" speed-up="" workloads="" while="" remaining="" safe="" ensuring="" no="" incorrect="" gradients="" ever="" computed.="" it="" offers="" best="" possible="" performance="" autograd="" required.="" details,="" refer="" documentation="" itself="" explaining="" use="" difference="" no_grad="" mode.="" torch.package="" a="" way="" package="" models="" self-contained,="" stable="" format.="" include="" both="" model’s="" data="" (e.g.="" parameters,="" buffers)="" its="" code="" (model="" architecture).="" packaging="" model="" full="" set="" of="" python="" dependencies,="" combined="" description="" conda="" environment="" pinned="" versions,="" used="" easily="" reproduce="" training.="" representing="" self-contained="" artifact="" also="" allow="" published="" transferred="" throughout="" production="" ml="" pipeline="" retaining="" flexibility="" pure-python="" representation.="" documentation.="" (prototype)="" prepare_for_inference="" prototype="" feature="" that="" takes="" module="" performs="" graph-level="" optimizations="" improve="" performance,="" depending="" device.="" meant="" pytorch-native="" option="" requires="" minimal="" changes="" user’s="" workflows.="" see="" torchscript="" version="" here="" or="" fx="" here.="" profile-directed="" typing="" hard="" requirement="" have="" type="" annotations="" order="" compilation="" successful.="" long="" time,="" was="" only="" add="" missing="" through="" trial="" error="" (i.e.,="" by="" fixing="" type-checking="" errors="" generated="" torch.jit.script="" one="" one),="" inefficient="" time="" consuming.="" now,="" we="" enabled="" profile="" directed="" leveraging="" existing="" tools="" like="" monkeytype,="" makes="" process="" much="" easier,="" faster,="" efficient.="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="PyTorch 1.9 Release, including torch.linalg and Mobile Interpreter">
+<meta name="twitter:description" content="We are excited to announce the release of PyTorch 1.9. The release is composed of more than 3,400 commits since 1.8, made by 398 contributors. The release notes are available here. Highlights include:
+
+  Major improvements to support scientific computing, including torch.linalg, torch.special, and Complex Autograd
+  Major improvements in on-device binary size with Mobile Interpreter
+  Native support for elastic-fault tolerance training through the upstreaming of TorchElastic into PyTorch Core
+  Major updates to the PyTorch RPC framework to support large scale distributed training with GPU support
+  New APIs to optimize performance and packaging for model inference deployment
+  Support for Distributed training, GPU utilization and SM efficiency in the PyTorch Profiler
+
+
+Along with 1.9, we are also releasing major updates to the PyTorch libraries, which you can read about in this blog post.
+
+We’d like to thank the community for their support and work on this latest release. We’d especially like to thank Quansight and Microsoft for their contributions.
+
+Features in PyTorch releases are classified as Stable, Beta, and Prototype. You can learn more about the definitions in this blog post.
+
+Frontend APIs
+
+(Stable) torch.linalg
+
+In 1.9, the torch.linalg module is moving to a stable release. Linear algebra is essential to deep learning and scientific computing, and the torch.linalg module extends PyTorch’s support for it with implementations of every function from NumPy’s linear algebra module (now with support for accelerators and autograd) and more, like torch.linalg.matrix_norm and torch.linalg.householder_product. This makes the module immediately familiar to users who have worked with NumPy. Refer to the documentation here.
+
+We plan to publish another blog post with more details on the torch.linalg module next week!
+
+(Stable) Complex Autograd
+
+The Complex Autograd feature, released as a beta in PyTorch 1.8, is now stable. Since the beta release, we have extended support for Complex Autograd for over 98% operators in PyTorch 1.9, improved testing for complex operators by adding more OpInfos, and added greater validation through TorchAudio migration to native complex tensors (refer to this issue).
+
+This feature provides users the functionality to calculate complex gradients and optimize real valued loss functions with complex variables. This is a required feature for multiple current and downstream prospective users of complex numbers in PyTorch like TorchAudio, ESPNet, Asteroid, and FastMRI. Refer to the documentation for more details.
+
+(Stable) torch.use_deterministic_algorithms()
+
+To help with debugging and writing reproducible programs, PyTorch 1.9 includes a torch.use_determinstic_algorithms option. When this setting is enabled, operations will behave deterministically, if possible, or throw a runtime error if they might behave nondeterministically. Here are a couple examples:
+
+>>> a = torch.randn(100, 100, 100, device='cuda').to_sparse()
+>>> b = torch.randn(100, 100, 100, device='cuda')
+
+# Sparse-dense CUDA bmm is usually nondeterministic
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+False
+
+>>> torch.use_deterministic_algorithms(True)
+
+# Now torch.bmm gives the same result each time, but with reduced performance
+>>> torch.bmm(a, b).eq(torch.bmm(a, b)).all().item()
+True
+
+# CUDA kthvalue has no deterministic algorithm, so it throws a runtime error
+>>> torch.zeros(10000, device='cuda').kthvalue(1)
+RuntimeError: kthvalue CUDA does not have a deterministic implementation...
+
+
+PyTorch 1.9 adds deterministic implementations for a number of indexing operations, too, including index_add, index_copy, and index_put with accum=False. For more details, refer to the documentation and reproducibility note.
+
+(Beta) torch.special
+
+A torch.special module, analogous to SciPy’s special module, is now available in beta. This module contains many functions useful for scientific computing and working with distributions such as iv, ive, erfcx, logerfc, and logerfcx. Refer to the documentation for more details.
+
+(Beta) nn.Module parameterization
+
+nn.Module parameterization allows users to parametrize any parameter or buffer of an nn.Module without modifying the nn.Module itself. It allows you to constrain the space in which your parameters live without the need for special optimization methods.
+
+This also contains a new implementation of the spectral_norm parametrization for PyTorch 1.9. More parametrization will be added to this feature (weight_norm, matrix constraints and part of pruning) for the feature to become stable in 1.10. For more details, refer to the documentation and tutorial.
+
+PyTorch Mobile
+
+(Beta) Mobile Interpreter
+
+We are releasing Mobile Interpreter, a streamlined version of the PyTorch runtime, in beta. The Interpreter will execute PyTorch programs in edge devices, with reduced binary size footprint.
+
+Mobile Interpreter is one of the top requested features for PyTorch Mobile. This new release will significantly reduce binary size compared with the current on-device runtime. In order for you to get the binary size improvements with our interpreter (which can reduce the binary size up to ~75% for a typical application) follow these instructions. As an example, using Mobile Interpreter, we can reach 2.6 MB compressed with MobileNetV2 in arm64-v7a Android. With this latest release we are making it much simpler to integrate the interpreter by providing pre-built libraries for iOS and Android.
+
+TorchVision Library
+
+Starting from 1.9, users can use the TorchVision library on their iOS/Android apps. The Torchvision library contains the C++ TorchVision ops and needs to be linked together with the main PyTorch library for iOS, for Android it can be added as a gradle dependency. This allows using TorchVision prebuilt MaskRCNN operators for object detections and segmentation. To learn more about the library, please refer to our tutorials and demo apps.
+
+Demo apps
+
+We are releasing a new video app based on PyTorch Video library and an updated speech recognition app based on the latest torchaudio, wave2vec model. Both are available on iOS and Android. In addition, we have updated the seven Computer Vision and three Natural Language Processing demo apps, including the HuggingFace DistilBERT, and the DeiT vision transformer models, with PyTorch Mobile v1.9. With the addition of these two apps, we now offer a full suite of demo apps covering image, text, audio, and video. To get started check out our iOS demo apps and Android demo apps.
+
+
+  
+
+
+Distributed Training
+
+(Beta) TorchElastic is now part of core
+
+TorchElastic, which was open sourced over a year ago in the pytorch/elastic github repository, is a runner and coordinator for PyTorch worker processes. Since then, it has been adopted by various distributed torch use-cases: 1) deepspeech.pytorch 2) pytorch-lightning 3) Kubernetes CRD. Now, it is part of PyTorch core.
+
+As its name suggests, the core function of TorcheElastic is to gracefully handle scaling events. A notable corollary of elasticity is that peer discovery and rank assignment are built into TorchElastic enabling users to run distributed training on preemptible instances without requiring a gang scheduler. As a side note, etcd used to be a hard dependency of TorchElastic. With the upstream, this is no longer the case since we have added a “standalone” rendezvous based on c10d::Store. For more details, refer to the documentation.
+
+(Beta) Distributed Training Updates
+
+In addition to TorchElastic, there are a number of beta features available in the distributed package:
+
+
+  
+    (Beta) CUDA support is available in RPC: Compared to CPU RPC and general-purpose RPC frameworks, CUDA RPC is a much more efficient way for P2P Tensor communication. It is built on top of TensorPipe which can automatically choose a communication channel for each Tensor based on Tensor device type and channel availability on both the caller and the callee. Existing TensorPipe channels cover NVLink, InfiniBand, SHM, CMA, TCP, etc. See this recipe for how CUDA RPC helps to attain 34x speedup compared to CPU RPC.
+  
+  
+    (Beta) ZeroRedundancyOptimizer: ZeroRedundancyOptimizer can be used in conjunction with DistributedDataParallel to reduce the size of per-process optimizer states. The idea of ZeroRedundancyOptimizer comes from DeepSpeed/ZeRO project and Marian, where the optimizer in each process owns a shard of model parameters and their corresponding optimizer states. When running step(), each optimizer only updates its own parameters, and then uses collective communication to synchronize updated parameters across all processes. Refer to this documentation and this tutorial to learn more.
+  
+  
+    (Beta) Support for profiling distributed collectives: PyTorch’s profiler tools, torch.profiler and torch.autograd.profiler, are able to profile distributed collectives and point to point communication primitives including allreduce, alltoall, allgather, send/recv, etc. This is enabled for all backends supported natively by PyTorch: gloo, mpi, and nccl. This can be used to debug performance issues, analyze traces that contain distributed communication, and gain insight into performance of applications that use distributed training. To learn more, refer to this documentation.
+  
+
+
+Performance Optimization and Tooling
+
+(Stable) Freezing API
+
+Module Freezing is the process of inlining module parameters and attributes values as constants into the TorchScript internal representation. This allows further optimization and specialization of your program, both for TorchScript optimizations and lowering to other backends. It is used by optimize_for_mobile API, ONNX, and others.
+
+Freezing is recommended for model deployment. It helps TorchScript JIT optimizations optimize away overhead and bookkeeping that is necessary for training, tuning, or debugging PyTorch models. It enables graph fusions that are not semantically valid on non-frozen graphs - such as fusing Conv-BN. For more details, refer to the documentation.
+
+(Beta) PyTorch Profiler
+
+
+  
+
+
+The new PyTorch Profiler graduates to beta and leverages Kineto for GPU profiling, TensorBoard for visualization and is now the standard across our tutorials and documentation.
+
+PyTorch 1.9 extends support for the new torch.profiler API to more builds, including Windows and Mac and is recommended in most cases instead of the previous torch.autograd.profiler API. The new API supports existing profiler features, integrates with CUPTI library (Linux-only) to trace on-device CUDA kernels and provides support for long-running jobs, e.g.:
+
+def trace_handler(p):
+    output = p.key_averages().table(sort_by=" self_cuda_time_total",="" row_limit="10)" print(output)="" p.export_chrome_trace("="" tmp="" trace_"="" +="" str(p.step_num)="" ".json")="" with="" profile(="" activities="[ProfilerActivity.CPU," profileractivity.cuda],="" #="" schedule="" argument="" specifies="" the="" iterations="" on="" which="" profiler="" is="" active="" wait="1," warmup="1," on_trace_ready="" handler="" for="" traces="" )="" as="" p:="" idx="" in="" range(8):="" model(inputs)="" will="" trace="" 2="" and="" 3,="" then="" 6="" 7="" (counting="" from="" zero)="" p.step()="" more="" usage="" examples="" can="" be="" found="" recipe="" page.="" pytorch="" tensorboard="" plugin="" has="" new="" features="" for:="" distributed="" training="" summary="" view="" communications="" overview="" nccl="" gpu="" utilization="" sm="" efficiency="" operators="" memory="" profiling="" jump="" to="" source="" when="" launched="" microsoft="" vscode="" ability="" load="" cloud="" object="" storage="" systems="" (beta)="" inference="" mode="" api="" allows="" significant="" speed-up="" workloads="" while="" remaining="" safe="" ensuring="" no="" incorrect="" gradients="" ever="" computed.="" it="" offers="" best="" possible="" performance="" autograd="" required.="" details,="" refer="" documentation="" itself="" explaining="" use="" difference="" no_grad="" mode.="" torch.package="" a="" way="" package="" models="" self-contained,="" stable="" format.="" include="" both="" model’s="" data="" (e.g.="" parameters,="" buffers)="" its="" code="" (model="" architecture).="" packaging="" model="" full="" set="" of="" python="" dependencies,="" combined="" description="" conda="" environment="" pinned="" versions,="" used="" easily="" reproduce="" training.="" representing="" self-contained="" artifact="" also="" allow="" published="" transferred="" throughout="" production="" ml="" pipeline="" retaining="" flexibility="" pure-python="" representation.="" documentation.="" (prototype)="" prepare_for_inference="" prototype="" feature="" that="" takes="" module="" performs="" graph-level="" optimizations="" improve="" performance,="" depending="" device.="" meant="" pytorch-native="" option="" requires="" minimal="" changes="" user’s="" workflows.="" see="" torchscript="" version="" here="" or="" fx="" here.="" profile-directed="" typing="" hard="" requirement="" have="" type="" annotations="" order="" compilation="" successful.="" long="" time,="" was="" only="" add="" missing="" through="" trial="" error="" (i.e.,="" by="" fixing="" type-checking="" errors="" generated="" torch.jit.script="" one="" one),="" inefficient="" time="" consuming.="" now,="" we="" enabled="" profile="" directed="" leveraging="" existing="" tools="" like="" monkeytype,="" makes="" process="" much="" easier,="" faster,="" efficient.="" thanks="" reading.="" if="" you’re="" interested="" these="" updates="" want="" join="" community,="" encourage="" you="" discussion="" forums="" open="" github="" issues.="" get="" latest="" news="" pytorch,="" follow="" us="" facebook,="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年6月15日</p>
+            <h1>
+                <a class="blog-title">PyTorch 1.9 版本发布，包括 torch.linalg 和移动解释器</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队编写</p>
+                    <p>我们非常高兴地宣布 PyTorch 1.9 的发布。自 1.8 版本以来，共有 398 位贡献者完成了超过 3,400 次提交。发布说明可在<a href="https://github.com/pytorch/pytorch/releases">此处</a>查看。亮点包括：</p>
+<ol>
+  <li>对科学计算的支持进行了重大改进，包括 <em>torch.linalg</em>、<em>torch.special</em> 和复数自动微分</li>
+  <li>通过 Mobile Interpreter 在设备上实现了二进制大小的重大改进</li>
+  <li>通过将 TorchElastic 集成到 PyTorch 核心中，原生支持弹性容错训练</li>
+  <li>PyTorch RPC 框架的重大更新，以支持具有 GPU 支持的规模化分布式训练</li>
+  <li>新 API 以优化模型推理部署的性能和打包</li>
+  <li>支持 PyTorch Profiler 中的分布式训练、GPU 利用率和 SM 效率</li>
+</ol>
+
+<p>除了 1.9 版本外，我们还发布了 PyTorch 库的重大更新，您可以在<a href="https://pytorch.org/blog/pytorch-1.9-new-library-releases/">这篇博客文章</a>中了解详情。</p>
+
+<p>我们想感谢社区对本次最新版本的支持和工作。我们特别感谢 Quansight 和 Microsoft 的贡献。</p>
+
+<p>PyTorch 版本中的功能分为稳定版、测试版和原型版。您可以在<a href="https://pytorch.org/blog/pytorch-feature-classification-changes/">这篇博客文章</a>中了解更多关于定义的信息。</p>
+
+<h1 id="frontend-apis">前端 API</h1>
+
+<h3 id="stable-torchlinalg">（稳定版）<em>torch.linalg</em></h3>
+
+<p>在 1.9 版本中，<em>torch.linalg</em> 模块将转为稳定版发布。线性代数对于深度学习和科学计算至关重要，而 <em>torch.linalg</em> 模块通过实现 <a href="https://numpy.org/doc/stable/reference/routines.linalg.html">NumPy 线性代数模块 </a>（现在支持加速器和自动微分）中的每个函数以及更多，如 <a href="https://pytorch.org/docs/1.9.0/generated/torch.linalg.matrix_norm.html?highlight=matrix_norm#torch.linalg.matrix_norm"><em>torch.linalg.matrix_norm</em></a> 和 <a href="https://pytorch.org/docs/1.9.0/generated/torch.linalg.householder_product.html?highlight=householder_product#torch.linalg.householder_product"><em>torch.linalg.householder_product</em></a>，扩展了 PyTorch 对线性代数的支持。这使得该模块对使用过 NumPy 的用户来说非常熟悉。请参阅<a href="https://pytorch.org/docs/1.9.0/linalg.html?highlight=linalg#module-torch.linalg">此处文档 </a>。</p>
+
+<p>我们计划下周发布一篇包含更多关于 <em>torch.linalg</em> 模块细节的博客文章！</p>
+
+<h3 id="stable-complex-autograd">(稳定版) 复数自动微分</h3>
+
+<p>复数自动微分功能，在 PyTorch 1.8 版本中作为测试版发布，现在已稳定。自测试版发布以来，我们已将 PyTorch 1.9 中超过 98% 的算子支持扩展到复数自动微分，通过添加更多 OpInfos 提高了复数算子的测试，并通过 TorchAudio 迁移到原生复数张量增加了更多的验证（参阅 <a href="https://github.com/pytorch/audio/issues/1337"> 此问题 </a>）。</p>
+
+<p>此功能为用户提供计算复数梯度和使用复数变量优化实值损失函数的功能。这是 PyTorch 中复数用户（如 TorchAudio、ESPNet、Asteroid 和 FastMRI）当前和未来需求的一个必要功能。有关更多详细信息，请参阅 <a href="https://pytorch.org/docs/1.9.0/notes/autograd.html#autograd-for-complex-numbers"> 文档 </a>。</p>
+
+<h3 id="stable-torchuse_deterministic_algorithms">(稳定) torch.use_deterministic_algorithms()</h3>
+
+<p>为了帮助调试和编写可复现的程序，PyTorch 1.9 包含了一个 <em>torch.use_determinstic_algorithms</em> 选项。当此设置启用时，如果可能，操作将表现出确定性，否则会抛出运行时错误。以下是一些示例：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">).</span><span class="n">to_sparse</span><span class="p">()</span>
+<span class="o">&gt;&gt;&gt;</span> <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">)</span>
+
+<span class="c1"># Sparse-dense CUDA bmm is usually nondeterministic
+</span><span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">bmm</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">).</span><span class="n">eq</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">bmm</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)).</span><span class="nb">all</span><span class="p">().</span><span class="n">item</span><span class="p">()</span>
+<span class="bp">False</span>
+
+<span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">use_deterministic_algorithms</span><span class="p">(</span><span class="bp">True</span><span class="p">)</span>
+
+<span class="c1"># Now torch.bmm gives the same result each time, but with reduced performance
+</span><span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">bmm</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">).</span><span class="n">eq</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">bmm</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)).</span><span class="nb">all</span><span class="p">().</span><span class="n">item</span><span class="p">()</span>
+<span class="bp">True</span>
+
+<span class="c1"># CUDA kthvalue has no deterministic algorithm, so it throws a runtime error
+</span><span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">10000</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">'cuda'</span><span class="p">).</span><span class="n">kthvalue</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="nb">RuntimeError</span><span class="p">:</span> <span class="n">kthvalue</span> <span class="n">CUDA</span> <span class="n">does</span> <span class="ow">not</span> <span class="n">have</span> <span class="n">a</span> <span class="n">deterministic</span> <span class="n">implementation</span><span class="p">...</span>
+</code></pre></div></div>
+
+<p>PyTorch 1.9 还为许多索引操作添加了确定性实现，包括 <em>index_add</em>、<em>index_copy</em> 和 <em>index_put with accum=False</em>。更多详情请参阅 <a href="https://pytorch.org/docs/1.9.0/generated/torch.use_deterministic_algorithms.html?highlight=use_deterministic#torch.use_deterministic_algorithms"> 文档 </a> 和 <a href="https://pytorch.org/docs/1.9.0/notes/randomness.html?highlight=reproducibility"> 可复现性说明 </a>。</p>
+
+<h3 id="beta-torchspecial">(测试版) <em>torch.special</em></h3>
+
+<p>一个类似于 <em>SciPy 的 special 模块 </em> 的 <em>torch.special</em> 模块现在处于测试版。此模块包含许多对科学计算和与分布（如 <em>iv</em>、<em>ive</em>、<em>erfcx</em>、<em>logerfc</em> 和 <em>logerfcx</em>）进行操作有用的函数。有关更多详细信息，请参阅 <a href="https://pytorch.org/docs/master/special.html"> 文档 </a>。</p>
+
+<h3 id="beta-nnmodule-parameterization">（测试版）nn.Module 参数化</h3>
+
+<p><code class="language-plaintext highlighter-rouge">nn.Module</code> 参数化允许用户在不修改 <code class="language-plaintext highlighter-rouge">nn.Module</code> 本身的情况下对任何参数或缓冲区进行参数化。它允许您在不使用特殊优化方法的情况下约束参数存在的空间。</p>
+
+<p>此处还包含 PyTorch 1.9 的新实现 <code class="language-plaintext highlighter-rouge">spectral_norm</code> 参数化。更多参数化功能（如 weight_norm、矩阵约束和部分剪枝）将添加到此功能中，以便在 1.10 版本中使该功能稳定。有关更多详细信息，请参阅 <a href="https://pytorch.org/docs/1.9.0/generated/torch.nn.utils.parametrizations.spectral_norm.html?highlight=parametrize"> 文档 </a> 和 <a href="https://maskerprc.github.io/tutorials/intermediate/parametrizations.html"> 教程 </a>。</p>
+
+<h1 id="pytorch-mobile">PyTorch 移动端</h1>
+
+<h3 id="beta-mobile-interpreter">(Beta) 移动式翻译器</h3>
+
+<p>我们正在发布移动式翻译器，这是 PyTorch 运行时的精简版本，目前处于测试版。该翻译器将在边缘设备上执行 PyTorch 程序，并减少二进制文件大小。</p>
+
+<p>移动式翻译器是 PyTorch Mobile 最受欢迎的功能之一。这个新版本将显著减少与当前设备上运行时相比的二进制文件大小。为了您能够通过我们的翻译器（可以将二进制文件大小减少高达 75%）获得二进制文件大小的改进，请按照以下说明操作。例如，使用移动式翻译器，我们可以将 MobileNetV2 在 arm64-v7a Android 上压缩至 2.6 MB。在这个最新版本中，我们通过提供预构建的 iOS 和 Android 库，使集成翻译器变得更加简单。</p>
+
+<h3 id="torchvision-library">TorchVision 库</h3>
+
+<p>从 1.9 版本开始，用户可以在他们的 iOS/Android 应用中使用 TorchVision 库。Torchvision 库包含 C++ TorchVision 操作，需要与 iOS 的主 PyTorch 库链接，对于 Android，可以作为 gradle 依赖项添加。这允许使用预构建的 TorchVision MaskRCNN 操作符进行目标检测和分割。要了解更多关于该库的信息，请参阅我们的教程和<a href="https://github.com/pytorch/android-demo-app/tree/master/D2Go">演示应用 </a>。</p>
+
+<h3 id="demo-apps">演示应用</h3>
+
+<p>我们正在发布一个基于 <a href="https://pytorchvideo.org/">PyTorch Video</a> 库的新视频应用和一个基于最新 torchaudio、wave2vec 模型的更新版语音识别应用。这两个应用都可在 <a href="https://github.com/pytorch/ios-demo-app">iOS</a> 和 <a href="https://github.com/pytorch/android-demo-app">Android</a> 上使用。此外，我们还更新了七个计算机视觉和三个自然语言处理演示应用，包括 HuggingFace DistilBERT 和 DeiT 视觉 Transformer 模型，使用 PyTorch Mobile v1.9。随着这两个应用的加入，我们现在提供了一套完整的演示应用，涵盖图像、文本、音频和视频。要开始使用，请查看我们的 <a href="https://github.com/pytorch/ios-demo-app">iOS 演示应用</a>和 <a href="https://github.com/pytorch/android-demo-app">Android 演示应用 </a>。</p>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/android-demo-app.png" width="100%">
+</div>
+
+<h1 id="distributed-training">分布式训练</h1>
+
+<h3 id="beta-torchelastic-is-now-part-of-core">(Beta) TorchElastic 现在是核心部分</h3>
+
+<p><a href="https://github.com/pytorch/pytorch/issues/50621">火炬弹性 </a>，一年前在 <a href="https://github.com/pytorch/elastic">pytorch/elastic</a> GitHub 仓库开源，是 PyTorch 工作进程的运行器和协调器。从那时起，它已被各种分布式 PyTorch 用例采用：1) <a href="https://medium.com/pytorch/training-deepspeech-using-torchelastic-ad013539682">deepspeech.pytorch</a> 2) pytorch-lightning 3) <a href="https://github.com/pytorch/elastic/blob/master/kubernetes/README.md">Kubernetes CRD</a>。现在，它是 PyTorch 核心的一部分。</p>
+
+<p>如其名所示，TorchElastic 的核心功能是优雅地处理扩展事件。弹性的一个显著推论是，对等发现和排名分配已内置到 TorchElastic 中，使用户能够在不需要调度器的情况下运行可抢占实例的分布式训练。顺便提一下，<a href="https://etcd.io/">etcd</a> 曾经是 TorchElastic 的硬依赖。随着上游的更新，这种情况已经不再存在，因为我们已经添加了一个基于 c10d::Store 的“独立” rendezvous。有关更多详细信息，请参阅<a href="https://pytorch.org/docs/1.9.0/distributed.elastic.html">文档 </a>。</p>
+
+<h3 id="beta-distributed-training-updates">(Beta) 分布式训练更新</h3>
+
+<p>除了 TorchElastic 之外，分布式包中还有许多 beta 特性可用：</p>
+
+<ul>
+  <li>
+    <p>（Beta）RPC 中支持 CUDA：与 CPU RPC 和通用 RPC 框架相比，CUDA RPC 是 P2P Tensor 通信的一种更高效的方式。它建立在 TensorPipe 之上，可以根据 Tensor 设备类型和调用方及被调用方上的通道可用性自动为每个 Tensor 选择通信通道。现有的 TensorPipe 通道包括 NVLink、InfiniBand、SHM、CMA、TCP 等。参见<a href="https://maskerprc.github.io/tutorials/recipes/cuda_rpc.html">此配方</a>了解 CUDA RPC 如何帮助实现与 CPU RPC 相比 34 倍的速度提升。</p>
+  </li>
+  <li>
+    <p>（Beta）零冗余优化器：ZeroRedundancyOptimizer 可以与 DistributedDataParallel 结合使用，以减少每个进程优化器状态的大小。零冗余优化器的想法来自 <a href="https://github.com/microsoft/DeepSpeed">DeepSpeed/ZeRO 项目</a>和 <a href="https://github.com/marian-nmt/marian-dev">Marian</a>，其中每个进程的优化器拥有模型参数的片段及其相应的优化器状态。当运行 <code class="language-plaintext highlighter-rouge">step()</code> 时，每个优化器只更新自己的参数，然后使用集体通信来同步所有进程的更新参数。请参阅<a href="https://pytorch.org/docs/master/distributed.optim.html">此文档</a>和此<a href="https://maskerprc.github.io/tutorials/recipes/zero_redundancy_optimizer.html">教程</a>了解更多信息。</p>
+  </li>
+  <li>
+    <p><strong>(Beta) 支持分布式集体分析 </strong>：PyTorch 的剖析工具 <em>torch.profiler</em> 和 <em>torch.autograd.profiler</em> 能够分析分布式集体和点对点通信原语，包括 allreduce、alltoall、allgather、send/recv 等。这适用于 PyTorch 原生支持的所有后端：gloo、mpi 和 nccl。这可以用于调试性能问题，分析包含分布式通信的跟踪，并深入了解使用分布式训练的应用程序的性能。要了解更多信息，请参阅<a href="https://pytorch.org/docs/1.9.0/distributed.html#profiling-collective-communication">此文档 </a>。</p>
+  </li>
+</ul>
+
+<h1 id="performance-optimization-and-tooling">性能优化和工具</h1>
+
+<h3 id="stable-freezing-api">(Stable) API 冻结</h3>
+
+<p>模块冻结是将模块参数和属性值内联为常量到 TorchScript 内部表示的过程。这允许进一步优化和专门化您的程序，包括 TorchScript 优化和降低到其他后端。它被 <a href="https://github.com/pytorch/pytorch/blob/master/torch/utils/mobile_optimizer.py">optimize_for_mobile API</a>、ONNX 和其他工具使用。</p>
+
+<p>推荐将模型部署进行冻结。这有助于 TorchScript JIT 优化移除训练、调整或调试 PyTorch 模型所需的额外开销和记录。它启用了在非冻结图上不语义有效的图融合，例如融合卷积-归一化。更多详情请参阅<a href="https://pytorch.org/docs/1.9.0/generated/torch.jit.freeze.html">文档 </a>。</p>
+
+<h3 id="beta-pytorch-profiler">(Beta) PyTorch 分析器</h3>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/pytorch-profiler.gif" width="100%">
+</div>
+
+<p>新的 PyTorch 分析器已升级至 Beta 版本，并利用 <a href="https://github.com/pytorch/kineto/">Kineto</a> 进行 GPU 分析，TensorBoard 进行可视化，现在已成为我们教程和文档的标准。</p>
+
+<p>PyTorch 1.9 扩展了对新 <em>torch.profiler API 的支持，包括 Windows 和 Mac 等更多构建版本，在大多数情况下推荐使用该 API 代替之前的 <em>torch.autograd.profiler API。新的 API 支持现有的分析器功能，与 Linux-only 的 CUPTI 库集成以追踪设备上的 CUDA 内核，并提供对长时间运行作业的支持，例如：</em></em></p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">trace_handler</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">p</span><span class="p">.</span><span class="n">key_averages</span><span class="p">().</span><span class="n">table</span><span class="p">(</span><span class="n">sort_by</span><span class="o">=</span><span class="s">"self_cuda_time_total"</span><span class="p">,</span> <span class="n">row_limit</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+    <span class="n">p</span><span class="p">.</span><span class="n">export_chrome_trace</span><span class="p">(</span><span class="s">"/tmp/trace_"</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="p">.</span><span class="n">step_num</span><span class="p">)</span> <span class="o">+</span> <span class="s">".json"</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">profile</span><span class="p">(</span>
+    <span class="n">activities</span><span class="o">=</span><span class="p">[</span><span class="n">ProfilerActivity</span><span class="p">.</span><span class="n">CPU</span><span class="p">,</span> <span class="n">ProfilerActivity</span><span class="p">.</span><span class="n">CUDA</span><span class="p">],</span>
+    <span class="c1"># schedule argument specifies the iterations on which the profiler is active
+</span>    <span class="n">schedule</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">profiler</span><span class="p">.</span><span class="n">schedule</span><span class="p">(</span>
+        <span class="n">wait</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">warmup</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">active</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span>
+    <span class="c1"># on_trace_ready argument specifies the handler for the traces
+</span>    <span class="n">on_trace_ready</span><span class="o">=</span><span class="n">trace_handler</span>
+<span class="p">)</span> <span class="k">as</span> <span class="n">p</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">8</span><span class="p">):</span>
+        <span class="n">model</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+        <span class="c1"># profiler will trace iterations 2 and 3, and then 6 and 7 (counting from zero)
+</span>        <span class="n">p</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>更多使用示例可以在<a href="https://maskerprc.github.io/tutorials/recipes/recipes/profiler_recipe.html">分析器食谱页面</a>找到。</p>
+
+<p>PyTorch 分析器 Tensorboard 插件新增以下功能：</p>
+<ul>
+  <li>NCCL 的分布式训练摘要视图和通信概览</li>
+  <li>跟踪视图和 GPU 操作视图中的 GPU 利用率和 SM 效率</li>
+  <li>内存分析视图</li>
+  <li>从 Microsoft VSCode 启动时跳转到源代码</li>
+  <li>能够从云对象存储系统中加载跟踪信息</li>
+</ul>
+
+<h3 id="beta-inference-mode-api">(Beta) 推理模式 API</h3>
+
+<p>推理模式 API 允许在保持安全并确保不会计算任何错误梯度的情况下，显著提高推理工作负载的速度。当不需要自动微分时，它提供最佳性能。有关详细信息，请参阅<a href="https://pytorch.org/docs/1.9.0/generated/torch.inference_mode.html?highlight=inference%20mode#torch.inference_mode">推理模式的文档</a>和<a href="https://pytorch.org/docs/1.9.0/notes/autograd.html#locally-disabling-gradient-computation">解释何时使用它以及与 no_grad 模式的区别的文档 </a>。</p>
+
+<h3 id="beta-torchpackage">(Beta) <em>torch.package</em></h3>
+
+<p><em>torch.package</em> 是一种新的打包 PyTorch 模型的方式，以自包含、稳定的格式。一个包将包括模型的数据（例如参数、缓冲区）及其代码（模型架构）。将模型及其完整的 Python 依赖项打包，并结合一个带有固定版本的 conda 环境描述，可以轻松地重现训练。以自包含的工件表示模型还将允许其在生产 ML 管道中发布和传输，同时保持纯 Python 表示的灵活性。有关更多详细信息，请参阅 <a href="https://pytorch.org/docs/1.9.0/package.html"> 文档 </a>。</p>
+
+<h3 id="prototype-prepare_for_inference">(原型) prepare_for_inference</h3>
+
+<p>prepare_for_inference 是一个新原型功能，它接受一个模块并执行图级别的优化以提高推理性能，具体取决于设备。它旨在成为一个需要用户工作流程最少更改的 PyTorch 原生选项。有关更多详细信息，请参阅 Torchscript 版本的 <a href="https://github.com/pytorch/pytorch/blob/master/torch/jit/_freeze.py#L168"> 文档 </a>，或 FX 版本的 <a href="https://github.com/pytorch/pytorch/blob/master/torch/jit/_freeze.py#L168"> 此处 </a> 或 <a href="https://github.com/pytorch/pytorch/blob/master/torch/fx/experimental/optimization.py#L234"> 此处 </a>。</p>
+
+<h3 id="prototype-profile-directed-typing-in-torchscript">(原型)基于配置文件的 TorchScript 类型推导</h3>
+
+<p>TorchScript 对源代码有硬性要求，必须包含类型注解才能成功编译。长期以来，添加缺失或错误的类型注解只能通过试错的方式进行（即逐个修复由 <em>torch.jit.script</em> 生成的类型检查错误），这既低效又耗时。现在，我们通过利用现有的工具如 MonkeyType，实现了对 <em>torch.jit.script</em> 的配置文件导向类型推导，使整个过程变得更加简单、快速和高效。更多详情请参阅<a href="https://pytorch.org/docs/1.9.0/jit.html">文档 </a>。</p>
+
+<p>感谢阅读。如果您对这些更新感兴趣并希望加入 PyTorch 社区，我们鼓励您加入<a href="https://discuss.pytorch.org/">讨论论坛</a>和 <a href="https://github.com/pytorch/pytorch/issues">GitHub 问题 </a>。想获取 PyTorch 的最新动态，请关注我们的 <a href="https://www.facebook.com/pytorch/">Facebook</a>、<a href="https://twitter.com/PyTorch">Twitter</a>、<a href="https://medium.com/pytorch">Medium</a>、<a href="https://www.youtube.com/pytorch">YouTube</a> 或 <a href="https://www.linkedin.com/company/pytorch">LinkedIn</a>。</p>
+
+<p>干杯！</p>
+
+<p>PyTorch 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

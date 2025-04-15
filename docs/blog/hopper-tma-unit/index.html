@@ -1,0 +1,2173 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Deep Dive on the Hopper TMA Unit for FP8 GEMMs | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Abstract
+
+The Hopper (H100) GPU architecture, billed as the “first truly asynchronous GPU”, includes a new, fully asynchronous hardware copy engine for bulk data movement between global and shared memory called Tensor Memory Accelerator (TMA).  While CUTLASS has built-in support for TMA via its asynchronous pipeline paradigm, Triton exposes TMA support via an experimental API.
+
+In this post, we provide a deeper dive into the details of how TMA works, for developers to understand the new async copy engine.  We also show the importance of leveraging TMA for H100 kernels by building a TMA enabled FP8 GEMM kernel in Triton, which delivers from 1.4-2.2x performance gains over cuBLAS FP16 for small-to-medium problem sizes.  Finally, we showcase key implementation differences between Triton and CUTLASS that may account for reports of performance regressions with TMA in Triton.  We open source our implementation for reproducibility and review at https://github.com/pytorch-labs/applied-ai/tree/main/kernels
+
+
+
+Figure 1. The throughput in TFLOPs of various Triton and cuBLAS FP8 and FP16 kernels, for M=M, N=4096, K=4096. The red line is the Triton TMA, which showcases the advantages of leveraging TMA.
+
+TMA Background
+
+TMA is an H100 hardware addition that allows applications to asynchronously and bi-directionally transfer 1D-5D tensors between GPU global and shared memory.  In addition, TMA can also transfer the same data to not just the calling SM’s shared memory, but to other SM’s shared memory if they are part of the same Thread Block Cluster.  This is termed ‘multicast’.
+
+TMA is very lightweight as only a single thread is needed to kick off a TMA transfer.  By moving data directly from GMEM (global) to SMEM (shared), this avoids earlier GPU requirements of using registers for moving data between different memory spaces.
+
+
+
+Figure 2. A100-style data movement vs H100 with TMA.  TMA hardware eliminates the need for a large amount of threads and registers participating in bulk data transfers.  (Image credit Nvidia)
+
+A single thread can issue large data movement instructions, allowing the majority of a given thread block to continue working on other instructions while data is in-flight. Combined with asynchronous pipelining, this allows memory transfers to be easily hidden and ensure the majority of any given thread block cluster can focus on computational task.
+
+This lightweight invocation for data movement enables the creation of warp-group specialized kernels, where warp-groups take on different roles, namely producers and consumers. Producers elect a leader thread that fires off TMA requests, which are then asynchronously coordinated with the consumer (MMA) warp-groups via an arrival barrier.  Consumers then process the data using warp-group MMA, and signal back to the producers when they have finished reading from the SMEM buffer and the cycle repeats.
+
+Further, within threadblock clusters, producers can lower their max register requirements since they are only issuing TMA calls, and effectively transfer additional registers to MMA consumers, which helps to alleviate register pressure for consumers.
+
+In addition, TMA handles the address computation for the shared memory destination where the data requested should be placed. This is why calling threads (producers) can be so lightweight.
+
+To ensure maximum read access speed, TMA can lay out the arriving data based on swizzling instructions, to ensure the arriving data can be read as fast as possible by consumers, as the swizzling pattern helps avoid shared memory bank conflicts.
+
+Finally for TMA instructions that are outgoing, or moving data from SMEM to GMEM, TMA can also include reduction operations (add/min/max) and bitwise (and/or) operations.
+
+TMA usage in Triton
+
+Pre-Hopper Load:
+
+offs_m = pid_m*block_m + tl.arange(0, block_m)
+offs_n = pid_n*block_n + tl.arange(0, block_n)
+offs_k = tl.arange(0, block_k)
+
+a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k[None, :]*stride_ak)
+b_ptrs = b_ptr + (offs_k[:, None]*stride_bk + offs_bn[None, :]*stride_bn)
+
+a = tl.load(a_ptrs)
+b = tl.load(b_ptrs)
+
+
+Figure 3. Traditional style bulk load from global to shared memory in Triton
+
+In the above Triton example showing a pre-Hopper load, we see how the data for tensors a and b are loaded by each thread block computing  global offsets (a_ptrs, b_ptrs) from their relevant program_id (pid_m, pid_n, k) and then making a request to move blocks of memory into shared memory for a and b.
+
+Now let’s examine how to perform a load using TMA in Triton.
+
+The TMA instruction requires a special data structure called a tensor map, in contrast to the above where we directly pass pointers to global memory. To build the tensor map, we first create a TMA descriptor on the CPU. The descriptor handles the creation of the tensor map by using the cuTensorMapEncode API. The tensor map holds metadata such as the global and shared memory layout of the tensor and serves as a compressed representation of the structure of the multi-dimensional tensor stored in global memory.
+
+
+
+Figure 4. TMA address generation via a copy descriptor (Image credit: Nvidia)
+
+The TMA descriptor holds the tensor’s key properties:
+
+
+  Base Pointer
+  Shape and Block Size
+  Datatype
+
+
+The TMA descriptor is created on the host before the kernel, and then moved to device by passing the descriptor to a torch tensor. Thus, in Triton, the GEMM kernel receives a global pointer to the tensor map.
+
+Triton Host Code
+
+   desc_a = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_b = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_c = np.empty(TMA_SIZE, dtype=np.int8)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), m, k, block_m, block_k, a.element_size(), desc_a)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), n, k, block_n, block_k, b.element_size(), desc_b)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), m, n, block_m, block_n, c.element_size(), desc_c)
+  
+   desc_a = torch.tensor(desc_a, device='cuda')
+   desc_b = torch.tensor(desc_b, device='cuda')
+   desc_c = torch.tensor(desc_c, device='cuda')
+
+
+This is the code that is used to set up the descriptors in the kernel invoke function.
+
+Triton Device Code
+
+Offsets/Pointer Arithmetic:
+
+   offs_am = pid_m * block_m
+   offs_bn = pid_n * block_n
+   offs_k = 0
+
+
+Load:
+
+  a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [block_m, block_k], tl.float8e4nv)
+  b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [block_n, block_k], tl.float8e4nv)
+
+
+Store:
+
+ tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
+
+
+We no longer need to calculate a pointer array for both load and store functions in the kernel. Instead, we pass a single descriptor pointer, the offsets, block size and the input datatype. This simplifies address calculation and reduces register pressure, as we no longer have to do complex pointer arithmetic in software and dedicate CUDA cores for address computation.
+
+TMA Performance Analysis
+
+Below, we discuss the PTX instructions for different load mechanisms on Hopper.
+
+PTX for Loading Tile (cp.async) - H100 no TMA
+
+add.s32 	%r27, %r100, %r8;
+add.s32 	%r29, %r100, %r9;
+selp.b32 	%r30, %r102, 0, %p18;
+
+
+@%p1 cp.async.cg.shared.global [ %r27 + 0 ], [ %rd20 + 0 ], 0x10, %r30;
+@%p1 cp.async.cg.shared.global [ %r29 + 0 ], [ %rd21 + 0 ], 0x10, %r30;
+
+
+cp.async.commit_group ;
+
+
+Here, we observe the older cp.async instruction responsible for global memory copies. From the traces below we can see that both loads bypass the L1 cache. A major difference in the newer TMA load is that before tiles from A and B were ready to be consumed by the Tensor Core we would need to execute an ldmatrix instruction that operated on data contained in register files. On Hopper, the data can now be directly reused from shared memory.
+
+
+
+Figure 5. H100 Memory Chart showing GMEM Throughput = 910.22 GB/s (Triton GEMM without TMA) for M=128, N=4096, K=4096
+
+By leveraging TMA through the Triton API changes we mentioned above, we can investigate the PTX that Triton generates for a single 2D tile load with TMA.
+
+PTX for Loading Tile (cp.async.bulk.tensor) - H100 using TMA
+
+bar.sync 	0;
+shr.u32 	%r5, %r4, 5;
+shfl.sync.idx.b32	%r66, %r5, 0, 31, -1;
+
+elect.sync _|%p7, 0xffffffff;
+
+
+add.s32 	%r24, %r65, %r67;
+shl.b32 	%r25, %r66, 7;
+
+@%p8
+cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%r24], [%rd26, {%r25,%r152}], [%r19];
+
+
+The cp.async.bulk.tensor.2d.shared TMA instruction is passed the destination address in shared memory, a pointer to the tensor map, the tensor map coordinates and a pointer to the mbarrier object, respectively.
+
+
+
+Figure 6. H100 Memory Chart GMEM Throughput =1.45 TB/s (Triton GEMM with TMA) for M=128, N=4096, K=4096
+
+For optimal performance we tuned the TMA GEMM kernel extensively. Amongst other parameters such as tile sizes, number of warps and number of pipeline stages, the biggest increase in memory throughput  was observed when we increased the TMA_SIZE (descriptor size) from 128 to 512. From the above NCU profiles, we can see that the final tuned kernel has increased global memory transfer throughput from 910 GB/s to 1.45 TB/s, a 59% increase in GMEM throughput, over the non-TMA Triton GEMM kernel.
+
+Comparison of CUTLASS and Triton FP8 GEMM and TMA Implementation - Kernel Architecture
+
+
+
+Figure 7. Triton vs CUTLASS Ping-Pong FP8 GEMM TFLOPs, M=M, N=4096, K=4096
+
+The above chart shows the performance of a CUTLASS Ping-Pong GEMM kernel against Triton. The Ping-Pong kernel leverages TMA differently than Triton. It makes use of all of its HW and SW software capabilities, while Triton currently does not. Specifically, CUTLASS supports the below TMA features that help explain the performance gaps in pure GEMM performance:.
+
+
+  
+    TMA Multicast
+
+    
+      Enables copy of data from GMEM to multiple SMs
+    
+  
+  
+    Warp Specialization
+
+    
+      Enables warp groups within a threadblock to take on different roles
+    
+  
+  
+    Tensor Map (TMA Descriptor) Prefetch
+
+    
+      Enables prefetching the Tensor Map object from GMEM, which allows pipelining of TMA loads
+    
+  
+
+
+To put the performance numbers in perspective, below we show a ‘speed-up’ chart highlighting the latency differences on a percentage basis:
+
+
+
+Figure 8: % Speedup of CUTLASS Ping-Pong vs Triton FP8 with TMA.
+
+This speedup is purely kernel throughput, not including E2E launch overhead which we will discuss below.
+
+TMA Descriptor movement - a key difference between Triton and CUTLASS with E2E performance implications
+
+As noted previously, creation of a 2D+ dimensional TMA descriptor takes place on the host and is then transferred to the device.  However, this transfer process takes place very differently depending on the implementation.
+
+Here we showcase the differences between how Triton transfers TMA descriptors compared with CUTLASS.
+
+Recall, TMA transfers require a special data structure, a tensor map to be created on CPU through the cuTensorMap API, which for an FP8 GEMM Kernel means creating three descriptors, one for each A, B and C. We see below that for both the Triton and CUTLASS Kernels the same CPU procedures are invoked.
+
+
+
+Figure 7. Calls to cuTensorMapEncodeTiled (Both Triton and CUTLASS use this path)
+
+However, for Triton, each descriptor is transferred in its own distinct copy kernel, which adds a significant amount of overhead and serves as a barrier to use this kernel in an end-to-end use inference scenario.
+
+
+
+Figure 8. Three H2D Copy Kernels are launched before the kernel execution, for A, B and C
+
+These copies are not observed in the CUTLASS implementation, due to the way that TMA descriptors are passed to the kernel. We can see from the PTX below that with Cutlass, tensor maps are passed-by-value to the kernel.
+
+.entry _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE(
+
+.param .align 64 .b8 _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0[1024]
+
+
+mov.b64 	%rd110, _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_10bfloat16_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEES8_NS7_ILi256EEEEEENS6_IJNS7_ILi1EEESB_SB_EEENS_4gemm24KernelTmaWarpSpecializedENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0;
+
+add.s64 	%rd70, %rd110, 704;
+cvta.param.u64 	%rd69, %rd70;
+
+cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [%rd69, {%r284, %r283}], [%r1880];
+
+
+Figure 9. CUTLASS kernel PTX showing pass-by-value
+
+By directly passing the TMA Descriptor as opposed to passing a global memory pointer, the CUTLASS kernel avoids the three extra H2D copy kernels and instead these copies are included in the single device kernel launch for the GEMM.
+
+Because of the difference in how descriptors are moved to the device, the kernel latencies including the time to prepare the tensors to be consumed by the TMA is drastically different.  For M=1-128, N=4096, K=4096 the CUTLASS pingpong kernel has an average latency of 10us Triton TMA kernels complete in an average of 4ms.  This is a factor of ~3330x slower and appears to be directly linked to the 3 independent kernel launches for TMA descriptor transfer by Triton.
+
+Cuda graphs may be one way to reduce this, but given the overhead created by the H2D copies the current Triton implementation when measured end to end is not competitive.  A rework of how the Triton compiler manages TMA descriptors would likely resolve this gap.  We thus focused on comparing the actual compute kernel throughput and not E2E in our data above.
+
+Results Summary
+
+
+
+Figure 10. Triton FP8 TMA GEMM TFLOPs Comparison
+
+
+  
+   M
+   
+   Triton TMA
+   
+   Triton Tutorial
+   
+   Triton SplitK 
+   
+   cuBLAS FP8 
+   
+   cuBLAS FP16 
+   
+   CUTLASS Ping-Pong FP8
+   
+  
+  
+   1
+   
+   2.5
+   
+   1
+   
+   2.4
+   
+   1.5
+   
+   1.8
+   
+   3.57
+   
+  
+  
+   2
+   
+   5.1
+   
+   2.5
+   
+   4.8
+   
+   3.1
+   
+   3.6
+   
+   5.9
+   
+  
+  
+   4
+   
+   10.3
+   
+   7.21
+   
+   9.6
+   
+   6.1
+   
+   7.2
+   
+   14.3
+   
+  
+  
+   8
+   
+   21.0
+   
+   16.5
+   
+   19.2
+   
+   12.3
+   
+   14.4
+   
+   28.6
+   
+  
+  
+   16
+   
+   44.5
+   
+   41.0
+   
+   37.2
+   
+   24.5
+   
+   27.7
+   
+   55.1
+   
+  
+  
+   32
+   
+   89.7
+   
+   81.2
+   
+   72.2
+   
+   71.6
+   
+   56.8
+   
+   114.4
+   
+  
+  
+   64
+   
+   178.5
+   
+   163.7
+   
+   130.8
+   
+   144.6
+   
+   105.3
+   
+   228.7
+   
+  
+  
+   128
+   
+   359.7
+   
+   225.9
+   
+   160.1
+   
+   244.0
+   
+   189.2
+   
+   377.7
+   
+  
+
+
+Figure 11. Triton FP8 TMA GEMM TFLOPs Comparison Table
+
+The above chart and table summarize the gain we’ve been able to achieve on a single NVIDIA H100 for FP8 GEMM, by leveraging the TMA Hardware Unit, over non-TMA Triton kernels and high performance CUDA (cuBLAS) kernels. The key point to note is this kernel’s superior scaling (with the batch size) properties over the competition. The problem sizes we benchmarked on are representative of the matrix shapes found in small-to-medium batch size LLM inference. Thus, TMA GEMM kernel performance in the mid-M regime (M=32 to M=128) will be critical for those interested in leveraging this kernel for FP8 LLM deployment use cases, as the FP8 compressed data type can allow larger matrices to fit in GPUs memory.
+
+To summarize our analysis, the TMA implementation in Triton and CUTLASS differ in terms of full featureset support (multicast, prefetch etc.) and how the TMA Descriptor is passed to the GPU kernel. If this descriptor is passed in a manner that more closely matches the CUTLASS kernel (pass-by-value), the extraneous H2D copies could be avoided and thus the E2E performance would be greatly improved.
+
+Future Work
+
+For future research, we plan to improve upon these results, by working with the community to incorporate the CUTLASS architecture of TMA loads into Triton as well as investigating the Cooperative Kernel for FP8 GEMM, a modified strategy to the Ping-Pong Kernel.
+
+In addition, once features like thread block clusters and TMA atomic operations are enabled in Triton, we may be able to get further speedups by leveraging the SplitK strategy in the TMA GEMM Kernel, as atomic operations on Hopper can be performed in Distributed Shared Memory (DSMEM) as opposed to L2 Cache.  We also note the similarities of NVIDIA Hopper GPUs with other AI hardware accelerators like Google’s TPU and IBM’s AIU which are dataflow architectures. On Hopper, data can now “flow” from GMEM to a network of connected SMs due to the additions of TMA, which we discussed extensively in this blog, and DSMEM, which we plan to cover in a future post.
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Deep Dive on the Hopper TMA Unit for FP8 GEMMs">
+<meta property="og:description" content="Abstract
+
+The Hopper (H100) GPU architecture, billed as the “first truly asynchronous GPU”, includes a new, fully asynchronous hardware copy engine for bulk data movement between global and shared memory called Tensor Memory Accelerator (TMA).  While CUTLASS has built-in support for TMA via its asynchronous pipeline paradigm, Triton exposes TMA support via an experimental API.
+
+In this post, we provide a deeper dive into the details of how TMA works, for developers to understand the new async copy engine.  We also show the importance of leveraging TMA for H100 kernels by building a TMA enabled FP8 GEMM kernel in Triton, which delivers from 1.4-2.2x performance gains over cuBLAS FP16 for small-to-medium problem sizes.  Finally, we showcase key implementation differences between Triton and CUTLASS that may account for reports of performance regressions with TMA in Triton.  We open source our implementation for reproducibility and review at https://github.com/pytorch-labs/applied-ai/tree/main/kernels
+
+
+
+Figure 1. The throughput in TFLOPs of various Triton and cuBLAS FP8 and FP16 kernels, for M=M, N=4096, K=4096. The red line is the Triton TMA, which showcases the advantages of leveraging TMA.
+
+TMA Background
+
+TMA is an H100 hardware addition that allows applications to asynchronously and bi-directionally transfer 1D-5D tensors between GPU global and shared memory.  In addition, TMA can also transfer the same data to not just the calling SM’s shared memory, but to other SM’s shared memory if they are part of the same Thread Block Cluster.  This is termed ‘multicast’.
+
+TMA is very lightweight as only a single thread is needed to kick off a TMA transfer.  By moving data directly from GMEM (global) to SMEM (shared), this avoids earlier GPU requirements of using registers for moving data between different memory spaces.
+
+
+
+Figure 2. A100-style data movement vs H100 with TMA.  TMA hardware eliminates the need for a large amount of threads and registers participating in bulk data transfers.  (Image credit Nvidia)
+
+A single thread can issue large data movement instructions, allowing the majority of a given thread block to continue working on other instructions while data is in-flight. Combined with asynchronous pipelining, this allows memory transfers to be easily hidden and ensure the majority of any given thread block cluster can focus on computational task.
+
+This lightweight invocation for data movement enables the creation of warp-group specialized kernels, where warp-groups take on different roles, namely producers and consumers. Producers elect a leader thread that fires off TMA requests, which are then asynchronously coordinated with the consumer (MMA) warp-groups via an arrival barrier.  Consumers then process the data using warp-group MMA, and signal back to the producers when they have finished reading from the SMEM buffer and the cycle repeats.
+
+Further, within threadblock clusters, producers can lower their max register requirements since they are only issuing TMA calls, and effectively transfer additional registers to MMA consumers, which helps to alleviate register pressure for consumers.
+
+In addition, TMA handles the address computation for the shared memory destination where the data requested should be placed. This is why calling threads (producers) can be so lightweight.
+
+To ensure maximum read access speed, TMA can lay out the arriving data based on swizzling instructions, to ensure the arriving data can be read as fast as possible by consumers, as the swizzling pattern helps avoid shared memory bank conflicts.
+
+Finally for TMA instructions that are outgoing, or moving data from SMEM to GMEM, TMA can also include reduction operations (add/min/max) and bitwise (and/or) operations.
+
+TMA usage in Triton
+
+Pre-Hopper Load:
+
+offs_m = pid_m*block_m + tl.arange(0, block_m)
+offs_n = pid_n*block_n + tl.arange(0, block_n)
+offs_k = tl.arange(0, block_k)
+
+a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k[None, :]*stride_ak)
+b_ptrs = b_ptr + (offs_k[:, None]*stride_bk + offs_bn[None, :]*stride_bn)
+
+a = tl.load(a_ptrs)
+b = tl.load(b_ptrs)
+
+
+Figure 3. Traditional style bulk load from global to shared memory in Triton
+
+In the above Triton example showing a pre-Hopper load, we see how the data for tensors a and b are loaded by each thread block computing  global offsets (a_ptrs, b_ptrs) from their relevant program_id (pid_m, pid_n, k) and then making a request to move blocks of memory into shared memory for a and b.
+
+Now let’s examine how to perform a load using TMA in Triton.
+
+The TMA instruction requires a special data structure called a tensor map, in contrast to the above where we directly pass pointers to global memory. To build the tensor map, we first create a TMA descriptor on the CPU. The descriptor handles the creation of the tensor map by using the cuTensorMapEncode API. The tensor map holds metadata such as the global and shared memory layout of the tensor and serves as a compressed representation of the structure of the multi-dimensional tensor stored in global memory.
+
+
+
+Figure 4. TMA address generation via a copy descriptor (Image credit: Nvidia)
+
+The TMA descriptor holds the tensor’s key properties:
+
+
+  Base Pointer
+  Shape and Block Size
+  Datatype
+
+
+The TMA descriptor is created on the host before the kernel, and then moved to device by passing the descriptor to a torch tensor. Thus, in Triton, the GEMM kernel receives a global pointer to the tensor map.
+
+Triton Host Code
+
+   desc_a = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_b = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_c = np.empty(TMA_SIZE, dtype=np.int8)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), m, k, block_m, block_k, a.element_size(), desc_a)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), n, k, block_n, block_k, b.element_size(), desc_b)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), m, n, block_m, block_n, c.element_size(), desc_c)
+  
+   desc_a = torch.tensor(desc_a, device='cuda')
+   desc_b = torch.tensor(desc_b, device='cuda')
+   desc_c = torch.tensor(desc_c, device='cuda')
+
+
+This is the code that is used to set up the descriptors in the kernel invoke function.
+
+Triton Device Code
+
+Offsets/Pointer Arithmetic:
+
+   offs_am = pid_m * block_m
+   offs_bn = pid_n * block_n
+   offs_k = 0
+
+
+Load:
+
+  a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [block_m, block_k], tl.float8e4nv)
+  b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [block_n, block_k], tl.float8e4nv)
+
+
+Store:
+
+ tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
+
+
+We no longer need to calculate a pointer array for both load and store functions in the kernel. Instead, we pass a single descriptor pointer, the offsets, block size and the input datatype. This simplifies address calculation and reduces register pressure, as we no longer have to do complex pointer arithmetic in software and dedicate CUDA cores for address computation.
+
+TMA Performance Analysis
+
+Below, we discuss the PTX instructions for different load mechanisms on Hopper.
+
+PTX for Loading Tile (cp.async) - H100 no TMA
+
+add.s32 	%r27, %r100, %r8;
+add.s32 	%r29, %r100, %r9;
+selp.b32 	%r30, %r102, 0, %p18;
+
+
+@%p1 cp.async.cg.shared.global [ %r27 + 0 ], [ %rd20 + 0 ], 0x10, %r30;
+@%p1 cp.async.cg.shared.global [ %r29 + 0 ], [ %rd21 + 0 ], 0x10, %r30;
+
+
+cp.async.commit_group ;
+
+
+Here, we observe the older cp.async instruction responsible for global memory copies. From the traces below we can see that both loads bypass the L1 cache. A major difference in the newer TMA load is that before tiles from A and B were ready to be consumed by the Tensor Core we would need to execute an ldmatrix instruction that operated on data contained in register files. On Hopper, the data can now be directly reused from shared memory.
+
+
+
+Figure 5. H100 Memory Chart showing GMEM Throughput = 910.22 GB/s (Triton GEMM without TMA) for M=128, N=4096, K=4096
+
+By leveraging TMA through the Triton API changes we mentioned above, we can investigate the PTX that Triton generates for a single 2D tile load with TMA.
+
+PTX for Loading Tile (cp.async.bulk.tensor) - H100 using TMA
+
+bar.sync 	0;
+shr.u32 	%r5, %r4, 5;
+shfl.sync.idx.b32	%r66, %r5, 0, 31, -1;
+
+elect.sync _|%p7, 0xffffffff;
+
+
+add.s32 	%r24, %r65, %r67;
+shl.b32 	%r25, %r66, 7;
+
+@%p8
+cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%r24], [%rd26, {%r25,%r152}], [%r19];
+
+
+The cp.async.bulk.tensor.2d.shared TMA instruction is passed the destination address in shared memory, a pointer to the tensor map, the tensor map coordinates and a pointer to the mbarrier object, respectively.
+
+
+
+Figure 6. H100 Memory Chart GMEM Throughput =1.45 TB/s (Triton GEMM with TMA) for M=128, N=4096, K=4096
+
+For optimal performance we tuned the TMA GEMM kernel extensively. Amongst other parameters such as tile sizes, number of warps and number of pipeline stages, the biggest increase in memory throughput  was observed when we increased the TMA_SIZE (descriptor size) from 128 to 512. From the above NCU profiles, we can see that the final tuned kernel has increased global memory transfer throughput from 910 GB/s to 1.45 TB/s, a 59% increase in GMEM throughput, over the non-TMA Triton GEMM kernel.
+
+Comparison of CUTLASS and Triton FP8 GEMM and TMA Implementation - Kernel Architecture
+
+
+
+Figure 7. Triton vs CUTLASS Ping-Pong FP8 GEMM TFLOPs, M=M, N=4096, K=4096
+
+The above chart shows the performance of a CUTLASS Ping-Pong GEMM kernel against Triton. The Ping-Pong kernel leverages TMA differently than Triton. It makes use of all of its HW and SW software capabilities, while Triton currently does not. Specifically, CUTLASS supports the below TMA features that help explain the performance gaps in pure GEMM performance:.
+
+
+  
+    TMA Multicast
+
+    
+      Enables copy of data from GMEM to multiple SMs
+    
+  
+  
+    Warp Specialization
+
+    
+      Enables warp groups within a threadblock to take on different roles
+    
+  
+  
+    Tensor Map (TMA Descriptor) Prefetch
+
+    
+      Enables prefetching the Tensor Map object from GMEM, which allows pipelining of TMA loads
+    
+  
+
+
+To put the performance numbers in perspective, below we show a ‘speed-up’ chart highlighting the latency differences on a percentage basis:
+
+
+
+Figure 8: % Speedup of CUTLASS Ping-Pong vs Triton FP8 with TMA.
+
+This speedup is purely kernel throughput, not including E2E launch overhead which we will discuss below.
+
+TMA Descriptor movement - a key difference between Triton and CUTLASS with E2E performance implications
+
+As noted previously, creation of a 2D+ dimensional TMA descriptor takes place on the host and is then transferred to the device.  However, this transfer process takes place very differently depending on the implementation.
+
+Here we showcase the differences between how Triton transfers TMA descriptors compared with CUTLASS.
+
+Recall, TMA transfers require a special data structure, a tensor map to be created on CPU through the cuTensorMap API, which for an FP8 GEMM Kernel means creating three descriptors, one for each A, B and C. We see below that for both the Triton and CUTLASS Kernels the same CPU procedures are invoked.
+
+
+
+Figure 7. Calls to cuTensorMapEncodeTiled (Both Triton and CUTLASS use this path)
+
+However, for Triton, each descriptor is transferred in its own distinct copy kernel, which adds a significant amount of overhead and serves as a barrier to use this kernel in an end-to-end use inference scenario.
+
+
+
+Figure 8. Three H2D Copy Kernels are launched before the kernel execution, for A, B and C
+
+These copies are not observed in the CUTLASS implementation, due to the way that TMA descriptors are passed to the kernel. We can see from the PTX below that with Cutlass, tensor maps are passed-by-value to the kernel.
+
+.entry _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE(
+
+.param .align 64 .b8 _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0[1024]
+
+
+mov.b64 	%rd110, _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_10bfloat16_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEES8_NS7_ILi256EEEEEENS6_IJNS7_ILi1EEESB_SB_EEENS_4gemm24KernelTmaWarpSpecializedENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0;
+
+add.s64 	%rd70, %rd110, 704;
+cvta.param.u64 	%rd69, %rd70;
+
+cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [%rd69, {%r284, %r283}], [%r1880];
+
+
+Figure 9. CUTLASS kernel PTX showing pass-by-value
+
+By directly passing the TMA Descriptor as opposed to passing a global memory pointer, the CUTLASS kernel avoids the three extra H2D copy kernels and instead these copies are included in the single device kernel launch for the GEMM.
+
+Because of the difference in how descriptors are moved to the device, the kernel latencies including the time to prepare the tensors to be consumed by the TMA is drastically different.  For M=1-128, N=4096, K=4096 the CUTLASS pingpong kernel has an average latency of 10us Triton TMA kernels complete in an average of 4ms.  This is a factor of ~3330x slower and appears to be directly linked to the 3 independent kernel launches for TMA descriptor transfer by Triton.
+
+Cuda graphs may be one way to reduce this, but given the overhead created by the H2D copies the current Triton implementation when measured end to end is not competitive.  A rework of how the Triton compiler manages TMA descriptors would likely resolve this gap.  We thus focused on comparing the actual compute kernel throughput and not E2E in our data above.
+
+Results Summary
+
+
+
+Figure 10. Triton FP8 TMA GEMM TFLOPs Comparison
+
+
+  
+   M
+   
+   Triton TMA
+   
+   Triton Tutorial
+   
+   Triton SplitK 
+   
+   cuBLAS FP8 
+   
+   cuBLAS FP16 
+   
+   CUTLASS Ping-Pong FP8
+   
+  
+  
+   1
+   
+   2.5
+   
+   1
+   
+   2.4
+   
+   1.5
+   
+   1.8
+   
+   3.57
+   
+  
+  
+   2
+   
+   5.1
+   
+   2.5
+   
+   4.8
+   
+   3.1
+   
+   3.6
+   
+   5.9
+   
+  
+  
+   4
+   
+   10.3
+   
+   7.21
+   
+   9.6
+   
+   6.1
+   
+   7.2
+   
+   14.3
+   
+  
+  
+   8
+   
+   21.0
+   
+   16.5
+   
+   19.2
+   
+   12.3
+   
+   14.4
+   
+   28.6
+   
+  
+  
+   16
+   
+   44.5
+   
+   41.0
+   
+   37.2
+   
+   24.5
+   
+   27.7
+   
+   55.1
+   
+  
+  
+   32
+   
+   89.7
+   
+   81.2
+   
+   72.2
+   
+   71.6
+   
+   56.8
+   
+   114.4
+   
+  
+  
+   64
+   
+   178.5
+   
+   163.7
+   
+   130.8
+   
+   144.6
+   
+   105.3
+   
+   228.7
+   
+  
+  
+   128
+   
+   359.7
+   
+   225.9
+   
+   160.1
+   
+   244.0
+   
+   189.2
+   
+   377.7
+   
+  
+
+
+Figure 11. Triton FP8 TMA GEMM TFLOPs Comparison Table
+
+The above chart and table summarize the gain we’ve been able to achieve on a single NVIDIA H100 for FP8 GEMM, by leveraging the TMA Hardware Unit, over non-TMA Triton kernels and high performance CUDA (cuBLAS) kernels. The key point to note is this kernel’s superior scaling (with the batch size) properties over the competition. The problem sizes we benchmarked on are representative of the matrix shapes found in small-to-medium batch size LLM inference. Thus, TMA GEMM kernel performance in the mid-M regime (M=32 to M=128) will be critical for those interested in leveraging this kernel for FP8 LLM deployment use cases, as the FP8 compressed data type can allow larger matrices to fit in GPUs memory.
+
+To summarize our analysis, the TMA implementation in Triton and CUTLASS differ in terms of full featureset support (multicast, prefetch etc.) and how the TMA Descriptor is passed to the GPU kernel. If this descriptor is passed in a manner that more closely matches the CUTLASS kernel (pass-by-value), the extraneous H2D copies could be avoided and thus the E2E performance would be greatly improved.
+
+Future Work
+
+For future research, we plan to improve upon these results, by working with the community to incorporate the CUTLASS architecture of TMA loads into Triton as well as investigating the Cooperative Kernel for FP8 GEMM, a modified strategy to the Ping-Pong Kernel.
+
+In addition, once features like thread block clusters and TMA atomic operations are enabled in Triton, we may be able to get further speedups by leveraging the SplitK strategy in the TMA GEMM Kernel, as atomic operations on Hopper can be performed in Distributed Shared Memory (DSMEM) as opposed to L2 Cache.  We also note the similarities of NVIDIA Hopper GPUs with other AI hardware accelerators like Google’s TPU and IBM’s AIU which are dataflow architectures. On Hopper, data can now “flow” from GMEM to a network of connected SMs due to the additions of TMA, which we discussed extensively in this blog, and DSMEM, which we plan to cover in a future post.
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Deep Dive on the Hopper TMA Unit for FP8 GEMMs">
+<meta name="twitter:description" content="Abstract
+
+The Hopper (H100) GPU architecture, billed as the “first truly asynchronous GPU”, includes a new, fully asynchronous hardware copy engine for bulk data movement between global and shared memory called Tensor Memory Accelerator (TMA).  While CUTLASS has built-in support for TMA via its asynchronous pipeline paradigm, Triton exposes TMA support via an experimental API.
+
+In this post, we provide a deeper dive into the details of how TMA works, for developers to understand the new async copy engine.  We also show the importance of leveraging TMA for H100 kernels by building a TMA enabled FP8 GEMM kernel in Triton, which delivers from 1.4-2.2x performance gains over cuBLAS FP16 for small-to-medium problem sizes.  Finally, we showcase key implementation differences between Triton and CUTLASS that may account for reports of performance regressions with TMA in Triton.  We open source our implementation for reproducibility and review at https://github.com/pytorch-labs/applied-ai/tree/main/kernels
+
+
+
+Figure 1. The throughput in TFLOPs of various Triton and cuBLAS FP8 and FP16 kernels, for M=M, N=4096, K=4096. The red line is the Triton TMA, which showcases the advantages of leveraging TMA.
+
+TMA Background
+
+TMA is an H100 hardware addition that allows applications to asynchronously and bi-directionally transfer 1D-5D tensors between GPU global and shared memory.  In addition, TMA can also transfer the same data to not just the calling SM’s shared memory, but to other SM’s shared memory if they are part of the same Thread Block Cluster.  This is termed ‘multicast’.
+
+TMA is very lightweight as only a single thread is needed to kick off a TMA transfer.  By moving data directly from GMEM (global) to SMEM (shared), this avoids earlier GPU requirements of using registers for moving data between different memory spaces.
+
+
+
+Figure 2. A100-style data movement vs H100 with TMA.  TMA hardware eliminates the need for a large amount of threads and registers participating in bulk data transfers.  (Image credit Nvidia)
+
+A single thread can issue large data movement instructions, allowing the majority of a given thread block to continue working on other instructions while data is in-flight. Combined with asynchronous pipelining, this allows memory transfers to be easily hidden and ensure the majority of any given thread block cluster can focus on computational task.
+
+This lightweight invocation for data movement enables the creation of warp-group specialized kernels, where warp-groups take on different roles, namely producers and consumers. Producers elect a leader thread that fires off TMA requests, which are then asynchronously coordinated with the consumer (MMA) warp-groups via an arrival barrier.  Consumers then process the data using warp-group MMA, and signal back to the producers when they have finished reading from the SMEM buffer and the cycle repeats.
+
+Further, within threadblock clusters, producers can lower their max register requirements since they are only issuing TMA calls, and effectively transfer additional registers to MMA consumers, which helps to alleviate register pressure for consumers.
+
+In addition, TMA handles the address computation for the shared memory destination where the data requested should be placed. This is why calling threads (producers) can be so lightweight.
+
+To ensure maximum read access speed, TMA can lay out the arriving data based on swizzling instructions, to ensure the arriving data can be read as fast as possible by consumers, as the swizzling pattern helps avoid shared memory bank conflicts.
+
+Finally for TMA instructions that are outgoing, or moving data from SMEM to GMEM, TMA can also include reduction operations (add/min/max) and bitwise (and/or) operations.
+
+TMA usage in Triton
+
+Pre-Hopper Load:
+
+offs_m = pid_m*block_m + tl.arange(0, block_m)
+offs_n = pid_n*block_n + tl.arange(0, block_n)
+offs_k = tl.arange(0, block_k)
+
+a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k[None, :]*stride_ak)
+b_ptrs = b_ptr + (offs_k[:, None]*stride_bk + offs_bn[None, :]*stride_bn)
+
+a = tl.load(a_ptrs)
+b = tl.load(b_ptrs)
+
+
+Figure 3. Traditional style bulk load from global to shared memory in Triton
+
+In the above Triton example showing a pre-Hopper load, we see how the data for tensors a and b are loaded by each thread block computing  global offsets (a_ptrs, b_ptrs) from their relevant program_id (pid_m, pid_n, k) and then making a request to move blocks of memory into shared memory for a and b.
+
+Now let’s examine how to perform a load using TMA in Triton.
+
+The TMA instruction requires a special data structure called a tensor map, in contrast to the above where we directly pass pointers to global memory. To build the tensor map, we first create a TMA descriptor on the CPU. The descriptor handles the creation of the tensor map by using the cuTensorMapEncode API. The tensor map holds metadata such as the global and shared memory layout of the tensor and serves as a compressed representation of the structure of the multi-dimensional tensor stored in global memory.
+
+
+
+Figure 4. TMA address generation via a copy descriptor (Image credit: Nvidia)
+
+The TMA descriptor holds the tensor’s key properties:
+
+
+  Base Pointer
+  Shape and Block Size
+  Datatype
+
+
+The TMA descriptor is created on the host before the kernel, and then moved to device by passing the descriptor to a torch tensor. Thus, in Triton, the GEMM kernel receives a global pointer to the tensor map.
+
+Triton Host Code
+
+   desc_a = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_b = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_c = np.empty(TMA_SIZE, dtype=np.int8)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), m, k, block_m, block_k, a.element_size(), desc_a)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), n, k, block_n, block_k, b.element_size(), desc_b)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), m, n, block_m, block_n, c.element_size(), desc_c)
+  
+   desc_a = torch.tensor(desc_a, device='cuda')
+   desc_b = torch.tensor(desc_b, device='cuda')
+   desc_c = torch.tensor(desc_c, device='cuda')
+
+
+This is the code that is used to set up the descriptors in the kernel invoke function.
+
+Triton Device Code
+
+Offsets/Pointer Arithmetic:
+
+   offs_am = pid_m * block_m
+   offs_bn = pid_n * block_n
+   offs_k = 0
+
+
+Load:
+
+  a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [block_m, block_k], tl.float8e4nv)
+  b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [block_n, block_k], tl.float8e4nv)
+
+
+Store:
+
+ tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
+
+
+We no longer need to calculate a pointer array for both load and store functions in the kernel. Instead, we pass a single descriptor pointer, the offsets, block size and the input datatype. This simplifies address calculation and reduces register pressure, as we no longer have to do complex pointer arithmetic in software and dedicate CUDA cores for address computation.
+
+TMA Performance Analysis
+
+Below, we discuss the PTX instructions for different load mechanisms on Hopper.
+
+PTX for Loading Tile (cp.async) - H100 no TMA
+
+add.s32 	%r27, %r100, %r8;
+add.s32 	%r29, %r100, %r9;
+selp.b32 	%r30, %r102, 0, %p18;
+
+
+@%p1 cp.async.cg.shared.global [ %r27 + 0 ], [ %rd20 + 0 ], 0x10, %r30;
+@%p1 cp.async.cg.shared.global [ %r29 + 0 ], [ %rd21 + 0 ], 0x10, %r30;
+
+
+cp.async.commit_group ;
+
+
+Here, we observe the older cp.async instruction responsible for global memory copies. From the traces below we can see that both loads bypass the L1 cache. A major difference in the newer TMA load is that before tiles from A and B were ready to be consumed by the Tensor Core we would need to execute an ldmatrix instruction that operated on data contained in register files. On Hopper, the data can now be directly reused from shared memory.
+
+
+
+Figure 5. H100 Memory Chart showing GMEM Throughput = 910.22 GB/s (Triton GEMM without TMA) for M=128, N=4096, K=4096
+
+By leveraging TMA through the Triton API changes we mentioned above, we can investigate the PTX that Triton generates for a single 2D tile load with TMA.
+
+PTX for Loading Tile (cp.async.bulk.tensor) - H100 using TMA
+
+bar.sync 	0;
+shr.u32 	%r5, %r4, 5;
+shfl.sync.idx.b32	%r66, %r5, 0, 31, -1;
+
+elect.sync _|%p7, 0xffffffff;
+
+
+add.s32 	%r24, %r65, %r67;
+shl.b32 	%r25, %r66, 7;
+
+@%p8
+cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%r24], [%rd26, {%r25,%r152}], [%r19];
+
+
+The cp.async.bulk.tensor.2d.shared TMA instruction is passed the destination address in shared memory, a pointer to the tensor map, the tensor map coordinates and a pointer to the mbarrier object, respectively.
+
+
+
+Figure 6. H100 Memory Chart GMEM Throughput =1.45 TB/s (Triton GEMM with TMA) for M=128, N=4096, K=4096
+
+For optimal performance we tuned the TMA GEMM kernel extensively. Amongst other parameters such as tile sizes, number of warps and number of pipeline stages, the biggest increase in memory throughput  was observed when we increased the TMA_SIZE (descriptor size) from 128 to 512. From the above NCU profiles, we can see that the final tuned kernel has increased global memory transfer throughput from 910 GB/s to 1.45 TB/s, a 59% increase in GMEM throughput, over the non-TMA Triton GEMM kernel.
+
+Comparison of CUTLASS and Triton FP8 GEMM and TMA Implementation - Kernel Architecture
+
+
+
+Figure 7. Triton vs CUTLASS Ping-Pong FP8 GEMM TFLOPs, M=M, N=4096, K=4096
+
+The above chart shows the performance of a CUTLASS Ping-Pong GEMM kernel against Triton. The Ping-Pong kernel leverages TMA differently than Triton. It makes use of all of its HW and SW software capabilities, while Triton currently does not. Specifically, CUTLASS supports the below TMA features that help explain the performance gaps in pure GEMM performance:.
+
+
+  
+    TMA Multicast
+
+    
+      Enables copy of data from GMEM to multiple SMs
+    
+  
+  
+    Warp Specialization
+
+    
+      Enables warp groups within a threadblock to take on different roles
+    
+  
+  
+    Tensor Map (TMA Descriptor) Prefetch
+
+    
+      Enables prefetching the Tensor Map object from GMEM, which allows pipelining of TMA loads
+    
+  
+
+
+To put the performance numbers in perspective, below we show a ‘speed-up’ chart highlighting the latency differences on a percentage basis:
+
+
+
+Figure 8: % Speedup of CUTLASS Ping-Pong vs Triton FP8 with TMA.
+
+This speedup is purely kernel throughput, not including E2E launch overhead which we will discuss below.
+
+TMA Descriptor movement - a key difference between Triton and CUTLASS with E2E performance implications
+
+As noted previously, creation of a 2D+ dimensional TMA descriptor takes place on the host and is then transferred to the device.  However, this transfer process takes place very differently depending on the implementation.
+
+Here we showcase the differences between how Triton transfers TMA descriptors compared with CUTLASS.
+
+Recall, TMA transfers require a special data structure, a tensor map to be created on CPU through the cuTensorMap API, which for an FP8 GEMM Kernel means creating three descriptors, one for each A, B and C. We see below that for both the Triton and CUTLASS Kernels the same CPU procedures are invoked.
+
+
+
+Figure 7. Calls to cuTensorMapEncodeTiled (Both Triton and CUTLASS use this path)
+
+However, for Triton, each descriptor is transferred in its own distinct copy kernel, which adds a significant amount of overhead and serves as a barrier to use this kernel in an end-to-end use inference scenario.
+
+
+
+Figure 8. Three H2D Copy Kernels are launched before the kernel execution, for A, B and C
+
+These copies are not observed in the CUTLASS implementation, due to the way that TMA descriptors are passed to the kernel. We can see from the PTX below that with Cutlass, tensor maps are passed-by-value to the kernel.
+
+.entry _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE(
+
+.param .align 64 .b8 _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0[1024]
+
+
+mov.b64 	%rd110, _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_10bfloat16_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEES8_NS7_ILi256EEEEEENS6_IJNS7_ILi1EEESB_SB_EEENS_4gemm24KernelTmaWarpSpecializedENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0;
+
+add.s64 	%rd70, %rd110, 704;
+cvta.param.u64 	%rd69, %rd70;
+
+cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [%rd69, {%r284, %r283}], [%r1880];
+
+
+Figure 9. CUTLASS kernel PTX showing pass-by-value
+
+By directly passing the TMA Descriptor as opposed to passing a global memory pointer, the CUTLASS kernel avoids the three extra H2D copy kernels and instead these copies are included in the single device kernel launch for the GEMM.
+
+Because of the difference in how descriptors are moved to the device, the kernel latencies including the time to prepare the tensors to be consumed by the TMA is drastically different.  For M=1-128, N=4096, K=4096 the CUTLASS pingpong kernel has an average latency of 10us Triton TMA kernels complete in an average of 4ms.  This is a factor of ~3330x slower and appears to be directly linked to the 3 independent kernel launches for TMA descriptor transfer by Triton.
+
+Cuda graphs may be one way to reduce this, but given the overhead created by the H2D copies the current Triton implementation when measured end to end is not competitive.  A rework of how the Triton compiler manages TMA descriptors would likely resolve this gap.  We thus focused on comparing the actual compute kernel throughput and not E2E in our data above.
+
+Results Summary
+
+
+
+Figure 10. Triton FP8 TMA GEMM TFLOPs Comparison
+
+
+  
+   M
+   
+   Triton TMA
+   
+   Triton Tutorial
+   
+   Triton SplitK 
+   
+   cuBLAS FP8 
+   
+   cuBLAS FP16 
+   
+   CUTLASS Ping-Pong FP8
+   
+  
+  
+   1
+   
+   2.5
+   
+   1
+   
+   2.4
+   
+   1.5
+   
+   1.8
+   
+   3.57
+   
+  
+  
+   2
+   
+   5.1
+   
+   2.5
+   
+   4.8
+   
+   3.1
+   
+   3.6
+   
+   5.9
+   
+  
+  
+   4
+   
+   10.3
+   
+   7.21
+   
+   9.6
+   
+   6.1
+   
+   7.2
+   
+   14.3
+   
+  
+  
+   8
+   
+   21.0
+   
+   16.5
+   
+   19.2
+   
+   12.3
+   
+   14.4
+   
+   28.6
+   
+  
+  
+   16
+   
+   44.5
+   
+   41.0
+   
+   37.2
+   
+   24.5
+   
+   27.7
+   
+   55.1
+   
+  
+  
+   32
+   
+   89.7
+   
+   81.2
+   
+   72.2
+   
+   71.6
+   
+   56.8
+   
+   114.4
+   
+  
+  
+   64
+   
+   178.5
+   
+   163.7
+   
+   130.8
+   
+   144.6
+   
+   105.3
+   
+   228.7
+   
+  
+  
+   128
+   
+   359.7
+   
+   225.9
+   
+   160.1
+   
+   244.0
+   
+   189.2
+   
+   377.7
+   
+  
+
+
+Figure 11. Triton FP8 TMA GEMM TFLOPs Comparison Table
+
+The above chart and table summarize the gain we’ve been able to achieve on a single NVIDIA H100 for FP8 GEMM, by leveraging the TMA Hardware Unit, over non-TMA Triton kernels and high performance CUDA (cuBLAS) kernels. The key point to note is this kernel’s superior scaling (with the batch size) properties over the competition. The problem sizes we benchmarked on are representative of the matrix shapes found in small-to-medium batch size LLM inference. Thus, TMA GEMM kernel performance in the mid-M regime (M=32 to M=128) will be critical for those interested in leveraging this kernel for FP8 LLM deployment use cases, as the FP8 compressed data type can allow larger matrices to fit in GPUs memory.
+
+To summarize our analysis, the TMA implementation in Triton and CUTLASS differ in terms of full featureset support (multicast, prefetch etc.) and how the TMA Descriptor is passed to the GPU kernel. If this descriptor is passed in a manner that more closely matches the CUTLASS kernel (pass-by-value), the extraneous H2D copies could be avoided and thus the E2E performance would be greatly improved.
+
+Future Work
+
+For future research, we plan to improve upon these results, by working with the community to incorporate the CUTLASS architecture of TMA loads into Triton as well as investigating the Cooperative Kernel for FP8 GEMM, a modified strategy to the Ping-Pong Kernel.
+
+In addition, once features like thread block clusters and TMA atomic operations are enabled in Triton, we may be able to get further speedups by leveraging the SplitK strategy in the TMA GEMM Kernel, as atomic operations on Hopper can be performed in Distributed Shared Memory (DSMEM) as opposed to L2 Cache.  We also note the similarities of NVIDIA Hopper GPUs with other AI hardware accelerators like Google’s TPU and IBM’s AIU which are dataflow architectures. On Hopper, data can now “flow” from GMEM to a network of connected SMs due to the additions of TMA, which we discussed extensively in this blog, and DSMEM, which we plan to cover in a future post.
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2024年7月22日</p>
+            <h1>
+                <a class="blog-title">深入探讨 Hopper TMA 单元在 FP8 GEMMs 中的应用</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由阿丹·侯克、莱斯特·赖特、杨志杰著</p>
+                    <h2 id="abstract">摘要</h2>
+
+<p>被誉为“首个真正异步 GPU”的 Hopper（H100）GPU 架构，包括一个全新的、完全异步的硬件复制引擎，用于在全局内存和共享内存之间进行大量数据移动，称为张量内存加速器（TMA）。虽然 CUTLASS 通过其异步管道范式内置了对 TMA 的支持，但 Triton 通过一个<a href="https://github.com/NVIDIA/cutlass/blob/56b46e2d13875b46b8f6a03f9f5ac91e2bfdc01a/include/cute/arch/copy_sm90_tma.hpp">实验性 API</a> 公开了 TMA 支持。</p>
+
+<p>在本文中，我们深入探讨了 TMA 的工作原理，以便开发人员了解新的异步复制引擎。我们还展示了利用 TMA 对 H100 内核的重要性，通过在 Triton 中构建一个 TMA 启用 FP8 GEMM 内核，对于小到中等规模的问题，相较于 cuBLAS FP16，性能提升了 1.4-2.2 倍。最后，我们展示了 Triton 和 CUTLASS 之间的关键实现差异，这些差异可能是 Triton 中 TMA 性能退化的报告原因。我们将我们的实现开源，以便于复现和审查，开源链接为 <a href="https://github.com/pytorch-labs/applied-ai/tree/main/kernels">https://github.com/pytorch-labs/applied-ai/tree/main/kernels</a></p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg1.png" alt="The throughput in TFLOPs of various Triton and cuBLAS FP8 and FP16 kernels, for M=M, N=4096, K=4096. The red line is the Triton TMA, which showcases the advantages of leveraging TMA." style="width:100%"></p>
+
+<p><em><strong>图 1.</strong> 在 M=M，N=4096，K=4096 的情况下，各种 Triton 和 cuBLAS FP8 和 FP16 内核的吞吐量（以 TFLOPs 为单位）。红色线代表 Triton TMA，展示了利用 TMA 的优势。</em></p>
+
+<h2 id="tma-background">TMA 背景</h2>
+
+<p>TMA 是 H100 硬件扩展，允许应用程序异步、双向地在 GPU 全局内存和共享内存之间传输 1D-5D 张量。此外，TMA 还可以将相同的数据传输到调用 SM 的共享内存，以及其他属于同一线程块集群的 SM 的共享内存。这被称为“多播”。</p>
+
+<p>TMA 非常轻量，只需要一个线程来启动 TMA 传输。通过直接将数据从 GMEM（全局）移动到 SMEM（共享），这避免了之前 GPU 在移动不同内存空间之间的数据时需要使用寄存器的需求。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg2.png" alt="A100-style data movement vs H100 with TMA.  TMA hardware eliminates the need for a large amount of threads and registers participating in bulk data transfers." style="width:100%"></p>
+
+<p><em><strong>图 2.</strong> A100 风格的内存移动与 H100 相比，TMA 硬件消除了大量线程和寄存器参与批量数据传输的需求。（图片来源：Nvidia）</em></p>
+
+<p>单个线程可以发出大量数据移动指令，允许大多数线程块在数据传输过程中继续执行其他指令。结合异步流水线，这使得内存传输可以轻松隐藏，并确保任何给定线程块集群的大部分可以专注于计算任务。</p>
+
+<p>这种轻量级的数据移动调用使得创建具有不同角色的 warp 组专用内核成为可能，即生产者和消费者。生产者选举一个领导者线程来触发 TMA 请求，这些请求随后通过到达屏障异步协调与消费者（MMA）warp 组。消费者随后使用 warp 组 MMA 处理数据，并在完成从 SMEM 缓冲区读取后向生产者发出信号，然后周期重复。</p>
+
+<p>此外，在 threadblock 集群中，生产者可以降低其最大寄存器需求，因为它们只发出 TMA 调用，并将额外的寄存器有效地转移到 MMA 消费者，这有助于减轻消费者的寄存器压力。</p>
+
+<p>此外，TMA 处理共享内存目标地址的计算，即请求的数据应该放置的位置。这就是为什么调用线程（生产者）可以如此轻量级。</p>
+
+<p>为了确保最大读取访问速度，TMA 可以根据交换指令布局到达的数据，以确保消费者可以尽可能快地读取到达的数据，因为交换模式有助于避免共享内存银行冲突。</p>
+
+<p>最后，对于即将发出的 TMA 指令，或从 SMEM 移动到 GMEM 的数据，TMA 还可以包括归约操作（加/减/最大/最小）和位运算（与/或）。</p>
+
+<h2 id="tma-usage-in-triton">Triton 中 TMA 的使用</h2>
+
+<p><strong>预 Hopper 加载：</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>offs_m = pid_m*block_m + tl.arange(0, block_m)
+offs_n = pid_n*block_n + tl.arange(0, block_n)
+offs_k = tl.arange(0, block_k)
+
+a_ptrs = a_ptr + (offs_am[:, None]*stride_am + offs_k[None, :]*stride_ak)
+b_ptrs = b_ptr + (offs_k[:, None]*stride_bk + offs_bn[None, :]*stride_bn)
+
+a = tl.load(a_ptrs)
+b = tl.load(b_ptrs)
+</code></pre></div></div>
+
+<p><em><strong>图 3.</strong> Triton 中从全局内存到共享内存的传统风格批量加载</em></p>
+
+<p>在上述 Triton 示例中，展示了一个预 Hopper 加载，我们看到每个线程块如何通过从其相关的程序 ID（pid_m、pid_n、k）计算全局偏移量（a_ptrs、b_ptrs）来加载张量 a 和 b 的数据，然后请求将 a 和 b 的内存块移动到共享内存中。</p>
+
+<p>现在我们来探讨如何在 Triton 中使用 TMA 进行加载。</p>
+
+<p>与上面直接传递全局内存指针不同，TMA 指令需要一个特殊的数据结构，即张量映射。为了构建张量映射，我们首先在 CPU 上创建一个 TMA 描述符。描述符通过使用 <a href="https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY">cuTensorMapEncode API</a> 来处理张量映射的创建。张量映射包含诸如张量的全局和共享内存布局等元数据，并作为存储在全局内存中的多维张量结构的压缩表示。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg3.png" alt="TMA address generation via a copy descriptor" style="width:100%"></p>
+
+<p><em><strong>图 4.</strong> 通过复制描述符生成 TMA 地址（图片来源：Nvidia）</em></p>
+
+<p>TMA 描述符包含张量的关键属性：</p>
+
+<ol>
+  <li>基指针</li>
+  <li>形状和块大小</li>
+  <li>数据类型</li>
+</ol>
+
+<p>TMA 描述符在内核之前在主机上创建，然后通过将描述符传递给 torch 张量将其移动到设备。因此，在 Triton 中，GEMM 内核接收一个指向张量映射的全局指针。</p>
+
+<h2 id="triton-host-code">三叉戟主机代码</h2>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   desc_a = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_b = np.empty(TMA_SIZE, dtype=np.int8)
+   desc_c = np.empty(TMA_SIZE, dtype=np.int8)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(a.data_ptr(), m, k, block_m, block_k, a.element_size(), desc_a)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(b.data_ptr(), n, k, block_n, block_k, b.element_size(), desc_b)
+
+   triton.runtime.driver.active.utils.fill_2d_tma_descriptor(c.data_ptr(), m, n, block_m, block_n, c.element_size(), desc_c)
+  
+   desc_a = torch.tensor(desc_a, device='cuda')
+   desc_b = torch.tensor(desc_b, device='cuda')
+   desc_c = torch.tensor(desc_c, device='cuda')
+</code></pre></div></div>
+
+<p>这是用于在内核调用函数中设置描述符的代码。</p>
+
+<h2 id="triton-device-code">三叉戟设备代码</h2>
+
+<p><strong>偏移/指针算术：</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   offs_am = pid_m * block_m
+   offs_bn = pid_n * block_n
+   offs_k = 0
+</code></pre></div></div>
+
+<p><strong>加载：</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [block_m, block_k], tl.float8e4nv)
+  b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [block_n, block_k], tl.float8e4nv)
+</code></pre></div></div>
+
+<p><strong>存储：</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
+</code></pre></div></div>
+
+<p>我们不再需要在内核中为加载和存储函数计算指针数组。相反，我们传递一个单独的描述符指针、偏移量、块大小和输入数据类型。这简化了地址计算并减少了寄存器压力，因为我们不再需要在软件中进行复杂的指针运算并分配 CUDA 核心进行地址计算。</p>
+
+<h2 id="tma-performance-analysis">TMA 性能分析</h2>
+
+<p>下面，我们讨论 Hopper 上不同加载机制的 PTX 指令。</p>
+
+<p><strong>PTX 加载 Tile（cp.async）- H100 无 TMA</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>add.s32 	%r27, %r100, %r8;
+add.s32 	%r29, %r100, %r9;
+selp.b32 	%r30, %r102, 0, %p18;
+
+
+@%p1 cp.async.cg.shared.global [ %r27 + 0 ], [ %rd20 + 0 ], 0x10, %r30;
+@%p1 cp.async.cg.shared.global [ %r29 + 0 ], [ %rd21 + 0 ], 0x10, %r30;
+
+
+cp.async.commit_group ;
+</code></pre></div></div>
+
+<p>在这里，我们观察到负责全局内存复制的旧版 cp.async 指令。从下面的跟踪中我们可以看到，这两种加载都绕过了 L1 缓存。与较新的 TMA 加载的一个主要区别是，在 A 和 B 的 tile 准备好被 Tensor Core 消费之前，我们需要执行一个操作于寄存器文件中的数据的 ldmatrix 指令。在 Hopper 上，现在可以直接从共享内存中重用数据。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg4.png" alt="H100 Memory Chart showing GMEM Throughput = 910.22 GB/s" style="width:100%"></p>
+
+<p><em><strong>图 5.</strong> 显示 GMEM 吞吐量为 910.22 GB/s（Triton GEMM <strong> 无 </strong> TMA）的 H100 内存图表，对于 M=128，N=4096，K=4096</em></p>
+
+<p>通过利用上述提到的 Triton API 的 TMA 变更，我们可以调查 Triton 为单个 2D 瓦片加载生成的 PTX。</p>
+
+<p><strong>加载瓦片 PTX（cp.async.bulk.tensor）- H100 使用 TMA</strong></p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>bar.sync 	0;
+shr.u32 	%r5, %r4, 5;
+shfl.sync.idx.b32	%r66, %r5, 0, 31, -1;
+
+elect.sync _|%p7, 0xffffffff;
+
+
+add.s32 	%r24, %r65, %r67;
+shl.b32 	%r25, %r66, 7;
+
+@%p8
+cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes [%r24], [%rd26, {%r25,%r152}], [%r19];
+</code></pre></div></div>
+
+<p>cp.async.bulk.tensor.2d.shared TMA 指令分别传递共享内存中的目标地址、张量映射的指针、张量映射坐标以及 mbarrier 对象的指针。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg5.png" alt="H100 Memory Chart GMEM Throughput =1.45 TB/s" style="width:100%"></p>
+
+<p><em><strong>图 6.</strong> H100 内存图表 GMEM 吞吐量 = 1.45 TB/s（Triton GEMM <strong> 使用 </strong> TMA）对于 M=128, N=4096, K=4096</em></p>
+
+<p>为了获得最佳性能，我们对 TMA GEMM 内核进行了广泛的调整。在诸如瓦片大小、线程束数量和流水线阶段数量等其他参数中，当我们将 TMA_SIZE（描述符大小）从 128 增加到 512 时，观察到内存吞吐量最大增长。从上述 NCU 配置文件中，我们可以看到最终调整后的内核将全局内存传输吞吐量从 910 GB/s 增加到 1.45 TB/s，GMEM 吞吐量增加了 59%，超过了非 TMA 的 Triton GEMM 内核。</p>
+
+<p><strong>CUTLASS 与 Triton FP8 GEMM 和 TMA 实现比较 - 内核架构</strong></p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg6.png" alt="Triton vs CUTLASS Ping-Pong FP8 GEMM TFLOPs, M=M, N=4096, K=4096" style="width:100%"></p>
+
+<p><em><strong>图 7.</strong> Triton 与 CUTLASS Ping-Pong FP8 GEMM TFLOPs，M=M，N=4096，K=4096</em></p>
+
+<p>上图显示了 CUTLASS <a href="https://github.com/NVIDIA/cutlass/blob/637b15906358191cb4238af419d408a65819d7ec/include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized_pingpong.hpp">Ping-Pong GEMM 内核</a>与 Triton 的性能比较。Ping-Pong 内核在 TMA 的使用上与 Triton 不同。它利用了所有的硬件和软件功能，而 Triton 目前还没有做到这一点。具体来说，CUTLASS 支持以下 TMA 功能，有助于解释纯 GEMM 性能中的性能差距：</p>
+
+<ol>
+  <li>
+    <p>TMA 多播</p>
+
+    <ul>
+      <li>启用从 GMEM 复制数据到多个 SM</li>
+    </ul>
+  </li>
+  <li>
+    <p>Warp 专业化</p>
+
+    <ul>
+      <li>启用线程块内的 warp 组承担不同的角色</li>
+    </ul>
+  </li>
+  <li>
+    <p>张量映射（TMA 描述符）预取</p>
+
+    <ul>
+      <li>启用从 GMEM 预取 Tensor Map 对象，允许 TMA 加载流水线化</li>
+    </ul>
+  </li>
+</ol>
+
+<p>为了使性能数值更直观，以下我们展示一个“加速”图表，突出显示基于百分比的延迟差异：</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg7.png" alt="% Speedup of CUTLASS Ping-Pong vs Triton FP8 with TMA." style="width:100%"></p>
+
+<p><em><strong>图 8：</strong> 使用 TMA 的 CUTLASS Ping-Pong 与 Triton FP8 的加速比。</em></p>
+
+<p>这种加速纯粹是内核吞吐量，不包括下面将要讨论的端到端启动开销。</p>
+
+<p><strong>TMA 描述符移动——Triton 与 CUTLASS 在端到端性能上的关键区别</strong></p>
+
+<p>如前所述，2D+维度的 TMA 描述符的创建发生在主机上，然后传输到设备。然而，这个传输过程根据实现方式有很大不同。</p>
+
+<p>在这里，我们展示了 Triton 与 CUTLASS 在传输 TMA 描述符方面的差异。</p>
+
+<p>回忆，TMA 传输需要一种特殊的数据结构，即通过 cuTensorMap API 在 CPU 上创建的张量映射，对于一个 FP8 GEMM 内核，这意味着为 A、B 和 C 创建三个描述符。下面我们可以看到，对于 Triton 和 CUTLASS 内核，调用的 CPU 过程是相同的。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg8.png" alt="Calls to cuTensorMapEncodeTiled (Both Triton and CUTLASS use this path)" style="width:100%"></p>
+
+<p><em><strong>图 7。</strong> 对 cuTensorMapEncodeTiled 的调用（Triton 和 CUTLASS 都使用此路径）</em></p>
+
+<p>然而，对于 Triton，每个描述符都通过其各自的独立复制内核进行传输，这增加了大量的开销，并成为在端到端推理场景中使用此内核的障碍。</p>
+
+<p><img src="/assets/images/hopper-tma-unit/fg9.png" alt="Three H2D Copy Kernels are launched before the kernel execution, for A, B and C" style="width:100%"></p>
+
+<p><em><strong>图 8。</strong> 在内核执行之前，启动了三个 H2D 复制内核，用于 A、B 和 C。</em></p>
+
+<p>这些副本在 CUTLASS 实现中未被观察到，这是由于 TMA 描述符传递给内核的方式。从下面的 PTX 中我们可以看到，使用 Cutlass，张量映射是通过值传递给内核的。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>.entry _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE(
+
+.param .align 64 .b8 _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_6half_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEENS7_ILi128EEES9_EEENS6_IJNS7_ILi2EEENS7_ILi1EEESC_EEENS_4gemm32KernelTmaWarpSpecializedPingpongENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0[1024]
+
+
+mov.b64 	%rd110, _ZN7cutlass13device_kernelIN49_GLOBAL__N__8bf0e19b_16_scaled_mm_c3x_cu_2bec3df915cutlass_3x_gemmIaNS_10bfloat16_tENS1_14ScaledEpilogueEN4cute5tupleIJNS5_1CILi64EEES8_NS7_ILi256EEEEEENS6_IJNS7_ILi1EEESB_SB_EEENS_4gemm24KernelTmaWarpSpecializedENS_8epilogue18TmaWarpSpecializedEE10GemmKernelEEEvNT_6ParamsE_param_0;
+
+add.s64 	%rd70, %rd110, 704;
+cvta.param.u64 	%rd69, %rd70;
+
+cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [%rd69, {%r284, %r283}], [%r1880];
+</code></pre></div></div>
+
+<p><em><strong>图 9。</strong> 显示按值传递的 CUTLASS 内核 PTX</em></p>
+
+<p>与传递全局内存指针相比，CUTLASS 内核直接传递 TMA 描述符，从而避免了三个额外的 H2D 复制内核，并且这些复制被包含在为 GEMM 的单次设备内核启动中。</p>
+
+<p>由于描述符移动到设备的方式不同，内核延迟包括准备要由 TMA 消耗的张量所需的时间有显著差异。对于 M=1-128，N=4096，K=4096，CUTLASS pingpong 内核的平均延迟为 10us，Triton TMA 内核平均完成时间为 4ms。这比 Triton 的 3 个独立的 TMA 描述符传输内核启动慢约 3330 倍，这似乎直接与 Triton 的 3 个独立的 TMA 描述符传输内核启动有关。</p>
+
+<p>Cuda 图表可能是减少这种开销的一种方法，但考虑到 H2D 复制带来的开销，当前 Triton 实现的端到端性能并不具有竞争力。对 Triton 编译器如何管理 TMA 描述符的重构可能会缩小这一差距。因此，我们在上述数据中关注的是实际的计算内核吞吐量，而不是端到端性能。</p>
+
+<h2 id="results-summary">结果摘要</h2>
+
+<p><img src="/assets/images/hopper-tma-unit/fg10.png" alt="Triton FP8 TMA GEMM TFLOPs Comparison" style="width:100%"></p>
+
+<p><em><strong>图 10.</strong> Triton FP8 TMA GEMM TFLOPs 比较</em></p>
+
+<table class="mt-5 table table-bordered">
+  <tbody><tr>
+   <td>M
+   </td>
+   <td>Triton TMA
+   </td>
+   <td>三叉戟教程</td>
+   <td>Triton SplitK 
+   </td>
+   <td>cuBLAS FP8 
+   </td>
+   <td>cuBLAS FP16 
+   </td>
+   <td>CUTLASS Ping-Pong FP8
+   </td>
+  </tr>
+  <tr>
+   <td>1
+   </td>
+   <td>2.5
+   </td>
+   <td>1
+   </td>
+   <td>2.4
+   </td>
+   <td>1.5
+   </td>
+   <td>1.8
+   </td>
+   <td>3.57
+   </td>
+  </tr>
+  <tr>
+   <td>2
+   </td>
+   <td>5.1
+   </td>
+   <td>2.5
+   </td>
+   <td>4.8
+   </td>
+   <td>3.1
+   </td>
+   <td>3.6
+   </td>
+   <td>5.9
+   </td>
+  </tr>
+  <tr>
+   <td>4
+   </td>
+   <td>10.3
+   </td>
+   <td>7.21
+   </td>
+   <td>9.6
+   </td>
+   <td>6.1
+   </td>
+   <td>7.2
+   </td>
+   <td>14.3
+   </td>
+  </tr>
+  <tr>
+   <td>8
+   </td>
+   <td>21.0
+   </td>
+   <td>16.5
+   </td>
+   <td>19.2
+   </td>
+   <td>12.3
+   </td>
+   <td>14.4
+   </td>
+   <td>28.6
+   </td>
+  </tr>
+  <tr>
+   <td>16
+   </td>
+   <td>44.5
+   </td>
+   <td>41.0
+   </td>
+   <td>37.2
+   </td>
+   <td>24.5
+   </td>
+   <td>27.7
+   </td>
+   <td>55.1
+   </td>
+  </tr>
+  <tr>
+   <td>32
+   </td>
+   <td>89.7
+   </td>
+   <td>81.2
+   </td>
+   <td>72.2
+   </td>
+   <td>71.6
+   </td>
+   <td>56.8
+   </td>
+   <td>114.4
+   </td>
+  </tr>
+  <tr>
+   <td>64
+   </td>
+   <td>178.5
+   </td>
+   <td>163.7
+   </td>
+   <td>130.8
+   </td>
+   <td>144.6
+   </td>
+   <td>105.3
+   </td>
+   <td>228.7
+   </td>
+  </tr>
+  <tr>
+   <td>128
+   </td>
+   <td>359.7
+   </td>
+   <td>225.9
+   </td>
+   <td>160.1
+   </td>
+   <td>244.0
+   </td>
+   <td>189.2
+   </td>
+   <td>377.7
+   </td>
+  </tr>
+</tbody></table>
+
+<p><em><strong>图 11.</strong> Triton FP8 TMA GEMM TFLOPs 对比表</em></p>
+
+<p>上面的图表和表格总结了通过利用 TMA 硬件单元，在非 TMA Triton 内核和高性能 CUDA（cuBLAS）内核上，我们能够在单个 NVIDIA H100 上实现的 FP8 GEMM 的增益。需要注意的是，该内核在批大小上的扩展性（与竞争对手相比）更优越。我们在上面基准测试的问题规模代表了在 1001#推理中找到的小到中等批大小矩阵形状。因此，对于有兴趣利用此内核进行 FP8 1002#部署用例的人来说，TMA GEMM 内核在中 M 区域（M=32 到 M=128）的性能将至关重要，因为 FP8 压缩数据类型可以使更大的矩阵适合 GPU 内存。</p>
+
+<p>总结我们的分析，Triton 和 CUTLASS 中的 TMA 实现，在完整功能集支持（多播、预取等）以及如何将 TMA 描述符传递给 GPU 内核方面存在差异。如果以更接近 CUTLASS 内核的方式（按值传递）传递此描述符，则可以避免不必要的 H2D 复制，从而大大提高端到端性能。</p>
+
+<h2 id="future-work">未来工作</h2>
+
+<p>对于未来的研究，我们计划通过与社区合作，将 CUTLASS 架构的 TMA 加载集成到 Triton 中，并研究用于 FP8 GEMM 的协作内核，这是一种对 Ping-Pong 内核的修改策略。</p>
+
+<p>此外，一旦在 Triton 中启用线程块集群和 TMA 原子操作，我们可能通过利用 TMA GEMM 内核中的 SplitK 策略来获得进一步的加速，因为在 Hopper 上原子操作可以在分布式共享内存（DSMEM）中执行，而不是在 L2 缓存中。我们还注意到 NVIDIA Hopper GPU 与谷歌的 <a href="https://people.csail.mit.edu/suvinay/pubs/2023.tpu.isca.pdf">TPU</a> 和 IBM 的 <a href="https://ieeexplore.ieee.org/document/9499865">AIU</a> 等其他 AI 硬件加速器的相似性，它们都是数据流架构。在 Hopper 上，由于 TMA 和 DSMEM 的添加，我们现在可以像在本博客中广泛讨论的那样，从 GMEM“流动”到连接的 SM 网络，我们计划在未来的文章中介绍 DSMEM。</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

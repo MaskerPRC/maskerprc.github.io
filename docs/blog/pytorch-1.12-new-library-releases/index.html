@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      New library updates in PyTorch 1.12 | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 1.12 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.
+
+Summary:
+
+  TorchVision - Added multi-weight support API, new architectures, model variants, and pretrained weight. See the release notes here.
+  TorchAudio - Introduced beta features including a streaming API, a CTC beam search decoder, and new beamforming modules and methods. See the release notes here.
+  TorchText - Extended support for scriptable BERT tokenizer and added datasets for GLUE benchmark. See the release notes here.
+  TorchRec - Added EmbeddingModule benchmarks, examples for TwoTower Retrieval, inference and sequential embeddings, metrics, improved planner and demonstrated integration with production components. See the release notes here.
+  TorchX - Launch PyTorch trainers developed on local workspaces onto five different types of schedulers. See the release notes here.
+  FBGemm - Added and improved kernels for Recommendation Systems inference workloads, including table batched embedding bag, jagged tensor operations, and other special-case optimizations.
+
+
+TorchVision v0.13
+
+Multi-weight support API
+
+TorchVision v0.13 offers a new Multi-weight support API for loading different weights to the existing model builder methods:
+
+from torchvision.models import *
+
+# Old weights with accuracy 76.130%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+
+# New weights with accuracy 80.858%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+
+# Best available weights (currently alias for IMAGENET1K_V2)
+# Note that these weights may change across versions
+resnet50(weights=ResNet50_Weights.DEFAULT)
+
+# Strings are also supported
+resnet50(weights=" imagenet1k_v2")="" #="" no="" weights="" -="" random="" initialization="" resnet50(weights="None)" the="" new="" api="" bundles="" along="" with="" important="" details="" such="" as="" preprocessing="" transforms="" and="" meta-data="" labels.="" here="" is="" how="" to="" make="" most="" out="" of="" it:="" from="" torchvision.io="" import="" read_image="" torchvision.models="" resnet50,="" resnet50_weights="" img="read_image(&quot;test/assets/encode_jpeg/grace_hopper_517x606.jpg&quot;)" step="" 1:="" initialize="" model="" best="" available="" model.eval()="" 2:="" inference="" preprocess="weights.transforms()" 3:="" apply="" batch="preprocess(img).unsqueeze(0)" 4:="" use="" print="" predicted="" category="" prediction="model(batch).squeeze(0).softmax(0)" class_id="prediction.argmax().item()" score="prediction[class_id].item()" category_name="weights.meta[&quot;categories&quot;][class_id]" print(f"{category_name}:="" {100="" *="" score:.1f}%")="" you="" can="" read="" more="" about="" in="" docs.="" provide="" your="" feedback,="" please="" this="" dedicated="" github="" issue.="" architectures="" variants="" classification="" swin="" transformer="" efficienetnetv2="" are="" two="" popular="" models="" which="" often="" used="" for="" downstream="" vision="" tasks.="" release="" includes="" 6="" pre-trained="" their="" variants.="" models:="" torch="" image="torch.rand(1," 3,="" 224,="" 224)="" 384,="" 384)="" addition="" above,="" we="" also="" existing="" shufflenetv2,="" resnext="" mnasnet.="" accuracies="" all="" obtained="" on="" imagenet-1k="" seen="" below:="" acc@1="" acc@5="" swin_t="" 81.474="" 95.776="" swin_s="" 83.196="" 96.36="" swin_b="" 83.582="" 96.64="" efficientnet_v2_s="" 84.228="" 96.878="" efficientnet_v2_m="" 85.112="" 97.156="" efficientnet_v2_l="" 85.808="" 97.788="" resnext101_64x4d="" 83.246="" 96.454="" (quantized)="" 82.898="" 96.326="" shufflenet_v2_x1_5="" 72.996="" 91.086="" 72.052="" 0.700="" shufflenet_v2_x2_0="" 76.230="" 93.006="" 75.354="" 92.488="" mnasnet0_75="" 71.180="" 90.496="" mnas1_3="" 76.506="" 93.522="" would="" like="" thank="" hu="" ye="" contributing="" torchvision="" implementation.="" (beta)="" object="" detection="" instance="" segmentation="" have="" introduced="" 3="" retinanet,="" fasterrcnn="" maskrcnn="" that="" include="" several="" post-paper="" architectural="" optimizations="" improved="" training="" recipes.="" be="" similarly:="" torchvision.models.detection="" images="[torch.rand(3," 800,="" 600)]="" below="" present="" metrics="" coco="" val2017.="" parenthesis="" denote="" improvement="" over="" old="" variants:="" box="" map="" mask="" retinanet_resnet50_fpn_v2="" 41.5="" (+5.1)="" fasterrcnn_resnet50_fpn_v2="" 46.7="" (+9.7)="" maskrcnn_resnet50_fpn_v2="" 47.4="" (+9.5)="" 41.8="" (+7.2)="" ross="" girshick,="" piotr="" dollar,="" vaibhav="" aggarwal,="" francisco="" massa="" past="" research="" contributions="" work.="" swag="" vit="" regnet="" offer="" (​​supervised="" weakly="" hashtags)="" weights.="" one="" biggest="" these="" achieves="" a="" whopping="" 88.6%="" accuracy="" imagenet-1k.="" currently="" versions="" weights:="" 1)="" fine-tuned="" end-to-end="" (highest="" accuracy)="" 2)="" frozen="" trunk="" linear="" classifier="" fit="" (great="" transfer="" learning).="" see="" detailed="" each="" variant:="" regnet_y_16gf_weights.imagenet1k_swag_e2e_v1="" 86.012="" 98.054="" regnet_y_16gf_weights.imagenet1k_swag_linear_v1="" 83.976="" 97.244="" regnet_y_32gf_weights.imagenet1k_swag_e2e_v1="" 86.838="" 98.362="" regnet_y_32gf_weights.imagenet1k_swag_linear_v1="" 84.622="" 97.48="" regnet_y_128gf_weights.imagenet1k_swag_e2e_v1="" 88.228="" 98.682="" regnet_y_128gf_weights.imagenet1k_swag_linear_v1="" 86.068="" 97.844="" vit_b_16_weights.imagenet1k_swag_e2e_v1="" 85.304="" 97.65="" vit_b_16_weights.imagenet1k_swag_linear_v1="" 81.886="" 96.18="" vit_l_16_weights.imagenet1k_swag_e2e_v1="" 88.064="" 98.512="" vit_l_16_weights.imagenet1k_swag_linear_v1="" 85.146="" 97.422="" vit_h_14_weights.imagenet1k_swag_e2e_v1="" 88.552="" 98.694="" vit_h_14_weights.imagenet1k_swag_linear_v1="" 85.708="" 97.73="" released="" under="" attribution-noncommercial="" 4.0="" international="" license.="" laura="" gustafson,="" mannat="" singh="" aaron="" adcock="" work="" support="" making="" torchvision.="" refresh="" multi-weight="" enabled="" us="" accurate="" average="" by="" ~3="" points.="" recipe="" was="" learned="" top="" resnet50="" its="" were="" covered="" previous="" blog="" post.="" efficientnet_b1="" 78.642="" 79.838="" mobilenet_v2="" 71.878="" 72.154="" mobilenet_v3_large="" 74.042="" 75.274="" regnet_y_400mf="" 74.046="" 75.804="" regnet_y_800mf="" 76.42="" 78.828="" regnet_y_1_6gf="" 77.95="" 80.876="" regnet_y_3_2gf="" 78.948="" 81.982="" regnet_y_8gf="" 80.032="" 82.828="" regnet_y_16gf="" 80.424="" 82.886="" regnet_y_32gf="" 80.878="" 83.368="" regnet_x_400mf="" 72.834="" 74.864="" regnet_x_800mf="" 75.212="" 77.522="" regnet_x_1_6gf="" 77.04="" 79.668="" regnet_x_3_2gf="" 78.364="" 81.196="" regnet_x_8gf="" 79.344="" 81.682="" regnet_x_16gf="" 80.058="" 82.716="" regnet_x_32gf="" 80.622="" 83.014="" 76.13="" 80.858="" 75.92="" 80.282="" resnet101="" 77.374="" resnet152="" 78.312="" 82.284="" resnext50_32x4d="" 77.618="" 81.198="" resnext101_32x8d="" 79.312="" 82.834="" 78.986="" 82.574="" wide_resnet50_2="" 78.468="" 81.602="" wide_resnet101_2="" 78.848="" 82.51="" hugo="" touvron="" augmentations,="" layers="" losses="" brings="" bunch="" primitives="" produce="" sota="" models.="" some="" highlights="" augmix="" data-augmentation="" method,="" dropblock="" layer,="" ciou="" diou="" loss="" many="" more.="" aditya="" oke,="" abhijit="" deo,="" yassine="" alouini="" project="" helping="" maintain="" relevant="" fresh.="" documentation="" completely="" revamped="" our="" them="" easier="" browse,="" added="" various="" key="" information="" supported="" sizes,="" or="" pre-processing="" steps="" now="" main="" page="" summary="" tables="" weights,="" has="" page.="" builder="" documented="" own="" page,="" including="" accuracy,="" minimal="" size,="" link="" recipes,="" other="" valuable="" info.="" comparison,="" docs="" here.="" feedback="" documentation,="" torchaudio="" v0.12="" streaming="" streamreader="" torchaudio’s="" i="" o="" api.="" it="" backed="" ffmpeg†,="" allows="" users="" to:="" decode="" audio="" video="" formats,="" mp4="" aac="" handle="" input="" forms,="" local="" files,="" network="" protocols,="" microphones,="" webcams,="" screen="" captures="" file-like="" objects="" iterate="" chunk-by-chunk,="" while="" changing="" sample="" rate="" frame="" filters,="" low-pass="" filter="" scaling="" nvidia’s="" hardware-based="" decoder="" (nvdec)="" usage="" details,="" check="" tutorials:="" media="" stream="" pt.1="" pt.2="" online="" asr="" emformer="" rnn-t="" device="" accelerated="" decoding="" nvdec="" †="" streamreader,="" ffmpeg="" libraries="" required.="" install="" ffmpeg.="" coverage="" codecs="" depends="" configured.="" official="" binaries="" compiled="" 4="" libraries;="" 5="" if="" built="" source.="" ctc="" beam="" search="" integrates="" wav2letter="" flashlight="" (github).="" time="" enables="" running="" evaluation="" using="" utils.="" customizable="" lexicon="" lexicon-free="" decoders="" supported,="" both="" compatible="" kenlm="" n-gram="" language="" without="" model.="" additionally="" supports="" downloading="" token,="" lexicon,="" pretrained="" files="" librispeech="" dataset.="" tutorial.="" beamforming="" modules="" methods="" improve="" flexibility="" usage,="" adds="" torchaudio.transforms:="" soudenmvdr="" rtfmvdr.="" differences="" mvdr="" are:="" power="" spectral="" density="" (psd)="" relative="" function="" (rtf)="" matrices="" inputs="" instead="" time-frequency="" masks.="" module="" integrated="" neural="" networks="" directly="" predict="" complex-valued="" stft="" coefficients="" speech="" noise="" add="" 'reference_channel'="" an="" argument="" forward="" allow="" select="" reference="" channel="" dynamically="" change="" besides="" modules,="" function-level="" torchaudio.functional.="" include:="" psd="" mvdr_weights_souden="" mvdr_weights_rtf="" rtf_evd="" rtf_power="" apply_beamforming="" at="" torchaudio.transforms="" torchaudio.functional="" enhancement="" torchtext="" v0.13="" glue="" datasets="" increased="" number="" 22="" 30="" adding="" remaining="" 8="" benchmark="" (sst-2="" already="" supported).="" complete="" list="" follows:="" cola="" (paper):="" single="" sentence="" binary="" acceptability="" task="" sst-2="" sentiment="" mrpc="" dual="" paraphrase="" qqp:="" sts-b="" float="" regression="" similarity="" mnli="" ternary="" nli="" qnli="" qa="" tasks="" rte="" wnli="" coreference="" scriptable="" bert="" tokenizer="" extended="" wordpiece="" bert.="" commonly="" algorithms="" splitting="" text="" into="" sub-words="" units="" japanese="" korean="" voice="" (schuster="" et="" al.,="" 2012).="" torchscriptabilty="" embed="" text-preprocessing="" natively="" c++="" needing="" python="" runtime.="" cmake="" build="" system="" application="" code,="" easily="" integrate="" tokenizers="" deployment="" needs.="" refer="" corresponding="" documentation.="" torchrec="" v0.2.0="" embeddingmodule="" +="" dlrm="" benchmarks="" set="" benchmarking="" tests,="" showing="" performance="" characteristics="" torchrec’s="" base="" torchrec.="" twotower="" retrieval="" example,="" faiss="" example="" demonstrating="" distributed="" (i.e.="" user-item)="" sharded="" projected="" item="" embeddings="" ivfpq="" index="" candidate="" generation.="" knn="" lookup="" bundled="" pytorch="" efficient="" retrieval.="" integrations="" demonstrate="" works="" components="" alongside="" production="" systems,="" ray="" clusters="" utilizing="" torchx="" scheduler="" dataloading="" nvtabular="" on-the-fly="" torcharrow="" showcasing="" recsys="" domain="" udfs="" sequential="" example:="" bert4rec="" torchrec,="" reimplements="" paper,="" embeddingcollection="" non-pooled="" embeddings.="" distributedmodelparallel="" 35%="" qps="" gain="" conventional="" data="" parallelism.="" planner="" library="" built-in="" selects="" near="" optimal="" sharding="" plan="" given="" attempts="" identify="" evaluating="" series="" proposals="" statically="" analyzed="" fed="" integer="" partitioner.="" able="" automatically="" adjust="" plans="" wide="" range="" hardware="" setups,="" allowing="" scale="" seamlessly="" development="" environment="" large="" hardware.="" notebook="" multi-gpu="" inference.="" shard="" written="" packaged="" via="" torch.package="" (an="" alternative="" torchscript).="" torch.deploy="" serve="" launching="" multiple="" interpreters="" carrying="" model,="" thus="" subverting="" gil.="" provided="" examples:="" (sharded="" torchrec)="" single-gpu.="" recmetrics="" collects="" common="" utilities="" recommendation="" extends="" torchmetrics.="" centralized="" metrics,="" auc,="" calibration,="" ctr,="" mse="" rmse,="" ne="" &amp;="" throughput="" optimization="" related="" operations="" reduce="" overhead="" metric="" computation="" checkpointing="" (prototype)="" process="" batched="" fused="" previously="" abstractions="" (embeddingbagcollection="" embeddingcollection)="" fbgemm="" kernels,="" benefits="" table="" batching,="" optimizer="" fusion,="" uvm="" placement,="" could="" only="" conjunction="" distributedmodelparallel.="" we’ve="" decoupled="" notions="" sharding,="" fusedembeddingbagcollection,="" standalone="" module,="" above="" features,="" sharded.="" job="" launcher="" makes="" run="" kubernetes="" slurm.="" we’re="" excited="" 0.2.0="" improvements.="" being="" on-premise="" cloud="" environments.="" quickstart="" start="" remote="" jobs.="" workspaces="" launch="" jobs="" workspace.="" patch="" code="" minimize="" iteration="" training.="" .torchxconfig="" specifying="" options="" saves="" having="" type="" long="" cli="" commands="" job.="" define="" level="" generic="" configs="" drop="" config="" file="" home="" directory="" user-level="" overrides.="" expanded="" aws="" (experimental)="" schedulers="" integrations.="" dist.ddp="" component="" any="" configuration.="" workers="" will="" discover="" when="" torchelastic="" builtin="" component.="" hyper="" parameter="" ax="" let="" hyper-parameter="" (hpo)="" trials="" onto="" clusters.="" mounts="" filesystem="" custom="" devices.="" efficiently="" access="" storage="" nfs="" lustre.="" accelerators="" infiniband="" accelerators.="" contains="" optimized="" kernels="" meant="" workloads.="" features="" last="" few="" months="" report.="" embedding="" (tbe)="" bag="" operator="" operation="" gpu.="" following="" enhancements="" flexibility:="" alignment="" restriction="" removed="" dimension="" size="" had="" 4b="" before="" now,="" 1b.="" unified="" virtual="" memory="" (uvm)="" caching="" kernel="" linearly="" caching.="" previously,="" similar="" much="" smaller="" than="" fp8="" fp32,="" fp16,="" int8,="" int4,="" int2="" weight="" types.="" types="" well="" models,="" (in="" gpu="" cpu="" operations)="" numerical="" evaluations="" compared="" does="" not="" require="" additional="" bias="" calculations.="" additionally,="" next="" generation="" h100="" gpus="" tensor="" core="" (mainly="" matmul="" ops).="" jagged="" speed="" up="" jaggedtensor.="" purpose="" jaggedtensor="" case="" where="" “jagged”,="" meaning="" consecutive="" row="" may="" different="" length,="" sparse="" feature="" systems.="" internal="" representation="" shown="" ops="" converting="" tensors="" dense="" formats="" back,="" performing="" matrix="" multiplications="" tensors,="" elementwise="" ops.="" permute102-baddbmm-permute102="" difficult="" fuse="" switching="" quick="" solution.="" created="" permute102_baddbmm_permute102="" switches="" first="" second="" dimension,="" performs="" multiplication="" then="" back.="" pass="" fp16="" fp32="" backward="" future.="" index_select="" dim="" 0="" selection="" normally="" part="" operation.="" arbitrary-dimension="" selection,="" special="" suboptimal.="" reason,="" implement="" specialized="" 0.="" cases,="" observed="" 1.4x="" fbgemm’s="" (using="" uniform="" distribution).="" implementation="" influential="" instances="" found="" tutorials.="" thanks="" reading,="" you’re="" interested="" updates="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/">
+  <meta name="twitter:image" content="http://localhost:4000/">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="New library updates in PyTorch 1.12">
+<meta property="og:description" content="We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 1.12 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.
+
+Summary:
+
+  TorchVision - Added multi-weight support API, new architectures, model variants, and pretrained weight. See the release notes here.
+  TorchAudio - Introduced beta features including a streaming API, a CTC beam search decoder, and new beamforming modules and methods. See the release notes here.
+  TorchText - Extended support for scriptable BERT tokenizer and added datasets for GLUE benchmark. See the release notes here.
+  TorchRec - Added EmbeddingModule benchmarks, examples for TwoTower Retrieval, inference and sequential embeddings, metrics, improved planner and demonstrated integration with production components. See the release notes here.
+  TorchX - Launch PyTorch trainers developed on local workspaces onto five different types of schedulers. See the release notes here.
+  FBGemm - Added and improved kernels for Recommendation Systems inference workloads, including table batched embedding bag, jagged tensor operations, and other special-case optimizations.
+
+
+TorchVision v0.13
+
+Multi-weight support API
+
+TorchVision v0.13 offers a new Multi-weight support API for loading different weights to the existing model builder methods:
+
+from torchvision.models import *
+
+# Old weights with accuracy 76.130%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+
+# New weights with accuracy 80.858%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+
+# Best available weights (currently alias for IMAGENET1K_V2)
+# Note that these weights may change across versions
+resnet50(weights=ResNet50_Weights.DEFAULT)
+
+# Strings are also supported
+resnet50(weights=" imagenet1k_v2")="" #="" no="" weights="" -="" random="" initialization="" resnet50(weights="None)" the="" new="" api="" bundles="" along="" with="" important="" details="" such="" as="" preprocessing="" transforms="" and="" meta-data="" labels.="" here="" is="" how="" to="" make="" most="" out="" of="" it:="" from="" torchvision.io="" import="" read_image="" torchvision.models="" resnet50,="" resnet50_weights="" img="read_image(&quot;test/assets/encode_jpeg/grace_hopper_517x606.jpg&quot;)" step="" 1:="" initialize="" model="" best="" available="" model.eval()="" 2:="" inference="" preprocess="weights.transforms()" 3:="" apply="" batch="preprocess(img).unsqueeze(0)" 4:="" use="" print="" predicted="" category="" prediction="model(batch).squeeze(0).softmax(0)" class_id="prediction.argmax().item()" score="prediction[class_id].item()" category_name="weights.meta[&quot;categories&quot;][class_id]" print(f"{category_name}:="" {100="" *="" score:.1f}%")="" you="" can="" read="" more="" about="" in="" docs.="" provide="" your="" feedback,="" please="" this="" dedicated="" github="" issue.="" architectures="" variants="" classification="" swin="" transformer="" efficienetnetv2="" are="" two="" popular="" models="" which="" often="" used="" for="" downstream="" vision="" tasks.="" release="" includes="" 6="" pre-trained="" their="" variants.="" models:="" torch="" image="torch.rand(1," 3,="" 224,="" 224)="" 384,="" 384)="" addition="" above,="" we="" also="" existing="" shufflenetv2,="" resnext="" mnasnet.="" accuracies="" all="" obtained="" on="" imagenet-1k="" seen="" below:="" acc@1="" acc@5="" swin_t="" 81.474="" 95.776="" swin_s="" 83.196="" 96.36="" swin_b="" 83.582="" 96.64="" efficientnet_v2_s="" 84.228="" 96.878="" efficientnet_v2_m="" 85.112="" 97.156="" efficientnet_v2_l="" 85.808="" 97.788="" resnext101_64x4d="" 83.246="" 96.454="" (quantized)="" 82.898="" 96.326="" shufflenet_v2_x1_5="" 72.996="" 91.086="" 72.052="" 0.700="" shufflenet_v2_x2_0="" 76.230="" 93.006="" 75.354="" 92.488="" mnasnet0_75="" 71.180="" 90.496="" mnas1_3="" 76.506="" 93.522="" would="" like="" thank="" hu="" ye="" contributing="" torchvision="" implementation.="" (beta)="" object="" detection="" instance="" segmentation="" have="" introduced="" 3="" retinanet,="" fasterrcnn="" maskrcnn="" that="" include="" several="" post-paper="" architectural="" optimizations="" improved="" training="" recipes.="" be="" similarly:="" torchvision.models.detection="" images="[torch.rand(3," 800,="" 600)]="" below="" present="" metrics="" coco="" val2017.="" parenthesis="" denote="" improvement="" over="" old="" variants:="" box="" map="" mask="" retinanet_resnet50_fpn_v2="" 41.5="" (+5.1)="" fasterrcnn_resnet50_fpn_v2="" 46.7="" (+9.7)="" maskrcnn_resnet50_fpn_v2="" 47.4="" (+9.5)="" 41.8="" (+7.2)="" ross="" girshick,="" piotr="" dollar,="" vaibhav="" aggarwal,="" francisco="" massa="" past="" research="" contributions="" work.="" swag="" vit="" regnet="" offer="" (​​supervised="" weakly="" hashtags)="" weights.="" one="" biggest="" these="" achieves="" a="" whopping="" 88.6%="" accuracy="" imagenet-1k.="" currently="" versions="" weights:="" 1)="" fine-tuned="" end-to-end="" (highest="" accuracy)="" 2)="" frozen="" trunk="" linear="" classifier="" fit="" (great="" transfer="" learning).="" see="" detailed="" each="" variant:="" regnet_y_16gf_weights.imagenet1k_swag_e2e_v1="" 86.012="" 98.054="" regnet_y_16gf_weights.imagenet1k_swag_linear_v1="" 83.976="" 97.244="" regnet_y_32gf_weights.imagenet1k_swag_e2e_v1="" 86.838="" 98.362="" regnet_y_32gf_weights.imagenet1k_swag_linear_v1="" 84.622="" 97.48="" regnet_y_128gf_weights.imagenet1k_swag_e2e_v1="" 88.228="" 98.682="" regnet_y_128gf_weights.imagenet1k_swag_linear_v1="" 86.068="" 97.844="" vit_b_16_weights.imagenet1k_swag_e2e_v1="" 85.304="" 97.65="" vit_b_16_weights.imagenet1k_swag_linear_v1="" 81.886="" 96.18="" vit_l_16_weights.imagenet1k_swag_e2e_v1="" 88.064="" 98.512="" vit_l_16_weights.imagenet1k_swag_linear_v1="" 85.146="" 97.422="" vit_h_14_weights.imagenet1k_swag_e2e_v1="" 88.552="" 98.694="" vit_h_14_weights.imagenet1k_swag_linear_v1="" 85.708="" 97.73="" released="" under="" attribution-noncommercial="" 4.0="" international="" license.="" laura="" gustafson,="" mannat="" singh="" aaron="" adcock="" work="" support="" making="" torchvision.="" refresh="" multi-weight="" enabled="" us="" accurate="" average="" by="" ~3="" points.="" recipe="" was="" learned="" top="" resnet50="" its="" were="" covered="" previous="" blog="" post.="" efficientnet_b1="" 78.642="" 79.838="" mobilenet_v2="" 71.878="" 72.154="" mobilenet_v3_large="" 74.042="" 75.274="" regnet_y_400mf="" 74.046="" 75.804="" regnet_y_800mf="" 76.42="" 78.828="" regnet_y_1_6gf="" 77.95="" 80.876="" regnet_y_3_2gf="" 78.948="" 81.982="" regnet_y_8gf="" 80.032="" 82.828="" regnet_y_16gf="" 80.424="" 82.886="" regnet_y_32gf="" 80.878="" 83.368="" regnet_x_400mf="" 72.834="" 74.864="" regnet_x_800mf="" 75.212="" 77.522="" regnet_x_1_6gf="" 77.04="" 79.668="" regnet_x_3_2gf="" 78.364="" 81.196="" regnet_x_8gf="" 79.344="" 81.682="" regnet_x_16gf="" 80.058="" 82.716="" regnet_x_32gf="" 80.622="" 83.014="" 76.13="" 80.858="" 75.92="" 80.282="" resnet101="" 77.374="" resnet152="" 78.312="" 82.284="" resnext50_32x4d="" 77.618="" 81.198="" resnext101_32x8d="" 79.312="" 82.834="" 78.986="" 82.574="" wide_resnet50_2="" 78.468="" 81.602="" wide_resnet101_2="" 78.848="" 82.51="" hugo="" touvron="" augmentations,="" layers="" losses="" brings="" bunch="" primitives="" produce="" sota="" models.="" some="" highlights="" augmix="" data-augmentation="" method,="" dropblock="" layer,="" ciou="" diou="" loss="" many="" more.="" aditya="" oke,="" abhijit="" deo,="" yassine="" alouini="" project="" helping="" maintain="" relevant="" fresh.="" documentation="" completely="" revamped="" our="" them="" easier="" browse,="" added="" various="" key="" information="" supported="" sizes,="" or="" pre-processing="" steps="" now="" main="" page="" summary="" tables="" weights,="" has="" page.="" builder="" documented="" own="" page,="" including="" accuracy,="" minimal="" size,="" link="" recipes,="" other="" valuable="" info.="" comparison,="" docs="" here.="" feedback="" documentation,="" torchaudio="" v0.12="" streaming="" streamreader="" torchaudio’s="" i="" o="" api.="" it="" backed="" ffmpeg†,="" allows="" users="" to:="" decode="" audio="" video="" formats,="" mp4="" aac="" handle="" input="" forms,="" local="" files,="" network="" protocols,="" microphones,="" webcams,="" screen="" captures="" file-like="" objects="" iterate="" chunk-by-chunk,="" while="" changing="" sample="" rate="" frame="" filters,="" low-pass="" filter="" scaling="" nvidia’s="" hardware-based="" decoder="" (nvdec)="" usage="" details,="" check="" tutorials:="" media="" stream="" pt.1="" pt.2="" online="" asr="" emformer="" rnn-t="" device="" accelerated="" decoding="" nvdec="" †="" streamreader,="" ffmpeg="" libraries="" required.="" install="" ffmpeg.="" coverage="" codecs="" depends="" configured.="" official="" binaries="" compiled="" 4="" libraries;="" 5="" if="" built="" source.="" ctc="" beam="" search="" integrates="" wav2letter="" flashlight="" (github).="" time="" enables="" running="" evaluation="" using="" utils.="" customizable="" lexicon="" lexicon-free="" decoders="" supported,="" both="" compatible="" kenlm="" n-gram="" language="" without="" model.="" additionally="" supports="" downloading="" token,="" lexicon,="" pretrained="" files="" librispeech="" dataset.="" tutorial.="" beamforming="" modules="" methods="" improve="" flexibility="" usage,="" adds="" torchaudio.transforms:="" soudenmvdr="" rtfmvdr.="" differences="" mvdr="" are:="" power="" spectral="" density="" (psd)="" relative="" function="" (rtf)="" matrices="" inputs="" instead="" time-frequency="" masks.="" module="" integrated="" neural="" networks="" directly="" predict="" complex-valued="" stft="" coefficients="" speech="" noise="" add="" 'reference_channel'="" an="" argument="" forward="" allow="" select="" reference="" channel="" dynamically="" change="" besides="" modules,="" function-level="" torchaudio.functional.="" include:="" psd="" mvdr_weights_souden="" mvdr_weights_rtf="" rtf_evd="" rtf_power="" apply_beamforming="" at="" torchaudio.transforms="" torchaudio.functional="" enhancement="" torchtext="" v0.13="" glue="" datasets="" increased="" number="" 22="" 30="" adding="" remaining="" 8="" benchmark="" (sst-2="" already="" supported).="" complete="" list="" follows:="" cola="" (paper):="" single="" sentence="" binary="" acceptability="" task="" sst-2="" sentiment="" mrpc="" dual="" paraphrase="" qqp:="" sts-b="" float="" regression="" similarity="" mnli="" ternary="" nli="" qnli="" qa="" tasks="" rte="" wnli="" coreference="" scriptable="" bert="" tokenizer="" extended="" wordpiece="" bert.="" commonly="" algorithms="" splitting="" text="" into="" sub-words="" units="" japanese="" korean="" voice="" (schuster="" et="" al.,="" 2012).="" torchscriptabilty="" embed="" text-preprocessing="" natively="" c++="" needing="" python="" runtime.="" cmake="" build="" system="" application="" code,="" easily="" integrate="" tokenizers="" deployment="" needs.="" refer="" corresponding="" documentation.="" torchrec="" v0.2.0="" embeddingmodule="" +="" dlrm="" benchmarks="" set="" benchmarking="" tests,="" showing="" performance="" characteristics="" torchrec’s="" base="" torchrec.="" twotower="" retrieval="" example,="" faiss="" example="" demonstrating="" distributed="" (i.e.="" user-item)="" sharded="" projected="" item="" embeddings="" ivfpq="" index="" candidate="" generation.="" knn="" lookup="" bundled="" pytorch="" efficient="" retrieval.="" integrations="" demonstrate="" works="" components="" alongside="" production="" systems,="" ray="" clusters="" utilizing="" torchx="" scheduler="" dataloading="" nvtabular="" on-the-fly="" torcharrow="" showcasing="" recsys="" domain="" udfs="" sequential="" example:="" bert4rec="" torchrec,="" reimplements="" paper,="" embeddingcollection="" non-pooled="" embeddings.="" distributedmodelparallel="" 35%="" qps="" gain="" conventional="" data="" parallelism.="" planner="" library="" built-in="" selects="" near="" optimal="" sharding="" plan="" given="" attempts="" identify="" evaluating="" series="" proposals="" statically="" analyzed="" fed="" integer="" partitioner.="" able="" automatically="" adjust="" plans="" wide="" range="" hardware="" setups,="" allowing="" scale="" seamlessly="" development="" environment="" large="" hardware.="" notebook="" multi-gpu="" inference.="" shard="" written="" packaged="" via="" torch.package="" (an="" alternative="" torchscript).="" torch.deploy="" serve="" launching="" multiple="" interpreters="" carrying="" model,="" thus="" subverting="" gil.="" provided="" examples:="" (sharded="" torchrec)="" single-gpu.="" recmetrics="" collects="" common="" utilities="" recommendation="" extends="" torchmetrics.="" centralized="" metrics,="" auc,="" calibration,="" ctr,="" mse="" rmse,="" ne="" &amp;="" throughput="" optimization="" related="" operations="" reduce="" overhead="" metric="" computation="" checkpointing="" (prototype)="" process="" batched="" fused="" previously="" abstractions="" (embeddingbagcollection="" embeddingcollection)="" fbgemm="" kernels,="" benefits="" table="" batching,="" optimizer="" fusion,="" uvm="" placement,="" could="" only="" conjunction="" distributedmodelparallel.="" we’ve="" decoupled="" notions="" sharding,="" fusedembeddingbagcollection,="" standalone="" module,="" above="" features,="" sharded.="" job="" launcher="" makes="" run="" kubernetes="" slurm.="" we’re="" excited="" 0.2.0="" improvements.="" being="" on-premise="" cloud="" environments.="" quickstart="" start="" remote="" jobs.="" workspaces="" launch="" jobs="" workspace.="" patch="" code="" minimize="" iteration="" training.="" .torchxconfig="" specifying="" options="" saves="" having="" type="" long="" cli="" commands="" job.="" define="" level="" generic="" configs="" drop="" config="" file="" home="" directory="" user-level="" overrides.="" expanded="" aws="" (experimental)="" schedulers="" integrations.="" dist.ddp="" component="" any="" configuration.="" workers="" will="" discover="" when="" torchelastic="" builtin="" component.="" hyper="" parameter="" ax="" let="" hyper-parameter="" (hpo)="" trials="" onto="" clusters.="" mounts="" filesystem="" custom="" devices.="" efficiently="" access="" storage="" nfs="" lustre.="" accelerators="" infiniband="" accelerators.="" contains="" optimized="" kernels="" meant="" workloads.="" features="" last="" few="" months="" report.="" embedding="" (tbe)="" bag="" operator="" operation="" gpu.="" following="" enhancements="" flexibility:="" alignment="" restriction="" removed="" dimension="" size="" had="" 4b="" before="" now,="" 1b.="" unified="" virtual="" memory="" (uvm)="" caching="" kernel="" linearly="" caching.="" previously,="" similar="" much="" smaller="" than="" fp8="" fp32,="" fp16,="" int8,="" int4,="" int2="" weight="" types.="" types="" well="" models,="" (in="" gpu="" cpu="" operations)="" numerical="" evaluations="" compared="" does="" not="" require="" additional="" bias="" calculations.="" additionally,="" next="" generation="" h100="" gpus="" tensor="" core="" (mainly="" matmul="" ops).="" jagged="" speed="" up="" jaggedtensor.="" purpose="" jaggedtensor="" case="" where="" “jagged”,="" meaning="" consecutive="" row="" may="" different="" length,="" sparse="" feature="" systems.="" internal="" representation="" shown="" ops="" converting="" tensors="" dense="" formats="" back,="" performing="" matrix="" multiplications="" tensors,="" elementwise="" ops.="" permute102-baddbmm-permute102="" difficult="" fuse="" switching="" quick="" solution.="" created="" permute102_baddbmm_permute102="" switches="" first="" second="" dimension,="" performs="" multiplication="" then="" back.="" pass="" fp16="" fp32="" backward="" future.="" index_select="" dim="" 0="" selection="" normally="" part="" operation.="" arbitrary-dimension="" selection,="" special="" suboptimal.="" reason,="" implement="" specialized="" 0.="" cases,="" observed="" 1.4x="" fbgemm’s="" (using="" uniform="" distribution).="" implementation="" influential="" instances="" found="" tutorials.="" thanks="" reading,="" you’re="" interested="" updates="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="New library updates in PyTorch 1.12">
+<meta name="twitter:description" content="We are bringing a number of improvements to the current PyTorch libraries, alongside the PyTorch 1.12 release. These updates demonstrate our focus on developing common and extensible APIs across all domains to make it easier for our community to build ecosystem projects on PyTorch.
+
+Summary:
+
+  TorchVision - Added multi-weight support API, new architectures, model variants, and pretrained weight. See the release notes here.
+  TorchAudio - Introduced beta features including a streaming API, a CTC beam search decoder, and new beamforming modules and methods. See the release notes here.
+  TorchText - Extended support for scriptable BERT tokenizer and added datasets for GLUE benchmark. See the release notes here.
+  TorchRec - Added EmbeddingModule benchmarks, examples for TwoTower Retrieval, inference and sequential embeddings, metrics, improved planner and demonstrated integration with production components. See the release notes here.
+  TorchX - Launch PyTorch trainers developed on local workspaces onto five different types of schedulers. See the release notes here.
+  FBGemm - Added and improved kernels for Recommendation Systems inference workloads, including table batched embedding bag, jagged tensor operations, and other special-case optimizations.
+
+
+TorchVision v0.13
+
+Multi-weight support API
+
+TorchVision v0.13 offers a new Multi-weight support API for loading different weights to the existing model builder methods:
+
+from torchvision.models import *
+
+# Old weights with accuracy 76.130%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+
+# New weights with accuracy 80.858%
+resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+
+# Best available weights (currently alias for IMAGENET1K_V2)
+# Note that these weights may change across versions
+resnet50(weights=ResNet50_Weights.DEFAULT)
+
+# Strings are also supported
+resnet50(weights=" imagenet1k_v2")="" #="" no="" weights="" -="" random="" initialization="" resnet50(weights="None)" the="" new="" api="" bundles="" along="" with="" important="" details="" such="" as="" preprocessing="" transforms="" and="" meta-data="" labels.="" here="" is="" how="" to="" make="" most="" out="" of="" it:="" from="" torchvision.io="" import="" read_image="" torchvision.models="" resnet50,="" resnet50_weights="" img="read_image(&quot;test/assets/encode_jpeg/grace_hopper_517x606.jpg&quot;)" step="" 1:="" initialize="" model="" best="" available="" model.eval()="" 2:="" inference="" preprocess="weights.transforms()" 3:="" apply="" batch="preprocess(img).unsqueeze(0)" 4:="" use="" print="" predicted="" category="" prediction="model(batch).squeeze(0).softmax(0)" class_id="prediction.argmax().item()" score="prediction[class_id].item()" category_name="weights.meta[&quot;categories&quot;][class_id]" print(f"{category_name}:="" {100="" *="" score:.1f}%")="" you="" can="" read="" more="" about="" in="" docs.="" provide="" your="" feedback,="" please="" this="" dedicated="" github="" issue.="" architectures="" variants="" classification="" swin="" transformer="" efficienetnetv2="" are="" two="" popular="" models="" which="" often="" used="" for="" downstream="" vision="" tasks.="" release="" includes="" 6="" pre-trained="" their="" variants.="" models:="" torch="" image="torch.rand(1," 3,="" 224,="" 224)="" 384,="" 384)="" addition="" above,="" we="" also="" existing="" shufflenetv2,="" resnext="" mnasnet.="" accuracies="" all="" obtained="" on="" imagenet-1k="" seen="" below:="" acc@1="" acc@5="" swin_t="" 81.474="" 95.776="" swin_s="" 83.196="" 96.36="" swin_b="" 83.582="" 96.64="" efficientnet_v2_s="" 84.228="" 96.878="" efficientnet_v2_m="" 85.112="" 97.156="" efficientnet_v2_l="" 85.808="" 97.788="" resnext101_64x4d="" 83.246="" 96.454="" (quantized)="" 82.898="" 96.326="" shufflenet_v2_x1_5="" 72.996="" 91.086="" 72.052="" 0.700="" shufflenet_v2_x2_0="" 76.230="" 93.006="" 75.354="" 92.488="" mnasnet0_75="" 71.180="" 90.496="" mnas1_3="" 76.506="" 93.522="" would="" like="" thank="" hu="" ye="" contributing="" torchvision="" implementation.="" (beta)="" object="" detection="" instance="" segmentation="" have="" introduced="" 3="" retinanet,="" fasterrcnn="" maskrcnn="" that="" include="" several="" post-paper="" architectural="" optimizations="" improved="" training="" recipes.="" be="" similarly:="" torchvision.models.detection="" images="[torch.rand(3," 800,="" 600)]="" below="" present="" metrics="" coco="" val2017.="" parenthesis="" denote="" improvement="" over="" old="" variants:="" box="" map="" mask="" retinanet_resnet50_fpn_v2="" 41.5="" (+5.1)="" fasterrcnn_resnet50_fpn_v2="" 46.7="" (+9.7)="" maskrcnn_resnet50_fpn_v2="" 47.4="" (+9.5)="" 41.8="" (+7.2)="" ross="" girshick,="" piotr="" dollar,="" vaibhav="" aggarwal,="" francisco="" massa="" past="" research="" contributions="" work.="" swag="" vit="" regnet="" offer="" (​​supervised="" weakly="" hashtags)="" weights.="" one="" biggest="" these="" achieves="" a="" whopping="" 88.6%="" accuracy="" imagenet-1k.="" currently="" versions="" weights:="" 1)="" fine-tuned="" end-to-end="" (highest="" accuracy)="" 2)="" frozen="" trunk="" linear="" classifier="" fit="" (great="" transfer="" learning).="" see="" detailed="" each="" variant:="" regnet_y_16gf_weights.imagenet1k_swag_e2e_v1="" 86.012="" 98.054="" regnet_y_16gf_weights.imagenet1k_swag_linear_v1="" 83.976="" 97.244="" regnet_y_32gf_weights.imagenet1k_swag_e2e_v1="" 86.838="" 98.362="" regnet_y_32gf_weights.imagenet1k_swag_linear_v1="" 84.622="" 97.48="" regnet_y_128gf_weights.imagenet1k_swag_e2e_v1="" 88.228="" 98.682="" regnet_y_128gf_weights.imagenet1k_swag_linear_v1="" 86.068="" 97.844="" vit_b_16_weights.imagenet1k_swag_e2e_v1="" 85.304="" 97.65="" vit_b_16_weights.imagenet1k_swag_linear_v1="" 81.886="" 96.18="" vit_l_16_weights.imagenet1k_swag_e2e_v1="" 88.064="" 98.512="" vit_l_16_weights.imagenet1k_swag_linear_v1="" 85.146="" 97.422="" vit_h_14_weights.imagenet1k_swag_e2e_v1="" 88.552="" 98.694="" vit_h_14_weights.imagenet1k_swag_linear_v1="" 85.708="" 97.73="" released="" under="" attribution-noncommercial="" 4.0="" international="" license.="" laura="" gustafson,="" mannat="" singh="" aaron="" adcock="" work="" support="" making="" torchvision.="" refresh="" multi-weight="" enabled="" us="" accurate="" average="" by="" ~3="" points.="" recipe="" was="" learned="" top="" resnet50="" its="" were="" covered="" previous="" blog="" post.="" efficientnet_b1="" 78.642="" 79.838="" mobilenet_v2="" 71.878="" 72.154="" mobilenet_v3_large="" 74.042="" 75.274="" regnet_y_400mf="" 74.046="" 75.804="" regnet_y_800mf="" 76.42="" 78.828="" regnet_y_1_6gf="" 77.95="" 80.876="" regnet_y_3_2gf="" 78.948="" 81.982="" regnet_y_8gf="" 80.032="" 82.828="" regnet_y_16gf="" 80.424="" 82.886="" regnet_y_32gf="" 80.878="" 83.368="" regnet_x_400mf="" 72.834="" 74.864="" regnet_x_800mf="" 75.212="" 77.522="" regnet_x_1_6gf="" 77.04="" 79.668="" regnet_x_3_2gf="" 78.364="" 81.196="" regnet_x_8gf="" 79.344="" 81.682="" regnet_x_16gf="" 80.058="" 82.716="" regnet_x_32gf="" 80.622="" 83.014="" 76.13="" 80.858="" 75.92="" 80.282="" resnet101="" 77.374="" resnet152="" 78.312="" 82.284="" resnext50_32x4d="" 77.618="" 81.198="" resnext101_32x8d="" 79.312="" 82.834="" 78.986="" 82.574="" wide_resnet50_2="" 78.468="" 81.602="" wide_resnet101_2="" 78.848="" 82.51="" hugo="" touvron="" augmentations,="" layers="" losses="" brings="" bunch="" primitives="" produce="" sota="" models.="" some="" highlights="" augmix="" data-augmentation="" method,="" dropblock="" layer,="" ciou="" diou="" loss="" many="" more.="" aditya="" oke,="" abhijit="" deo,="" yassine="" alouini="" project="" helping="" maintain="" relevant="" fresh.="" documentation="" completely="" revamped="" our="" them="" easier="" browse,="" added="" various="" key="" information="" supported="" sizes,="" or="" pre-processing="" steps="" now="" main="" page="" summary="" tables="" weights,="" has="" page.="" builder="" documented="" own="" page,="" including="" accuracy,="" minimal="" size,="" link="" recipes,="" other="" valuable="" info.="" comparison,="" docs="" here.="" feedback="" documentation,="" torchaudio="" v0.12="" streaming="" streamreader="" torchaudio’s="" i="" o="" api.="" it="" backed="" ffmpeg†,="" allows="" users="" to:="" decode="" audio="" video="" formats,="" mp4="" aac="" handle="" input="" forms,="" local="" files,="" network="" protocols,="" microphones,="" webcams,="" screen="" captures="" file-like="" objects="" iterate="" chunk-by-chunk,="" while="" changing="" sample="" rate="" frame="" filters,="" low-pass="" filter="" scaling="" nvidia’s="" hardware-based="" decoder="" (nvdec)="" usage="" details,="" check="" tutorials:="" media="" stream="" pt.1="" pt.2="" online="" asr="" emformer="" rnn-t="" device="" accelerated="" decoding="" nvdec="" †="" streamreader,="" ffmpeg="" libraries="" required.="" install="" ffmpeg.="" coverage="" codecs="" depends="" configured.="" official="" binaries="" compiled="" 4="" libraries;="" 5="" if="" built="" source.="" ctc="" beam="" search="" integrates="" wav2letter="" flashlight="" (github).="" time="" enables="" running="" evaluation="" using="" utils.="" customizable="" lexicon="" lexicon-free="" decoders="" supported,="" both="" compatible="" kenlm="" n-gram="" language="" without="" model.="" additionally="" supports="" downloading="" token,="" lexicon,="" pretrained="" files="" librispeech="" dataset.="" tutorial.="" beamforming="" modules="" methods="" improve="" flexibility="" usage,="" adds="" torchaudio.transforms:="" soudenmvdr="" rtfmvdr.="" differences="" mvdr="" are:="" power="" spectral="" density="" (psd)="" relative="" function="" (rtf)="" matrices="" inputs="" instead="" time-frequency="" masks.="" module="" integrated="" neural="" networks="" directly="" predict="" complex-valued="" stft="" coefficients="" speech="" noise="" add="" 'reference_channel'="" an="" argument="" forward="" allow="" select="" reference="" channel="" dynamically="" change="" besides="" modules,="" function-level="" torchaudio.functional.="" include:="" psd="" mvdr_weights_souden="" mvdr_weights_rtf="" rtf_evd="" rtf_power="" apply_beamforming="" at="" torchaudio.transforms="" torchaudio.functional="" enhancement="" torchtext="" v0.13="" glue="" datasets="" increased="" number="" 22="" 30="" adding="" remaining="" 8="" benchmark="" (sst-2="" already="" supported).="" complete="" list="" follows:="" cola="" (paper):="" single="" sentence="" binary="" acceptability="" task="" sst-2="" sentiment="" mrpc="" dual="" paraphrase="" qqp:="" sts-b="" float="" regression="" similarity="" mnli="" ternary="" nli="" qnli="" qa="" tasks="" rte="" wnli="" coreference="" scriptable="" bert="" tokenizer="" extended="" wordpiece="" bert.="" commonly="" algorithms="" splitting="" text="" into="" sub-words="" units="" japanese="" korean="" voice="" (schuster="" et="" al.,="" 2012).="" torchscriptabilty="" embed="" text-preprocessing="" natively="" c++="" needing="" python="" runtime.="" cmake="" build="" system="" application="" code,="" easily="" integrate="" tokenizers="" deployment="" needs.="" refer="" corresponding="" documentation.="" torchrec="" v0.2.0="" embeddingmodule="" +="" dlrm="" benchmarks="" set="" benchmarking="" tests,="" showing="" performance="" characteristics="" torchrec’s="" base="" torchrec.="" twotower="" retrieval="" example,="" faiss="" example="" demonstrating="" distributed="" (i.e.="" user-item)="" sharded="" projected="" item="" embeddings="" ivfpq="" index="" candidate="" generation.="" knn="" lookup="" bundled="" pytorch="" efficient="" retrieval.="" integrations="" demonstrate="" works="" components="" alongside="" production="" systems,="" ray="" clusters="" utilizing="" torchx="" scheduler="" dataloading="" nvtabular="" on-the-fly="" torcharrow="" showcasing="" recsys="" domain="" udfs="" sequential="" example:="" bert4rec="" torchrec,="" reimplements="" paper,="" embeddingcollection="" non-pooled="" embeddings.="" distributedmodelparallel="" 35%="" qps="" gain="" conventional="" data="" parallelism.="" planner="" library="" built-in="" selects="" near="" optimal="" sharding="" plan="" given="" attempts="" identify="" evaluating="" series="" proposals="" statically="" analyzed="" fed="" integer="" partitioner.="" able="" automatically="" adjust="" plans="" wide="" range="" hardware="" setups,="" allowing="" scale="" seamlessly="" development="" environment="" large="" hardware.="" notebook="" multi-gpu="" inference.="" shard="" written="" packaged="" via="" torch.package="" (an="" alternative="" torchscript).="" torch.deploy="" serve="" launching="" multiple="" interpreters="" carrying="" model,="" thus="" subverting="" gil.="" provided="" examples:="" (sharded="" torchrec)="" single-gpu.="" recmetrics="" collects="" common="" utilities="" recommendation="" extends="" torchmetrics.="" centralized="" metrics,="" auc,="" calibration,="" ctr,="" mse="" rmse,="" ne="" &amp;="" throughput="" optimization="" related="" operations="" reduce="" overhead="" metric="" computation="" checkpointing="" (prototype)="" process="" batched="" fused="" previously="" abstractions="" (embeddingbagcollection="" embeddingcollection)="" fbgemm="" kernels,="" benefits="" table="" batching,="" optimizer="" fusion,="" uvm="" placement,="" could="" only="" conjunction="" distributedmodelparallel.="" we’ve="" decoupled="" notions="" sharding,="" fusedembeddingbagcollection,="" standalone="" module,="" above="" features,="" sharded.="" job="" launcher="" makes="" run="" kubernetes="" slurm.="" we’re="" excited="" 0.2.0="" improvements.="" being="" on-premise="" cloud="" environments.="" quickstart="" start="" remote="" jobs.="" workspaces="" launch="" jobs="" workspace.="" patch="" code="" minimize="" iteration="" training.="" .torchxconfig="" specifying="" options="" saves="" having="" type="" long="" cli="" commands="" job.="" define="" level="" generic="" configs="" drop="" config="" file="" home="" directory="" user-level="" overrides.="" expanded="" aws="" (experimental)="" schedulers="" integrations.="" dist.ddp="" component="" any="" configuration.="" workers="" will="" discover="" when="" torchelastic="" builtin="" component.="" hyper="" parameter="" ax="" let="" hyper-parameter="" (hpo)="" trials="" onto="" clusters.="" mounts="" filesystem="" custom="" devices.="" efficiently="" access="" storage="" nfs="" lustre.="" accelerators="" infiniband="" accelerators.="" contains="" optimized="" kernels="" meant="" workloads.="" features="" last="" few="" months="" report.="" embedding="" (tbe)="" bag="" operator="" operation="" gpu.="" following="" enhancements="" flexibility:="" alignment="" restriction="" removed="" dimension="" size="" had="" 4b="" before="" now,="" 1b.="" unified="" virtual="" memory="" (uvm)="" caching="" kernel="" linearly="" caching.="" previously,="" similar="" much="" smaller="" than="" fp8="" fp32,="" fp16,="" int8,="" int4,="" int2="" weight="" types.="" types="" well="" models,="" (in="" gpu="" cpu="" operations)="" numerical="" evaluations="" compared="" does="" not="" require="" additional="" bias="" calculations.="" additionally,="" next="" generation="" h100="" gpus="" tensor="" core="" (mainly="" matmul="" ops).="" jagged="" speed="" up="" jaggedtensor.="" purpose="" jaggedtensor="" case="" where="" “jagged”,="" meaning="" consecutive="" row="" may="" different="" length,="" sparse="" feature="" systems.="" internal="" representation="" shown="" ops="" converting="" tensors="" dense="" formats="" back,="" performing="" matrix="" multiplications="" tensors,="" elementwise="" ops.="" permute102-baddbmm-permute102="" difficult="" fuse="" switching="" quick="" solution.="" created="" permute102_baddbmm_permute102="" switches="" first="" second="" dimension,="" performs="" multiplication="" then="" back.="" pass="" fp16="" fp32="" backward="" future.="" index_select="" dim="" 0="" selection="" normally="" part="" operation.="" arbitrary-dimension="" selection,="" special="" suboptimal.="" reason,="" implement="" specialized="" 0.="" cases,="" observed="" 1.4x="" fbgemm’s="" (using="" uniform="" distribution).="" implementation="" influential="" instances="" found="" tutorials.="" thanks="" reading,="" you’re="" interested="" updates="" want="" join="" community,="" encourage="" discussion="" forums="" open="" issues.="" get="" latest="" news="" pytorch,="" follow="" twitter,="" medium,="" youtube,="" linkedin.="" cheers!="" team="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年6月28日</p>
+            <h1>
+                <a class="blog-title">PyTorch 1.12 版本中的新图书馆更新</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>我们正在对当前的 PyTorch 库进行多项改进，同时发布了 <a href="https://github.com/pytorch/pytorch/releases/tag/v1.12.0">PyTorch 1.12 版本 </a>。这些更新展示了我们致力于开发跨所有领域的通用和可扩展的 API，以使我们的社区更容易在 PyTorch 上构建生态系统项目。</p>
+
+<p>摘要：</p>
+<ul>
+  <li><strong>TorchVision</strong> - 添加了多权重支持 API、新的架构、模型变体和预训练权重。请参阅<a href="https://github.com/pytorch/vision/releases">此处</a>的发布说明。</li>
+  <li><strong>TorchAudio</strong> - 引入了包括流式 API、CTC 波束搜索解码器和新的波束成形模块和方法在内的 beta 功能。请参阅<a href="https://github.com/pytorch/audio/releases">此处</a>的发布说明。</li>
+  <li><strong>torchtext</strong> - 扩展了对可脚本化 BERT 分词器的支持，并添加了 GLUE 基准测试数据集。请参阅发布说明<a href="https://github.com/pytorch/text/releases">此处 </a>。</li>
+  <li><strong>torchrec</strong> - 添加了 EmbeddingModule 基准测试，TwoTower 检索、推理和顺序嵌入的示例，指标，改进的规划器，并展示了与生产组件的集成。请参阅发布说明<a href="https://github.com/pytorch/torchrec/releases">此处 </a>。</li>
+  <li><strong>torchx</strong> - 将在本地工作区开发的 PyTorch 训练器部署到五种不同的调度器上。请参阅发布说明<a href="https://github.com/pytorch/torchx/blob/main/CHANGELOG.md?plain=1#L3">此处 </a>。</li>
+  <li><strong>fbgemm</strong> - 为推荐系统推理工作负载添加和改进了内核，包括表批处理嵌入包、锯齿形张量操作和其他特殊情况优化。</li>
+</ul>
+
+<h2 id="torchvision-v013">TorchVision v0.13</h2>
+
+<h3 id="multi-weight-support-api">多权重支持 API</h3>
+
+<p>TorchVision v0.13 提供了一种新的<a href="https://pytorch.org/blog/introducing-torchvision-new-multi-weight-support-api/">多权重支持 API</a>，用于将不同权重加载到现有的模型构建方法中：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchvision.models</span> <span class="kn">import</span> <span class="o">*</span>
+
+<span class="c1"># Old weights with accuracy 76.130%
+</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="n">ResNet50_Weights</span><span class="p">.</span><span class="n">IMAGENET1K_V1</span><span class="p">)</span>
+
+<span class="c1"># New weights with accuracy 80.858%
+</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="n">ResNet50_Weights</span><span class="p">.</span><span class="n">IMAGENET1K_V2</span><span class="p">)</span>
+
+<span class="c1"># Best available weights (currently alias for IMAGENET1K_V2)
+# Note that these weights may change across versions
+</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="n">ResNet50_Weights</span><span class="p">.</span><span class="n">DEFAULT</span><span class="p">)</span>
+
+<span class="c1"># Strings are also supported
+</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s">"IMAGENET1K_V2"</span><span class="p">)</span>
+
+<span class="c1"># No weights - random initialization
+</span><span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="bp">None</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>新 API 将权重、预处理转换以及元数据（如标签）等重要细节打包在一起。以下是充分利用它的方法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchvision.io</span> <span class="kn">import</span> <span class="n">read_image</span>
+<span class="kn">from</span> <span class="nn">torchvision.models</span> <span class="kn">import</span> <span class="n">resnet50</span><span class="p">,</span> <span class="n">ResNet50_Weights</span>
+
+<span class="n">img</span> <span class="o">=</span> <span class="n">read_image</span><span class="p">(</span><span class="s">"test/assets/encode_jpeg/grace_hopper_517x606.jpg"</span><span class="p">)</span>
+
+<span class="c1"># Step 1: Initialize model with the best available weights
+</span><span class="n">weights</span> <span class="o">=</span> <span class="n">ResNet50_Weights</span><span class="p">.</span><span class="n">DEFAULT</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">resnet50</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="n">weights</span><span class="p">)</span>
+<span class="n">model</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+
+<span class="c1"># Step 2: Initialize the inference transforms
+</span><span class="n">preprocess</span> <span class="o">=</span> <span class="n">weights</span><span class="p">.</span><span class="n">transforms</span><span class="p">()</span>
+
+<span class="c1"># Step 3: Apply inference preprocessing transforms
+</span><span class="n">batch</span> <span class="o">=</span> <span class="n">preprocess</span><span class="p">(</span><span class="n">img</span><span class="p">).</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># Step 4: Use the model and print the predicted category
+</span><span class="n">prediction</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">batch</span><span class="p">).</span><span class="n">squeeze</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">softmax</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">class_id</span> <span class="o">=</span> <span class="n">prediction</span><span class="p">.</span><span class="n">argmax</span><span class="p">().</span><span class="n">item</span><span class="p">()</span>
+<span class="n">score</span> <span class="o">=</span> <span class="n">prediction</span><span class="p">[</span><span class="n">class_id</span><span class="p">].</span><span class="n">item</span><span class="p">()</span>
+<span class="n">category_name</span> <span class="o">=</span> <span class="n">weights</span><span class="p">.</span><span class="n">meta</span><span class="p">[</span><span class="s">"categories"</span><span class="p">][</span><span class="n">class_id</span><span class="p">]</span>
+<span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"</span><span class="si">{</span><span class="n">category_name</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="mi">100</span> <span class="o">*</span> <span class="n">score</span><span class="p">:.</span><span class="mi">1</span><span class="n">f</span><span class="si">}</span><span class="s">%"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>您可以在<a href="https://pytorch.org/vision/0.13/models.html">文档</a>中了解更多关于新 API 的信息。为了提供您的反馈，请使用这个专门的 <a href="https://github.com/pytorch/vision/issues/5088">GitHub 问题 </a>。</p>
+
+<h3 id="new-architectures-and-model-variants">新架构和模型变体</h3>
+
+<h4 id="classification">分类</h4>
+
+<p><a href="https://arxiv.org/abs/2103.14030">Swin Transformer</a> 和 <a href="https://arxiv.org/abs/2104.00298">EfficienetNetV2</a> 是两种流行的分类模型，常用于下游视觉任务。本版本包括它们分类变体的 6 个预训练权重。以下是使用新模型的方法：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torchvision.models</span> <span class="kn">import</span> <span class="o">*</span>
+
+<span class="n">image</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">swin_t</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s">"DEFAULT"</span><span class="p">).</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">prediction</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+
+<span class="n">image</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">384</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">efficientnet_v2_s</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s">"DEFAULT"</span><span class="p">).</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">prediction</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>除了上述内容，我们还为现有的架构如 ShuffleNetV2、ResNeXt 和 MNASNet 提供了新的变体。所有新预训练模型在 ImageNet-1K 上的准确率如下：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>Model</strong></th>
+      <th><strong>Acc@1</strong></th>
+      <th><strong>Acc@5</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>swin_t</td>
+      <td>81.474</td>
+      <td>95.776</td>
+    </tr>
+    <tr>
+      <td>swin_s</td>
+      <td>83.196</td>
+      <td>96.36</td>
+    </tr>
+    <tr>
+      <td>swin_b</td>
+      <td>83.582</td>
+      <td>96.64</td>
+    </tr>
+    <tr>
+      <td>efficientnet_v2_s</td>
+      <td>84.228</td>
+      <td>96.878</td>
+    </tr>
+    <tr>
+      <td>efficientnet_v2_m</td>
+      <td>85.112</td>
+      <td>97.156</td>
+    </tr>
+    <tr>
+      <td>efficientnet_v2_l</td>
+      <td>85.808</td>
+      <td>97.788</td>
+    </tr>
+    <tr>
+      <td>resnext101_64x4d</td>
+      <td>83.246</td>
+      <td>96.454</td>
+    </tr>
+    <tr>
+      <td>resnext101_64x4d (量化)</td>
+      <td>82.898</td>
+      <td>96.326</td>
+    </tr>
+    <tr>
+      <td>shufflenet_v2_x1_5</td>
+      <td>72.996</td>
+      <td>91.086</td>
+    </tr>
+    <tr>
+      <td>shufflenet_v2_x1_5（量化）</td>
+      <td>72.052</td>
+      <td>0.700</td>
+    </tr>
+    <tr>
+      <td>shufflenet_v2_x2_0</td>
+      <td>76.230</td>
+      <td>93.006</td>
+    </tr>
+    <tr>
+      <td>shufflenet_v2_x2_0（量化）</td>
+      <td>75.354</td>
+      <td>92.488</td>
+    </tr>
+    <tr>
+      <td>mnasnet0_75</td>
+      <td>71.180</td>
+      <td>90.496</td>
+    </tr>
+    <tr>
+      <td>mnas1_3</td>
+      <td>76.506</td>
+      <td>93.522</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>我们想感谢胡叶为 TorchVision 贡献了 Swin Transformer 的实现。</p>
+
+<h4 id="beta-object-detection-and-instance-segmentation">(BETA) 目标检测与实例分割</h4>
+
+<p>我们为 RetinaNet、FasterRCNN 和 MaskRCNN 引入了 3 个新的模型变体，这些变体包括多个<a href="https://github.com/pytorch/vision/pull/5444">论文后的架构优化</a>和改进的训练方案。所有模型都可以类似使用：</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">from</span> <span class="nn">torchvision.models.detection</span> <span class="kn">import</span> <span class="o">*</span>
+
+<span class="n">images</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">800</span><span class="p">,</span> <span class="mi">600</span><span class="p">)]</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">retinanet_resnet50_fpn_v2</span><span class="p">(</span><span class="n">weights</span><span class="o">=</span><span class="s">"DEFAULT"</span><span class="p">)</span>
+<span class="c1"># model = fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
+# model = maskrcnn_resnet50_fpn_v2(weights="DEFAULT")
+</span><span class="n">model</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">prediction</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">images</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>下面我们展示了新变体在 COCO val2017 上的指标。括号内表示与旧变体的改进：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>Model</strong></th>
+      <th><strong>箱体 mAP</strong></th>
+      <th><strong>遮罩 mAP</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>retinanet_resnet50_fpn_v2</td>
+      <td>41.5 (+5.1)</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>fasterrcnn_resnet50_fpn_v2</td>
+      <td>46.7 (+9.7)</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>maskrcnn_resnet50_fpn_v2</td>
+      <td>47.4 (+9.5)</td>
+      <td>41.8 (+7.2)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>我们想感谢 Ross Girshick、Piotr Dollar、Vaibhav Aggarwal、Francisco Massa 和 Hu Ye 过去对该工作的研究贡献。</p>
+
+<h3 id="new-pre-trained-weights">新的预训练权重</h3>
+
+<h4 id="swag-weights">SWAG 权重</h4>
+
+<p>ViT 和 RegNet 模型变体提供了新的预训练 <a href="https://arxiv.org/abs/2201.08371">SWAG</a>（从 hashtAGs 有监督弱学习）权重。其中最大的模型在 ImageNet-1K 上实现了惊人的 88.6% 准确率。我们目前提供两种权重的版本：1）在 ImageNet-1K 上进行端到端微调的权重（最高准确率）和 2）冻结主干权重，并在 ImageNet-1K 上拟合线性分类器（非常适合迁移学习）。下面我们看到了每个模型变体的详细准确率：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>模型权重</strong></th>
+      <th><strong>Acc@1</strong></th>
+      <th><strong>Acc@5</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>RegNet_Y_16GF_权重. IMAGENET1K_SWAG_E2E_V1</td>
+      <td>86.012</td>
+      <td>98.054</td>
+    </tr>
+    <tr>
+      <td>RegNet_Y_16GF_权重. IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>83.976</td>
+      <td>97.244</td>
+    </tr>
+    <tr>
+      <td>RegNet_Y_32GF_权重. IMAGENET1K_SWAG_E2E_V1</td>
+      <td>86.838</td>
+      <td>98.362</td>
+    </tr>
+    <tr>
+      <td>RegNet_Y_32GF_Weights.IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>84.622</td>
+      <td>97.48</td>
+    </tr>
+    <tr>
+      <td>RegNet_Y_128GF_权重. IMAGENET1K_SWAG_E2E_V1</td>
+      <td>88.228</td>
+      <td>98.682</td>
+    </tr>
+    <tr>
+      <td>RegNet_Y_128GF_权重. IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>86.068</td>
+      <td>97.844</td>
+    </tr>
+    <tr>
+      <td>ViT_B_16_权重. IMAGENET1K_SWAG_E2E_V1</td>
+      <td>85.304</td>
+      <td>97.65</td>
+    </tr>
+    <tr>
+      <td>ViT_B_16_权重. IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>81.886</td>
+      <td>96.18</td>
+    </tr>
+    <tr>
+      <td>ViT_L_16_Weights.IMAGENET1K_SWAG_E2E_V1</td>
+      <td>88.064</td>
+      <td>98.512</td>
+    </tr>
+    <tr>
+      <td>ViT_L_16_Weights.IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>85.146</td>
+      <td>97.422</td>
+    </tr>
+    <tr>
+      <td>ViT_H_14_Weights.IMAGENET1K_SWAG_E2E_V1</td>
+      <td>88.552</td>
+      <td>98.694</td>
+    </tr>
+    <tr>
+      <td>ViT_H_14_Weights.IMAGENET1K_SWAG_LINEAR_V1</td>
+      <td>85.708</td>
+      <td>97.73</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>SWAG 权重在<a href="https://github.com/facebookresearch/SWAG/blob/main/LICENSE">署名-非商业性使用 4.0 国际</a>许可下发布。我们感谢 Laura Gustafson、Mannat Singh 和 Aaron Adcock 为使权重对 TorchVision 可用所做的工作和支持。</p>
+
+<h4 id="model-refresh">模型更新</h4>
+
+<p>多权重支持 API 的发布使我们能够刷新最受欢迎的模型并提供更精确的权重。我们平均提高了每个模型约 3 分。新食谱是在 ResNet50 的基础上学习的，其细节在<a href="https://pytorch.org/blog/how-to-train-state-of-the-art-models-using-torchvision-latest-primitives/">之前的博客文章</a>中有介绍。</p>
+
+<table>
+  <thead>
+    <tr>
+      <th><strong>Model</strong></th>
+      <th><strong>旧权重</strong></th>
+      <th><strong>新权重</strong></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>efficientnet_b1</td>
+      <td>78.642</td>
+      <td>79.838</td>
+    </tr>
+    <tr>
+      <td>mobilenet_v2</td>
+      <td>71.878</td>
+      <td>72.154</td>
+    </tr>
+    <tr>
+      <td>mobilenet_v3_large</td>
+      <td>74.042</td>
+      <td>75.274</td>
+    </tr>
+    <tr>
+      <td>regnet_y_400mf</td>
+      <td>74.046</td>
+      <td>75.804</td>
+    </tr>
+    <tr>
+      <td>regnet_y_800mf</td>
+      <td>76.42</td>
+      <td>78.828</td>
+    </tr>
+    <tr>
+      <td>regnet_y_1_6gf</td>
+      <td>77.95</td>
+      <td>80.876</td>
+    </tr>
+    <tr>
+      <td>regnet_y_3_2gf</td>
+      <td>78.948</td>
+      <td>81.982</td>
+    </tr>
+    <tr>
+      <td>regnet_y_8gf</td>
+      <td>80.032</td>
+      <td>82.828</td>
+    </tr>
+    <tr>
+      <td>regnet_y_16gf</td>
+      <td>80.424</td>
+      <td>82.886</td>
+    </tr>
+    <tr>
+      <td>regnet_y_32gf</td>
+      <td>80.878</td>
+      <td>83.368</td>
+    </tr>
+    <tr>
+      <td>regnet_x_400mf</td>
+      <td>72.834</td>
+      <td>74.864</td>
+    </tr>
+    <tr>
+      <td>regnet_x_800mf</td>
+      <td>75.212</td>
+      <td>77.522</td>
+    </tr>
+    <tr>
+      <td>regnet_x_1_6gf</td>
+      <td>77.04</td>
+      <td>79.668</td>
+    </tr>
+    <tr>
+      <td>regnet_x_3_2gf</td>
+      <td>78.364</td>
+      <td>81.196</td>
+    </tr>
+    <tr>
+      <td>regnet_x_8gf</td>
+      <td>79.344</td>
+      <td>81.682</td>
+    </tr>
+    <tr>
+      <td>regnet_x_16gf</td>
+      <td>80.058</td>
+      <td>82.716</td>
+    </tr>
+    <tr>
+      <td>regnet_x_32gf</td>
+      <td>80.622</td>
+      <td>83.014</td>
+    </tr>
+    <tr>
+      <td>resnet50</td>
+      <td>76.13</td>
+      <td>80.858</td>
+    </tr>
+    <tr>
+      <td>resnet50 (量化)</td>
+      <td>75.92</td>
+      <td>80.282</td>
+    </tr>
+    <tr>
+      <td>resnet101</td>
+      <td>77.374</td>
+      <td>81.886</td>
+    </tr>
+    <tr>
+      <td>resnet152</td>
+      <td>78.312</td>
+      <td>82.284</td>
+    </tr>
+    <tr>
+      <td>resnext50_32x4d</td>
+      <td>77.618</td>
+      <td>81.198</td>
+    </tr>
+    <tr>
+      <td>resnext101_32x8d</td>
+      <td>79.312</td>
+      <td>82.834</td>
+    </tr>
+    <tr>
+      <td>resnext101_32x8d (量化)</td>
+      <td>78.986</td>
+      <td>82.574</td>
+    </tr>
+    <tr>
+      <td>wide_resnet50_2</td>
+      <td>78.468</td>
+      <td>81.602</td>
+    </tr>
+    <tr>
+      <td>wide_resnet101_2</td>
+      <td>78.848</td>
+      <td>82.51</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>我们要感谢 Piotr Dollar、Mannat Singh 和 Hugo Touvron 过去对这项工作的研究和贡献。</p>
+
+<h3 id="new-augmentations-layers-and-losses">新增增强、层和损失</h3>
+
+<p>本次发布带来了一大批新的基本元素，可用于生成 SOTA 模型。一些亮点包括新增 <a href="https://arxiv.org/abs/1912.02781">AugMix</a> 数据增强方法、<a href="https://arxiv.org/abs/1810.12890">DropBlock</a> 层、<a href="https://arxiv.org/abs/1911.08287">cIoU/dIoU</a> 损失以及<a href="https://github.com/pytorch/vision/issues/5410">更多 </a>。我们感谢 Aditya Oke、Abhijit Deo、Yassine Alouini 和 Hu Ye 为项目做出贡献，并帮助我们保持 TorchVision 的相关性和新鲜度。</p>
+
+<h3 id="documentation">文档</h3>
+
+<p>我们完全重写了模型文档，使其更易于浏览，并添加了各种关键信息，如支持的图像大小或预训练权重的图像预处理步骤。现在我们有一个<a href="https://pytorch.org/vision/main/models.html">主要模型页面 </a>，其中包含各种<a href="https://pytorch.org/vision/main/models.html#table-of-all-available-classification-weights">摘要表格 </a>，列出可用的权重，每个模型都有一个<a href="https://pytorch.org/vision/main/models/resnet.html">专门的页面 </a>。每个模型构建器也有自己的<a href="https://pytorch.org/vision/main/models/generated/torchvision.models.resnet50.html#torchvision.models.resnet50">页面 </a>，其中包含更多关于可用权重的详细信息，包括准确度、最小图像大小、训练食谱链接和其他有价值的信息。为了比较，我们之前的模型文档在这里 <a href="https://pytorch.org/vision/0.12/models.html">。</a> 为了对新文档提供反馈，请使用专门的 <a href="https://github.com/pytorch/vision/issues/5511">Github 问题 </a>。</p>
+
+<h2 id="torchaudio-v012">TorchAudio v0.12</h2>
+
+<h3 id="beta-streaming-api">(BETA) 流式 API</h3>
+
+<p align="middle" float="left">
+  <img src="/assets/images/streamingapi.jpeg" width="40%"> <img src="/assets/images/torchaudio-0-12-streaming-ASR-2.gif" width="50%">
+</p>
+
+<p>StreamReader 是 TorchAudio 的新 I/O API。它由 FFmpeg†支持，并允许用户：</p>
+<ul>
+  <li>解码音频和视频格式，包括 MP4 和 AAC</li>
+  <li>处理输入形式，例如本地文件、网络协议、麦克风、摄像头、屏幕捕获和类似文件的对象</li>
+  <li>逐块迭代并解码，同时更改采样率或帧率</li>
+  <li>应用音频和视频过滤器，例如低通滤波器和图像缩放</li>
+  <li>使用 Nvidia 的基于硬件的解码器（NVDEC）解码视频</li>
+</ul>
+
+<p>使用详情，请查阅<a href="https://pytorch.org/audio/0.12.0/io.html#streamreader">文档</a>和教程：</p>
+<ul>
+  <li><a href="https://pytorch.org/audio/0.12.0/tutorials/streaming_api_tutorial.html">媒体流 API - 第 1 部分</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/tutorials/streaming_api2_tutorial.html">媒体流 API - 第 2 部分</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/tutorials/online_asr_tutorial.html">基于 Emformer RNN-T 的在线语音识别</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/tutorials/device_asr.html">基于 Emformer RNN-T 的设备端语音识别</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/hw_acceleration_tutorial.html">使用 NVDEC 加速视频解码</a></li>
+</ul>
+
+<p>使用 StreamReader 需要 FFmpeg 库。请安装 FFmpeg。编解码器的支持范围取决于这些库的配置。TorchAudio 官方二进制文件是为与 FFmpeg 4 库兼容而编译的；如果从源代码构建 TorchAudio，则可以使用 FFmpeg 5。</p>
+
+<h3 id="beta-ctc-beam-search-decoder">(BETA) CTC 束搜索解码器</h3>
+
+<p>TorchAudio 集成了来自 <a href="https://arxiv.org/pdf/2201.12465.pdf">Flashlight</a> (<a href="https://github.com/flashlight/flashlight">GitHub</a>)的 wav2letter CTC 束搜索解码器。添加此推理时间解码器后，可以使用 TorchAudio 工具运行端到端 CTC 语音识别评估。</p>
+
+<p>支持自定义词典和无词典解码器，两者均兼容 KenLM n-gram 语言模型或无需使用语言模型。TorchAudio 还支持下载 LibriSpeech 数据集的标记、词典和预训练的 KenLM 文件。</p>
+
+<p>关于使用详情，请查阅<a href="https://pytorch.org/audio/0.12.0/models.decoder.html#ctcdecoder">文档</a>和 <a href="https://pytorch.org/audio/0.12.0/tutorials/asr_inference_with_ctc_decoder_tutorial.html">ASR 推理教程 </a>。</p>
+
+<h3 id="beta-new-beamforming-modules-and-methods">（BETA）新的波束成形模块和方法</h3>
+
+<p>为提高使用灵活性，本版本在 torchaudio.transforms 下增加了两个新的波束成形模块：<a href="https://pytorch.org/audio/0.12.0/transforms.html#soudenmvdr">SoudenMVDR</a> 和 <a href="https://pytorch.org/audio/0.12.0/transforms.html#rtfmvdr">RTFMVDR</a>。与 <a href="https://pytorch.org/audio/0.11.0/transforms.html#mvdr">MVDR</a> 相比的主要区别是：</p>
+<ul>
+  <li>使用功率谱密度（PSD）和相对传递函数（RTF）矩阵作为输入，而不是时频掩码。该模块可以与直接预测语音和噪声复值短时傅里叶变换（STFT）系数的神经网络集成</li>
+  <li>在前向方法中添加 'reference_channel' 作为输入参数，以允许用户在模型训练中选择参考通道或在推理过程中动态更改参考通道</li>
+</ul>
+
+<p>除了这两个模块之外，torchaudio.functional 下还添加了新的功能级波束成形方法。这些包括：</p>
+<ul>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#psd">psd</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#mvdr-weights-souden">mvdr_weights_souden</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#mvdr-weights-rtf">mvdr_weights_rtf</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#rtf-evd">rtf_evd</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#rtf-power">rtf_power</a></li>
+  <li><a href="https://pytorch.org/audio/0.12.0/functional.html#apply-beamforming">应用波束成形</a></li>
+</ul>
+
+<p>使用详情请查看 <a href="https://pytorch.org/audio/0.12.0/transforms.html#multi-channel">torchaudio.transforms</a> 和 <a href="https://pytorch.org/audio/0.12.0/functional.html#multi-channel">torchaudio.functional</a> 文档，以及<a href="https://pytorch.org/audio/0.12.0/tutorials/mvdr_tutorial.html">基于 MVDR 波束成形的声音增强教程 </a>。</p>
+
+<h2 id="torchtext-v013">TorchText v0.13</h2>
+
+<h3 id="glue-datasets">Glue 数据集</h3>
+
+<p>我们将 TorchText 中的数据集数量从 22 个增加到 30 个，通过添加 GLUE 基准测试中剩余的 8 个数据集（SST-2 已经支持）。GLUE 数据集的完整列表如下：</p>
+<ul>
+  <li><a href="https://nyu-mll.github.io/CoLA/">CoLA</a> (<a href="https://arxiv.org/pdf/1805.12471.pdf"> 论文 </a>)：单句二分类可接受性任务</li>
+  <li><a href="https://nlp.stanford.edu/sentiment/">SST-2</a> (<a href="https://nlp.stanford.edu/~socherr/EMNLP2013_RNTN.pdf"> 论文 </a>)：单句二分类情感任务</li>
+  <li><a href="https://nlp.stanford.edu/~socherr/EMNLP2013_RNTN.pdf">MRPC</a> (<a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/I05-50025B15D.pdf"> 论文 </a>)：双句二分类同义任务</li>
+  <li><a href="https://quoradata.quora.com/First-Quora-Dataset-Release-Question-Pairs">QQP</a>：双句二元分类释义任务</li>
+  <li><a href="https://ixa2.si.ehu.eus/stswiki/index.php/STSbenchmark">STS-B</a> (<a href="https://aclanthology.org/S17-2001.pdf"> 论文 </a>)：单句到浮点回归句子相似度任务</li>
+  <li><a href="https://cims.nyu.edu/~sbowman/multinli/">MNLI</a> (<a href="https://cims.nyu.edu/~sbowman/multinli/paper.pdf"> 论文 </a>)：句子三元分类 NLI 任务</li>
+  <li><a href="https://gluebenchmark.com/">QNLI</a> (<a href="https://arxiv.org/pdf/1804.07461.pdf"> 论文 </a>)：句子二元分类 QA 和 NLI 任务</li>
+  <li><a href="https://aclweb.org/aclwiki/Recognizing_Textual_Entailment">RTE</a> (<a href="https://arxiv.org/pdf/2010.03061.pdf"> 论文 </a>)：双句二元分类 NLI 任务</li>
+  <li><a href="https://cs.nyu.edu/~davise/papers/WinogradSchemas/WS.html">WNLI</a> (<a href="http://commonsensereasoning.org/2011/papers/Levesque.pdf"> 论文 </a>)：双句二元分类指代消解和 NLI 任务</li>
+</ul>
+
+<h3 id="scriptable-bert-tokenizer">可脚本化的 BERT 分词器</h3>
+
+<p>TorchText 通过添加 BERT 中使用的 WordPiece 分词器扩展了对可脚本化分词器的支持。这是将输入文本分割成子词单元的常用算法之一，它首次在 <a href="https://static.googleusercontent.com/media/research.google.com/ja//pubs/archive/37842.pdf">《日语和韩语音频搜索》（Schuster et al., 2012）</a> 中提出。</p>
+
+<p>支持 TorchScript 将 BERT 文本预处理功能原生嵌入 C++中，无需依赖 Python 运行时。由于 TorchText 现在支持 CMAKE 构建系统，可以原生地将 torchtext 二进制文件与应用程序代码链接，用户可以轻松集成 BERT 分词器以满足部署需求。</p>
+
+<p>请参阅相应的<a href="https://pytorch.org/text/main/transforms.html#torchtext.transforms.BERTTokenizer">文档</a>以获取使用详情。</p>
+
+<h2 id="torchrec-v020">TorchRec v0.2.0</h2>
+
+<h3 id="embeddingmodule--dlrm-benchmarks">EmbeddingModule + DLRM 基准测试</h3>
+
+<p>一组<a href="https://github.com/pytorch/torchrec/tree/main/benchmarks">基准测试 </a>，展示了 TorchRec 基础模块和研究模型的性能特征。</p>
+
+<h3 id="twotower-retrieval-example-with-faiss">基于 FAISS 的 TwoTower 检索示例</h3>
+
+<p>我们提供了一个<a href="https://github.com/pytorch/torchrec/tree/main/examples/retrieval">示例 </a>，演示了使用 TorchRec 训练一个分布式 TwoTower（即用户-物品）检索模型，该模型使用分片技术。预测的物品嵌入被添加到 IVFPQ FAISS 索引中用于候选生成。检索模型和 KNN 查找被封装在一个 Pytorch 模型中，以实现高效的端到端检索。</p>
+
+<h3 id="integrations">集成</h3>
+
+<p>我们演示了 TorchRec 与许多在生产环境中与 PyTorch 模型一起使用的常用组件无缝配合，例如系统等</p>
+<ul>
+  <li>使用 Torchx Ray 调度器在 Ray 集群上<a href="https://github.com/pytorch/torchrec/tree/main/examples/ray">训练 </a> TorchRec 模型</li>
+  <li>使用 NVTabular 在 DLRM 上进行<a href="https://github.com/pytorch/torchrec/tree/main/torchrec/datasets/scripts/nvt">预处理</a>和 DataLoading</li>
+  <li>使用 TorchArrow 进行即时预处理<a href="https://github.com/pytorch/torchrec/tree/main/examples/torcharrow">训练 </a> TorchRec 模型，展示 RecSys 领域的 UDFs</li>
+</ul>
+
+<h3 id="sequential-embeddings-example-bert4rec">顺序嵌入示例：Bert4Rec</h3>
+
+<p>我们提供了一个<a href="https://github.com/pytorch/torchrec/tree/main/examples/bert4rec">示例 </a>，使用 TorchRec 重新实现了 <a href="https://arxiv.org/abs/1904.06690">BERT4REC</a> 论文，展示了用于非池化嵌入的 EmbeddingCollection。使用 DistributedModelParallel，我们看到了相对于传统数据并行主义的 35% QPS 提升。</p>
+
+<h3 id="beta-planner">（Beta）规划器</h3>
+
+<p>TorchRec 库包含一个内置的<a href="https://pytorch.org/torchrec/torchrec.distributed.planner.html">规划器 </a>，该规划器为给定模型选择近最优的划分计划。规划器通过评估一系列提案来尝试识别最佳划分计划，这些提案被静态分析并输入到整数划分器中。规划器能够自动调整适用于广泛硬件设置的计划，使用户能够无缝地从本地开发环境扩展到大规模生产硬件。请参阅此<a href="https://github.com/pytorch/torchrec/blob/main/torchrec/distributed/planner/Planner_Introduction.ipynb">笔记本</a>以获取更详细的教程。</p>
+
+<h3 id="beta-inference">(Beta) 推理</h3>
+
+<p><a href="https://github.com/pytorch/torchrec/tree/main/torchrec/inference">torchrec 推理 </a> 是一个支持多 GPU 推理的 C++ 库。torchrec 库用于将使用 torch.package（TorchScript 的替代方案）编写的 Python 模型进行分片。torch.deploy 库用于通过启动携带打包模型的多个 Python 解释器来从 C++ 中提供推理服务，从而绕过全局解释器锁（GIL）。提供了两个示例模型：<a href="https://github.com/pytorch/torchrec/blob/main/examples/inference/dlrm_predict.py">DLRM 多 GPU</a>（通过 torchrec 分片）和 <a href="https://github.com/pytorch/torchrec/blob/main/examples/inference/dlrm_predict_single_gpu.py">DLRM 单 GPU</a>。</p>
+
+<h3 id="beta-recmetrics">(Beta) RecMetrics</h3>
+
+<p>RecMetrics 是一个 <a href="https://github.com/pytorch/torchrec/tree/main/torchrec/metrics"> 指标 </a> 库，用于收集推荐模型的常用工具和优化。它扩展了 <a href="https://torchmetrics.readthedocs.io/en/stable/">torchmetrics</a>。</p>
+<ul>
+  <li>一个允许用户添加新指标的集中式指标模块</li>
+  <li>常用指标，包括 AUC、校准、CTR、MSE/RMSE、NE 和吞吐量</li>
+  <li>优化与指标相关操作，以减少指标计算的开销</li>
+  <li>检查点</li>
+</ul>
+
+<h3 id="prototype-single-process-batched--fused-embeddings">(原型) 单进程批量+融合嵌入</h3>
+
+<p>之前 TorchRec 的抽象（EmbeddingBagCollection/EmbeddingCollection）在 FBGEMM 内核上，提供了诸如表批量、优化器融合和 UVM 放置等好处，但只能与 DistributedModelParallel 一起使用。我们已经将这些概念与分片解耦，并引入了<a href="https://github.com/pytorch/torchrec/blob/eb1247d8a2d16edc4952e5c2617e69acfe5477a5/torchrec/modules/fused_embedding_modules.py#L271">融合嵌入袋集合（FusedEmbeddingBagCollection）</a>，它可以作为一个独立的模块使用，具有所有上述功能，也可以进行分片。</p>
+
+<h2 id="torchx-v020">TorchX v0.2.0</h2>
+
+<p>TorchX 是一个作业启动器，它使得在具有许多调度器集成（包括 Kubernetes 和 Slurm）的分布式训练集群中运行 PyTorch 变得更加容易。我们很高兴发布 TorchX 0.2.0 版本，其中包含了许多改进。TorchX 目前正在本地和云环境中投入生产使用。</p>
+
+<p>查看快速入门指南以开始启动本地和远程作业。</p>
+
+<h3 id="workspaces">工作空间</h3>
+
+<p>TorchX 现在支持工作空间，允许用户轻松使用本地工作空间启动训练作业。TorchX 可以自动在基础镜像上构建包含您本地训练代码的补丁，以最小化迭代时间和训练时间。</p>
+
+<h3 id="torchxconfig">.torchxconfig</h3>
+
+<p>在 <a href="https://pytorch.org/torchx/latest/runner.config.html">.torchxconfig 中指定选项可以让你在每次启动作业时无需输入冗长的 CLI 命令。你还可以定义项目级别的通用配置，并在用户目录中放置配置文件以进行用户级覆盖。</a></p>
+
+<h3 id="expanded-scheduler-support">扩展的调度器支持</h3>
+
+<p>除了现有的集成之外，TorchX 现在还支持 <a href="https://pytorch.org/torchx/main/schedulers/aws_batch.html">AWS Batch</a> 和 <a href="https://pytorch.org/torchx/main/schedulers/ray.html">Ray（实验性）</a> 调度器。</p>
+
+<h3 id="distributed-training-on-all-schedulers">在所有调度器上实现分布式训练</h3>
+
+<p>火炬 X 的 dist.ddp 组件现在可以在所有调度器上工作，无需任何配置。使用 <a href="https://pytorch.org/docs/stable/distributed.elastic.html">torchelastic</a> 并通过<a href="https://pytorch.org/torchx/main/components/distributed.html">内置的 dist.ddp 组件 </a>，分布式训练工作进程将自动发现彼此。</p>
+
+<h3 id="hyper-parameter-optimization">超参数优化</h3>
+
+<p>TorchX 与 Ax 集成，让您可以通过在远程集群上启动搜索试验来扩展超参数优化（HPO）。</p>
+
+<h3 id="file-and-device-mounts">文件和设备挂载</h3>
+
+<p>TorchX 现已支持 <a href="https://pytorch.org/torchx/main/specs.html#mounts"> 远程文件系统挂载和自定义设备 </a>。这使得您的 PyTorch 作业能够高效访问云存储，如 NFS 或 Lustre。设备挂载功能使得可以使用网络加速器，如 Infiniband 和自定义推理/训练加速器。</p>
+
+<h2 id="fbgemm-v020">FBGemm v0.2.0</h2>
+
+<p>FBGEMM 库包含旨在提高 PyTorch 工作负载性能的优化内核。在过去几个月中，我们添加了许多新功能和优化，我们非常高兴向大家报告。</p>
+
+<h3 id="inference-table-batched-embedding-tbe">推理表批量嵌入（TBE）</h3>
+
+<p>《表批处理嵌入袋》（TBE）算子是推荐系统在 GPU 上进行嵌入查找的基础操作，我们对其进行了以下性能和灵活性方面的增强：</p>
+
+<p>移除了对齐限制</p>
+<ul>
+  <li>嵌入维度 * 数据类型大小之前必须是 4B 的倍数，现在则是 1B。</li>
+</ul>
+
+<p>统一虚拟内存（UVM）缓存内核优化</p>
+<ul>
+  <li>UVM 缓存内核现在与使用 UVM 缓存的表数量成线性扩展。之前，它具有与所有使用 UVM 缓存的表相似的开销</li>
+  <li>UVM 缓存内核的开销比之前小得多</li>
+</ul>
+
+<h3 id="inference-fp8-table-batched-embedding-tbe">推理 FP8 表批处理嵌入（TBE）</h3>
+
+<p><a href="https://github.com/pytorch/FBGEMM/blob/main/fbgemm_gpu/fbgemm_gpu/split_table_batched_embeddings_ops.py#L1541">表批处理嵌入包 </a>（TBE）之前支持 FP32、FP16、INT8、INT4 和 INT2 嵌入权重类型。虽然这些权重类型在许多模型中表现良好，但我们集成了 FP8 权重类型（在 GPU 和 CPU 操作中），以便对我们的模型中的 FP8 进行数值和性能评估。与 INT8 相比，FP8 不需要额外的偏差和缩放存储和计算。此外，下一代 H100 GPU 在 Tensor Core（主要是矩阵乘法操作）上支持 FP8。</p>
+
+<h3 id="jagged-tensor-kernels">锯齿形张量核</h3>
+
+<p>我们添加了优化的内核以加速 <a href="https://pytorch.org/torchrec/torchrec.sparse.html">TorchRec JaggedTensor</a>。JaggedTensor 的目的是处理输入数据的一个维度是“锯齿形”的情况，这意味着给定维度中连续的行在长度上可能不同，这在推荐系统中的稀疏特征输入中很常见。内部表示如下：</p>
+
+<p align="center">
+  <img src="/assets/images/Jagged-Tensor-Figure-from-FBGEMM-section.png" width="80%">
+</p>
+
+<p>我们添加了将锯齿形张量从稀疏格式转换为密集格式以及反向转换的 ops，以及与锯齿形张量执行矩阵乘法和逐元素操作的 ops。</p>
+
+<h3 id="optimized-permute102-baddbmm-permute102">优化了 permute102-baddbmm-permute102</h3>
+
+<p>在批大小不是模型批大小的情况下，融合各种矩阵乘法是困难的，切换批维度是一个快速解决方案。我们创建了 permute102_baddbmm_permute102 操作，该操作切换第一和第二维度，执行批矩阵乘法，然后切换回来。目前我们只支持 FP16 数据类型的正向传播，并将支持 FP32 类型和反向传播。</p>
+
+<h3 id="optimized-index_select-for-dim-0-index-selection">优化 dim 0 索引选择的 index_select</h3>
+
+<p>index_select 通常用作稀疏操作的一部分。虽然 PyTorch 支持任意维度索引选择的通用 index_select，但其对于 dim 0 索引选择这类特殊情况的性能不佳。因此，我们为 dim 0 实现了一个专门的 index_select。在某些情况下，我们观察到 FBGEMM 的 index_select 比 PyTorch（使用均匀索引分布）的 index_select 性能提升了 1.4 倍。</p>
+
+<p>更多关于有影响力实例的实现信息可以在我们的 <a href="https://github.com/pytorch/captum/tree/master/captum/influence">GitHub</a> 页面和<a href="https://captum.ai/tutorials/TracInCP_Tutorial">教程</a>中找到。</p>
+
+<p>感谢阅读，如果您对这些更新感兴趣并想加入 PyTorch 社区，我们鼓励您加入<a href="https://discuss.pytorch.org/">讨论论坛</a>和 <a href="https://github.com/pytorch/pytorch/issues">GitHub 问题 </a>。要获取 PyTorch 的最新消息，请关注我们的 <a href="https://twitter.com/PyTorch">Twitter</a>、<a href="https://medium.com/pytorch">Medium</a>、<a href="https://www.youtube.com/pytorch">YouTube</a> 和 <a href="https://www.linkedin.com/company/pytorch">LinkedIn</a>。</p>
+
+<p>干杯！</p>
+
+<p>PyTorch 团队</p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

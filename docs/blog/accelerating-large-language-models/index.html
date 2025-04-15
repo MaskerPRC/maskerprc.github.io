@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Accelerating Large Language Models with Accelerated Transformers | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="TL;DR. We show how to use Accelerated PyTorch 2.0 Transformers and the newly introduced torch.compile() method to accelerate Large Language Models on the example of nanoGPT, a compact open-source implementation of the GPT model from Andrej Karpathy. Using the new scaled dot product attention operator introduced with Accelerated PT2 Transformers, we select the flash_attention custom kernel and achieve faster training time per batch (measured with Nvidia A100 GPUs), going from a ~143ms/batch baseline to ~113 ms/batch. In addition, the enhanced implementation using the SDPA operator offers better numerical stability. Finally, further optimizations are achieved using padded inputs, which when combined with flash attention lead to ~87ms/batch.
+
+Recent times have seen exponential adoption of large language models (LLMs) and Generative AI in everyday life. Tightly coupled with these ever-growing models is the ever-growing training cost - in terms of both time and hardware utilization. The PyTorch team has tackled these challenges head on with Accelerated PyTorch 2 Transformers (previously known as “Better Transformer”) and JIT Compilation in PyTorch 2.0.
+
+In this blog post, we explore training optimizations gained by utilizing custom kernel implementations of SDPA - also known as scaled dot product attention - a critical layer in transformer models. The custom kernel for SDPA replaces several discrete sequential operations with one globally optimized kernel which avoids allocating a large amount of intermediate CUDA memory. This approach offers a number of advantages, including but not limited to:  higher performance computation of SDPA by reducing memory bandwidth bottleneck, reduced memory footprint to support larger batch sizes, and finally added numerical stability by prescaling input tensors. These optimizations are demonstrated on nanoGPT, an open-source implementation of GPT from Andrej Karpathy.
+
+Background
+
+Scaled dot product attention is the fundamental building block of multihead attention, as introduced in “Attention is All You Need”, and has a wide range of applications in LLM and Generative AI models.
+
+
+
+Figure 1: The Transformer model architecture based on “Attention is All You Need”. With the new PyTorch SDPA operator, Multi-Head Attention is efficiently implemented by a linear layer for the in-projection, the SDPA operator, and a linear layer for the out-projection.
+
+With the new scaled_dot_product_attention operator, multihead attention can be implemented in just 3 steps: in projection with a linear layer, SDPA, and out projection with a linear layer.
+
+# In Projection
+# variable descriptions:
+# q,k,v = Query, Key, Value tensors
+# bsz = batch size
+# num_heads = Numner of heads for Multihead Attention
+# tgt_len = Target length
+# src_len = Source Length
+# head_dim: Head Dimension
+    q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    q = q.view(bsz, num_heads, tgt_len, head_dim)
+    k = k.view(bsz, num_heads, src_len, head_dim)
+    v = v.view(bsz, num_heads, src_len, head_dim)
+
+    # Scaled Dot Product Attention
+    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)
+
+    # Out Projection
+    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+
+
+PyTorch 2. supports multiple different kernels optimized for specific use cases, with specific requirements. A kernel picker picks the best kernel for a particular combination of input parameters. If no optimized “custom kernel” for a particular combination of input parameters can be identified, the kernel picker selects a general kernel that can handle all input combinations.
+
+While future releases may extend this set of operators, PyTorch 2.0 launches with 3 implementations for the SDPA operator:
+
+
+  A generic kernel which implements the mathematical equation of SDPA in the function sdpa_math()
+  An optimized kernel based on the paper “Flash Attention”, which supports evaluation of SDPA with 16 bit floating point data types on compute architecture SM80 (A100).
+  An optimized kernel based on the paper “Self-Attention Does Not Need O(n^2) Memory” and implemented in xFormer, which supports both 32 and 16 bit floating data types on a wider range of architectures (SM40 and later). This blog post refers to this kernel as the mem_efficient kernel.
+
+
+Note that both optimized kernels (two and three listed above), support a key padding mask and limit the supported attention mask to causal attention. Accelerated PyTorch 2.0 Transformers today only support the causal mask when it is specified using the is_causal boolean. When a mask is specified, the general-purpose kernel will be selected because it is too expensive to analyze the contents of a provided mask to determine if it is the causal mask. Additional explanations on the constraints for each kernel can be found in the Accelerated PT2 Transformer blog.
+
+Enabling Accelerated Transformers with nanoGPT
+
+The SDPA operator being a critical component of the GPT model,  we identified the open source nanoGPT model as an excellent candidate for both demonstrating the ease of implementation and benefits of PyTorch 2.0’s Accelerated Transformers. The following demonstrates the exact process by which Accelerated Transformers was enabled on nanoGPT.
+
+This process largely revolves around replacing the existing SDPA implementation with the newly added F.scaled_dot_product_attention operator from functional.py. This process can be easily adapted to enable the operator in many other LLMs. Alternatively, users can instead choose to call F.multi_head_attention_forward() or utilize the nn.MultiHeadAttention module directly where applicable. The following code snippets are adapted from Karpathy’s nanoGPT repository.
+
+Step 1: Identify the existing SDPA implementation
+
+In the case of nanoGPT, SDPA is implemented in the model’s CausalSelfAttention class. The original implementation at time of writing is adapted below for this post.
+
+
+
+Step 2: Replace with Torch’s scaled_dot_product_attention
+
+At this point we can note the following:
+
+
+  Lines 36 - 42 define the mathematical implementation of SDPA which we are replacing
+  The mask applied on line 39 is no longer relevant since we are using scaled_dot_product_attention’s is_causal flag.
+  The dropout layer used in line 41 is also now unnecessary.
+
+
+Swapping out the SDPA implementation for torch’s scaled_dot_product_attention and removing the now redundant code yields the following implementation.
+
+
+
+Alternatively, the original mask can be passed into the attn_mask field however due to the mentioned kernel constraints that would limit the implementation to only support the generic sdpa_math kernel.
+
+Step 3 (Bonus): Faster matmuls with padding
+
+On top of the performance improvements from SDPA, our analysis yielded a nice ancillary win.  In Andrej’s words “The most dramatic optimization to nanoGPT so far (~25% speedup) is to simply increase the vocab size from 50257 to 50304 (nearest multiple of 64).”
+
+
+
+The vocab size determines the dimensions of matmuls in the output layer of GPT, and these are so large that they were taking a majority of the time for the entire training loop!  We discovered that they were achieving performance significantly below the peak throughput achievable on the A100 GPU, and guessed from NVIDIA’s matmul documentation that 64-element alignment would yield better results.  Indeed, padding these matmuls achieves nearly a 3x speedup!  The underlying cause is that unaligned memory accesses significantly reduce efficiency.  A deeper analysis can be found in this Twitter thread.
+
+With this optimization we were able to further reduce training time from ~113 ms (using flash attention) to ~87 ms per batch.
+
+Results
+
+The figure below demonstrates the performance gained using Pytorch custom kernels. Here are the exact figures:
+
+
+  baseline (nanoGPT implementation):  ~143ms
+  sdpa_math (generic): ~134ms (6.71% faster)
+  mem_efficient kernel: ~119ms (20.16% faster)
+  flash_attention kernel: ~113ms (26.54% faster)
+  flash_attention + padded vocab:  ~87ms (64.37% faster)
+
+
+All code was run on an 8 x NVIDIA Corporation A100 server with 80 GB HBM [A100 SXM4 80GB], and for the purpose of this experiment dropout was set to 0.
+
+
+
+Figure 2: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Enhancing Numerical Model Stability
+
+In addition to being faster, PyTorch’s implementation offers increased numerical stability by avoiding loss of precision in many execution scenarios. There is a great explanation here, but essentially the PyTorch implementation scales the Query and Key matrices before multiplication, which is said to be more stable and avoid loss of precision. Because of the merged custom kernel architecture of SDPA, this scaling does not introduce additional overhead in the computation of the attention result.  In comparison, an implementation from the individual computational components would require separate pre-scaling at additional cost. For an additional explanation, see Appendix A.
+
+Improved Memory Consumption
+
+Yet another large advantage of using the torch SDPA kernels is the reduced memory footprint, which allows for the utilization of larger batch sizes. The following chart compares the best validation loss after one hour of training for both flash attention and the baseline implementations of causal attention. As can be seen, the maximum batch size achieved with the baseline causal attention implementation (on 8 x NVIDIA Corporation A100 server with 80 GB HBM) was 24, significantly less then the maximum achieved with flash attention, which was 39.
+
+
+
+Figure 3: Using Flash Attention enables the usage of larger batch sizes, allowing users to achieve lower validation loss after one hour of training (smaller is better).
+
+Conclusion
+
+Accelerated PyTorch 2 Transformers were designed to make the training and production deployment of state-of-the-art transformer models affordable and integrated with PyTorch 2.0 model JIT compilation.  The newly introduced PyTorch SDPA operator provides improved performance for training Transformer models and is particularly valuable for the expensive Large Language Model training. In this post we demonstrate a number of optimizations on the exemplary nanoGPT model  including:
+
+
+  Over 26% training speedup, when compared against the baseline with constant batch size
+  An additional speedup achieved with padded vocabulary, bringing the total optimization to approximately 64% compared to the baseline
+  Additional numerical stability
+
+
+Appendix A: Analyzing Attention Numeric Stability
+
+In this section we provide a more in depth explanation of the previously mentioned enhanced numerical stability which is gained by prescaling SDPA’s input vectors. The following is a simplified version of nanoGPT’s mathematical implementation of SDPA. The important thing to note here is that the query undergoes matrix multiplication without being scaled.
+
+# nanoGPT implementation of SDPA
+# notice q (our query vector) is not scaled !
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_nanogpt = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+
+The following is the equivalent mathematical implementation in torch’s scaled_dot_product_attention.
+
+# PyTorch implementation of SDPA
+embed_size = q.size(-1)
+scaling_factor = math.sqrt(math.sqrt(embed_size))
+q = q / scaling_factor 	# notice q _is_ scaled here !
+
+# same as above, but with scaling factor
+att = q @ (k.transpose(-2, -1) / scaling_factor)
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att0, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_scale_before = att @ v
+
+
+Mathematically both approaches should be equivalent, however our experimentation shows that in practice we receive different results from each approach.
+
+Using the approach above, we verified y_scale_before matches the expected output from using the scaled_dot_product_attention method while y_nanogpt does not.
+
+The torch.allclose method was used to test equivalence. Specifically, we showed that:
+
+y_sdpa = torch.nn.functional._scaled_dot_product_attention(
+	q,
+	k,
+	v,
+	attn_mask=self.bias[:,:,:T,:T] != 0,
+	dropout_p=0.0,
+	need_attn_weights=False,
+	is_causal=False,
+)
+
+torch.allclose(y_sdpa, y_nanogpt) # False, indicating fp issues
+torch.allclose(y_sdpa, y_scale_before) # True, as expected
+
+
+Appendix B: Reproducing Experiment Results
+
+Researchers seeking to reproduce these results should start with the following commit from Andrej’s nanoGPT repository - b3c17c6c6a363357623f223aaa4a8b1e89d0a465. This commit was used as the baseline when measuring the per batch speed improvements. For results which include padded vocabulary optimizations (which yielded the most significant improvements to batch speed), use the following commit - 77e7e04c2657846ddf30c1ca2dd9f7cbb93ddeab. From either checkout, selecting kernels for experimentation is made trivial with the use of the torch.backends API.
+
+The desired kernel can be selected via a context manager:
+
+with torch.backends.cuda.sdp_kernel (
+    enable_math = False,
+    enable_flash = False,
+    enable_mem_efficient = True
+):
+    train(model)
+
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Accelerating Large Language Models with Accelerated Transformers">
+<meta property="og:description" content="TL;DR. We show how to use Accelerated PyTorch 2.0 Transformers and the newly introduced torch.compile() method to accelerate Large Language Models on the example of nanoGPT, a compact open-source implementation of the GPT model from Andrej Karpathy. Using the new scaled dot product attention operator introduced with Accelerated PT2 Transformers, we select the flash_attention custom kernel and achieve faster training time per batch (measured with Nvidia A100 GPUs), going from a ~143ms/batch baseline to ~113 ms/batch. In addition, the enhanced implementation using the SDPA operator offers better numerical stability. Finally, further optimizations are achieved using padded inputs, which when combined with flash attention lead to ~87ms/batch.
+
+Recent times have seen exponential adoption of large language models (LLMs) and Generative AI in everyday life. Tightly coupled with these ever-growing models is the ever-growing training cost - in terms of both time and hardware utilization. The PyTorch team has tackled these challenges head on with Accelerated PyTorch 2 Transformers (previously known as “Better Transformer”) and JIT Compilation in PyTorch 2.0.
+
+In this blog post, we explore training optimizations gained by utilizing custom kernel implementations of SDPA - also known as scaled dot product attention - a critical layer in transformer models. The custom kernel for SDPA replaces several discrete sequential operations with one globally optimized kernel which avoids allocating a large amount of intermediate CUDA memory. This approach offers a number of advantages, including but not limited to:  higher performance computation of SDPA by reducing memory bandwidth bottleneck, reduced memory footprint to support larger batch sizes, and finally added numerical stability by prescaling input tensors. These optimizations are demonstrated on nanoGPT, an open-source implementation of GPT from Andrej Karpathy.
+
+Background
+
+Scaled dot product attention is the fundamental building block of multihead attention, as introduced in “Attention is All You Need”, and has a wide range of applications in LLM and Generative AI models.
+
+
+
+Figure 1: The Transformer model architecture based on “Attention is All You Need”. With the new PyTorch SDPA operator, Multi-Head Attention is efficiently implemented by a linear layer for the in-projection, the SDPA operator, and a linear layer for the out-projection.
+
+With the new scaled_dot_product_attention operator, multihead attention can be implemented in just 3 steps: in projection with a linear layer, SDPA, and out projection with a linear layer.
+
+# In Projection
+# variable descriptions:
+# q,k,v = Query, Key, Value tensors
+# bsz = batch size
+# num_heads = Numner of heads for Multihead Attention
+# tgt_len = Target length
+# src_len = Source Length
+# head_dim: Head Dimension
+    q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    q = q.view(bsz, num_heads, tgt_len, head_dim)
+    k = k.view(bsz, num_heads, src_len, head_dim)
+    v = v.view(bsz, num_heads, src_len, head_dim)
+
+    # Scaled Dot Product Attention
+    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)
+
+    # Out Projection
+    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+
+
+PyTorch 2. supports multiple different kernels optimized for specific use cases, with specific requirements. A kernel picker picks the best kernel for a particular combination of input parameters. If no optimized “custom kernel” for a particular combination of input parameters can be identified, the kernel picker selects a general kernel that can handle all input combinations.
+
+While future releases may extend this set of operators, PyTorch 2.0 launches with 3 implementations for the SDPA operator:
+
+
+  A generic kernel which implements the mathematical equation of SDPA in the function sdpa_math()
+  An optimized kernel based on the paper “Flash Attention”, which supports evaluation of SDPA with 16 bit floating point data types on compute architecture SM80 (A100).
+  An optimized kernel based on the paper “Self-Attention Does Not Need O(n^2) Memory” and implemented in xFormer, which supports both 32 and 16 bit floating data types on a wider range of architectures (SM40 and later). This blog post refers to this kernel as the mem_efficient kernel.
+
+
+Note that both optimized kernels (two and three listed above), support a key padding mask and limit the supported attention mask to causal attention. Accelerated PyTorch 2.0 Transformers today only support the causal mask when it is specified using the is_causal boolean. When a mask is specified, the general-purpose kernel will be selected because it is too expensive to analyze the contents of a provided mask to determine if it is the causal mask. Additional explanations on the constraints for each kernel can be found in the Accelerated PT2 Transformer blog.
+
+Enabling Accelerated Transformers with nanoGPT
+
+The SDPA operator being a critical component of the GPT model,  we identified the open source nanoGPT model as an excellent candidate for both demonstrating the ease of implementation and benefits of PyTorch 2.0’s Accelerated Transformers. The following demonstrates the exact process by which Accelerated Transformers was enabled on nanoGPT.
+
+This process largely revolves around replacing the existing SDPA implementation with the newly added F.scaled_dot_product_attention operator from functional.py. This process can be easily adapted to enable the operator in many other LLMs. Alternatively, users can instead choose to call F.multi_head_attention_forward() or utilize the nn.MultiHeadAttention module directly where applicable. The following code snippets are adapted from Karpathy’s nanoGPT repository.
+
+Step 1: Identify the existing SDPA implementation
+
+In the case of nanoGPT, SDPA is implemented in the model’s CausalSelfAttention class. The original implementation at time of writing is adapted below for this post.
+
+
+
+Step 2: Replace with Torch’s scaled_dot_product_attention
+
+At this point we can note the following:
+
+
+  Lines 36 - 42 define the mathematical implementation of SDPA which we are replacing
+  The mask applied on line 39 is no longer relevant since we are using scaled_dot_product_attention’s is_causal flag.
+  The dropout layer used in line 41 is also now unnecessary.
+
+
+Swapping out the SDPA implementation for torch’s scaled_dot_product_attention and removing the now redundant code yields the following implementation.
+
+
+
+Alternatively, the original mask can be passed into the attn_mask field however due to the mentioned kernel constraints that would limit the implementation to only support the generic sdpa_math kernel.
+
+Step 3 (Bonus): Faster matmuls with padding
+
+On top of the performance improvements from SDPA, our analysis yielded a nice ancillary win.  In Andrej’s words “The most dramatic optimization to nanoGPT so far (~25% speedup) is to simply increase the vocab size from 50257 to 50304 (nearest multiple of 64).”
+
+
+
+The vocab size determines the dimensions of matmuls in the output layer of GPT, and these are so large that they were taking a majority of the time for the entire training loop!  We discovered that they were achieving performance significantly below the peak throughput achievable on the A100 GPU, and guessed from NVIDIA’s matmul documentation that 64-element alignment would yield better results.  Indeed, padding these matmuls achieves nearly a 3x speedup!  The underlying cause is that unaligned memory accesses significantly reduce efficiency.  A deeper analysis can be found in this Twitter thread.
+
+With this optimization we were able to further reduce training time from ~113 ms (using flash attention) to ~87 ms per batch.
+
+Results
+
+The figure below demonstrates the performance gained using Pytorch custom kernels. Here are the exact figures:
+
+
+  baseline (nanoGPT implementation):  ~143ms
+  sdpa_math (generic): ~134ms (6.71% faster)
+  mem_efficient kernel: ~119ms (20.16% faster)
+  flash_attention kernel: ~113ms (26.54% faster)
+  flash_attention + padded vocab:  ~87ms (64.37% faster)
+
+
+All code was run on an 8 x NVIDIA Corporation A100 server with 80 GB HBM [A100 SXM4 80GB], and for the purpose of this experiment dropout was set to 0.
+
+
+
+Figure 2: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Enhancing Numerical Model Stability
+
+In addition to being faster, PyTorch’s implementation offers increased numerical stability by avoiding loss of precision in many execution scenarios. There is a great explanation here, but essentially the PyTorch implementation scales the Query and Key matrices before multiplication, which is said to be more stable and avoid loss of precision. Because of the merged custom kernel architecture of SDPA, this scaling does not introduce additional overhead in the computation of the attention result.  In comparison, an implementation from the individual computational components would require separate pre-scaling at additional cost. For an additional explanation, see Appendix A.
+
+Improved Memory Consumption
+
+Yet another large advantage of using the torch SDPA kernels is the reduced memory footprint, which allows for the utilization of larger batch sizes. The following chart compares the best validation loss after one hour of training for both flash attention and the baseline implementations of causal attention. As can be seen, the maximum batch size achieved with the baseline causal attention implementation (on 8 x NVIDIA Corporation A100 server with 80 GB HBM) was 24, significantly less then the maximum achieved with flash attention, which was 39.
+
+
+
+Figure 3: Using Flash Attention enables the usage of larger batch sizes, allowing users to achieve lower validation loss after one hour of training (smaller is better).
+
+Conclusion
+
+Accelerated PyTorch 2 Transformers were designed to make the training and production deployment of state-of-the-art transformer models affordable and integrated with PyTorch 2.0 model JIT compilation.  The newly introduced PyTorch SDPA operator provides improved performance for training Transformer models and is particularly valuable for the expensive Large Language Model training. In this post we demonstrate a number of optimizations on the exemplary nanoGPT model  including:
+
+
+  Over 26% training speedup, when compared against the baseline with constant batch size
+  An additional speedup achieved with padded vocabulary, bringing the total optimization to approximately 64% compared to the baseline
+  Additional numerical stability
+
+
+Appendix A: Analyzing Attention Numeric Stability
+
+In this section we provide a more in depth explanation of the previously mentioned enhanced numerical stability which is gained by prescaling SDPA’s input vectors. The following is a simplified version of nanoGPT’s mathematical implementation of SDPA. The important thing to note here is that the query undergoes matrix multiplication without being scaled.
+
+# nanoGPT implementation of SDPA
+# notice q (our query vector) is not scaled !
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_nanogpt = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+
+The following is the equivalent mathematical implementation in torch’s scaled_dot_product_attention.
+
+# PyTorch implementation of SDPA
+embed_size = q.size(-1)
+scaling_factor = math.sqrt(math.sqrt(embed_size))
+q = q / scaling_factor 	# notice q _is_ scaled here !
+
+# same as above, but with scaling factor
+att = q @ (k.transpose(-2, -1) / scaling_factor)
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att0, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_scale_before = att @ v
+
+
+Mathematically both approaches should be equivalent, however our experimentation shows that in practice we receive different results from each approach.
+
+Using the approach above, we verified y_scale_before matches the expected output from using the scaled_dot_product_attention method while y_nanogpt does not.
+
+The torch.allclose method was used to test equivalence. Specifically, we showed that:
+
+y_sdpa = torch.nn.functional._scaled_dot_product_attention(
+	q,
+	k,
+	v,
+	attn_mask=self.bias[:,:,:T,:T] != 0,
+	dropout_p=0.0,
+	need_attn_weights=False,
+	is_causal=False,
+)
+
+torch.allclose(y_sdpa, y_nanogpt) # False, indicating fp issues
+torch.allclose(y_sdpa, y_scale_before) # True, as expected
+
+
+Appendix B: Reproducing Experiment Results
+
+Researchers seeking to reproduce these results should start with the following commit from Andrej’s nanoGPT repository - b3c17c6c6a363357623f223aaa4a8b1e89d0a465. This commit was used as the baseline when measuring the per batch speed improvements. For results which include padded vocabulary optimizations (which yielded the most significant improvements to batch speed), use the following commit - 77e7e04c2657846ddf30c1ca2dd9f7cbb93ddeab. From either checkout, selecting kernels for experimentation is made trivial with the use of the torch.backends API.
+
+The desired kernel can be selected via a context manager:
+
+with torch.backends.cuda.sdp_kernel (
+    enable_math = False,
+    enable_flash = False,
+    enable_mem_efficient = True
+):
+    train(model)
+
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Accelerating Large Language Models with Accelerated Transformers">
+<meta name="twitter:description" content="TL;DR. We show how to use Accelerated PyTorch 2.0 Transformers and the newly introduced torch.compile() method to accelerate Large Language Models on the example of nanoGPT, a compact open-source implementation of the GPT model from Andrej Karpathy. Using the new scaled dot product attention operator introduced with Accelerated PT2 Transformers, we select the flash_attention custom kernel and achieve faster training time per batch (measured with Nvidia A100 GPUs), going from a ~143ms/batch baseline to ~113 ms/batch. In addition, the enhanced implementation using the SDPA operator offers better numerical stability. Finally, further optimizations are achieved using padded inputs, which when combined with flash attention lead to ~87ms/batch.
+
+Recent times have seen exponential adoption of large language models (LLMs) and Generative AI in everyday life. Tightly coupled with these ever-growing models is the ever-growing training cost - in terms of both time and hardware utilization. The PyTorch team has tackled these challenges head on with Accelerated PyTorch 2 Transformers (previously known as “Better Transformer”) and JIT Compilation in PyTorch 2.0.
+
+In this blog post, we explore training optimizations gained by utilizing custom kernel implementations of SDPA - also known as scaled dot product attention - a critical layer in transformer models. The custom kernel for SDPA replaces several discrete sequential operations with one globally optimized kernel which avoids allocating a large amount of intermediate CUDA memory. This approach offers a number of advantages, including but not limited to:  higher performance computation of SDPA by reducing memory bandwidth bottleneck, reduced memory footprint to support larger batch sizes, and finally added numerical stability by prescaling input tensors. These optimizations are demonstrated on nanoGPT, an open-source implementation of GPT from Andrej Karpathy.
+
+Background
+
+Scaled dot product attention is the fundamental building block of multihead attention, as introduced in “Attention is All You Need”, and has a wide range of applications in LLM and Generative AI models.
+
+
+
+Figure 1: The Transformer model architecture based on “Attention is All You Need”. With the new PyTorch SDPA operator, Multi-Head Attention is efficiently implemented by a linear layer for the in-projection, the SDPA operator, and a linear layer for the out-projection.
+
+With the new scaled_dot_product_attention operator, multihead attention can be implemented in just 3 steps: in projection with a linear layer, SDPA, and out projection with a linear layer.
+
+# In Projection
+# variable descriptions:
+# q,k,v = Query, Key, Value tensors
+# bsz = batch size
+# num_heads = Numner of heads for Multihead Attention
+# tgt_len = Target length
+# src_len = Source Length
+# head_dim: Head Dimension
+    q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    q = q.view(bsz, num_heads, tgt_len, head_dim)
+    k = k.view(bsz, num_heads, src_len, head_dim)
+    v = v.view(bsz, num_heads, src_len, head_dim)
+
+    # Scaled Dot Product Attention
+    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)
+
+    # Out Projection
+    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+
+
+PyTorch 2. supports multiple different kernels optimized for specific use cases, with specific requirements. A kernel picker picks the best kernel for a particular combination of input parameters. If no optimized “custom kernel” for a particular combination of input parameters can be identified, the kernel picker selects a general kernel that can handle all input combinations.
+
+While future releases may extend this set of operators, PyTorch 2.0 launches with 3 implementations for the SDPA operator:
+
+
+  A generic kernel which implements the mathematical equation of SDPA in the function sdpa_math()
+  An optimized kernel based on the paper “Flash Attention”, which supports evaluation of SDPA with 16 bit floating point data types on compute architecture SM80 (A100).
+  An optimized kernel based on the paper “Self-Attention Does Not Need O(n^2) Memory” and implemented in xFormer, which supports both 32 and 16 bit floating data types on a wider range of architectures (SM40 and later). This blog post refers to this kernel as the mem_efficient kernel.
+
+
+Note that both optimized kernels (two and three listed above), support a key padding mask and limit the supported attention mask to causal attention. Accelerated PyTorch 2.0 Transformers today only support the causal mask when it is specified using the is_causal boolean. When a mask is specified, the general-purpose kernel will be selected because it is too expensive to analyze the contents of a provided mask to determine if it is the causal mask. Additional explanations on the constraints for each kernel can be found in the Accelerated PT2 Transformer blog.
+
+Enabling Accelerated Transformers with nanoGPT
+
+The SDPA operator being a critical component of the GPT model,  we identified the open source nanoGPT model as an excellent candidate for both demonstrating the ease of implementation and benefits of PyTorch 2.0’s Accelerated Transformers. The following demonstrates the exact process by which Accelerated Transformers was enabled on nanoGPT.
+
+This process largely revolves around replacing the existing SDPA implementation with the newly added F.scaled_dot_product_attention operator from functional.py. This process can be easily adapted to enable the operator in many other LLMs. Alternatively, users can instead choose to call F.multi_head_attention_forward() or utilize the nn.MultiHeadAttention module directly where applicable. The following code snippets are adapted from Karpathy’s nanoGPT repository.
+
+Step 1: Identify the existing SDPA implementation
+
+In the case of nanoGPT, SDPA is implemented in the model’s CausalSelfAttention class. The original implementation at time of writing is adapted below for this post.
+
+
+
+Step 2: Replace with Torch’s scaled_dot_product_attention
+
+At this point we can note the following:
+
+
+  Lines 36 - 42 define the mathematical implementation of SDPA which we are replacing
+  The mask applied on line 39 is no longer relevant since we are using scaled_dot_product_attention’s is_causal flag.
+  The dropout layer used in line 41 is also now unnecessary.
+
+
+Swapping out the SDPA implementation for torch’s scaled_dot_product_attention and removing the now redundant code yields the following implementation.
+
+
+
+Alternatively, the original mask can be passed into the attn_mask field however due to the mentioned kernel constraints that would limit the implementation to only support the generic sdpa_math kernel.
+
+Step 3 (Bonus): Faster matmuls with padding
+
+On top of the performance improvements from SDPA, our analysis yielded a nice ancillary win.  In Andrej’s words “The most dramatic optimization to nanoGPT so far (~25% speedup) is to simply increase the vocab size from 50257 to 50304 (nearest multiple of 64).”
+
+
+
+The vocab size determines the dimensions of matmuls in the output layer of GPT, and these are so large that they were taking a majority of the time for the entire training loop!  We discovered that they were achieving performance significantly below the peak throughput achievable on the A100 GPU, and guessed from NVIDIA’s matmul documentation that 64-element alignment would yield better results.  Indeed, padding these matmuls achieves nearly a 3x speedup!  The underlying cause is that unaligned memory accesses significantly reduce efficiency.  A deeper analysis can be found in this Twitter thread.
+
+With this optimization we were able to further reduce training time from ~113 ms (using flash attention) to ~87 ms per batch.
+
+Results
+
+The figure below demonstrates the performance gained using Pytorch custom kernels. Here are the exact figures:
+
+
+  baseline (nanoGPT implementation):  ~143ms
+  sdpa_math (generic): ~134ms (6.71% faster)
+  mem_efficient kernel: ~119ms (20.16% faster)
+  flash_attention kernel: ~113ms (26.54% faster)
+  flash_attention + padded vocab:  ~87ms (64.37% faster)
+
+
+All code was run on an 8 x NVIDIA Corporation A100 server with 80 GB HBM [A100 SXM4 80GB], and for the purpose of this experiment dropout was set to 0.
+
+
+
+Figure 2: Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models, such as for nanoGPT shown here.
+
+Enhancing Numerical Model Stability
+
+In addition to being faster, PyTorch’s implementation offers increased numerical stability by avoiding loss of precision in many execution scenarios. There is a great explanation here, but essentially the PyTorch implementation scales the Query and Key matrices before multiplication, which is said to be more stable and avoid loss of precision. Because of the merged custom kernel architecture of SDPA, this scaling does not introduce additional overhead in the computation of the attention result.  In comparison, an implementation from the individual computational components would require separate pre-scaling at additional cost. For an additional explanation, see Appendix A.
+
+Improved Memory Consumption
+
+Yet another large advantage of using the torch SDPA kernels is the reduced memory footprint, which allows for the utilization of larger batch sizes. The following chart compares the best validation loss after one hour of training for both flash attention and the baseline implementations of causal attention. As can be seen, the maximum batch size achieved with the baseline causal attention implementation (on 8 x NVIDIA Corporation A100 server with 80 GB HBM) was 24, significantly less then the maximum achieved with flash attention, which was 39.
+
+
+
+Figure 3: Using Flash Attention enables the usage of larger batch sizes, allowing users to achieve lower validation loss after one hour of training (smaller is better).
+
+Conclusion
+
+Accelerated PyTorch 2 Transformers were designed to make the training and production deployment of state-of-the-art transformer models affordable and integrated with PyTorch 2.0 model JIT compilation.  The newly introduced PyTorch SDPA operator provides improved performance for training Transformer models and is particularly valuable for the expensive Large Language Model training. In this post we demonstrate a number of optimizations on the exemplary nanoGPT model  including:
+
+
+  Over 26% training speedup, when compared against the baseline with constant batch size
+  An additional speedup achieved with padded vocabulary, bringing the total optimization to approximately 64% compared to the baseline
+  Additional numerical stability
+
+
+Appendix A: Analyzing Attention Numeric Stability
+
+In this section we provide a more in depth explanation of the previously mentioned enhanced numerical stability which is gained by prescaling SDPA’s input vectors. The following is a simplified version of nanoGPT’s mathematical implementation of SDPA. The important thing to note here is that the query undergoes matrix multiplication without being scaled.
+
+# nanoGPT implementation of SDPA
+# notice q (our query vector) is not scaled !
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_nanogpt = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+
+The following is the equivalent mathematical implementation in torch’s scaled_dot_product_attention.
+
+# PyTorch implementation of SDPA
+embed_size = q.size(-1)
+scaling_factor = math.sqrt(math.sqrt(embed_size))
+q = q / scaling_factor 	# notice q _is_ scaled here !
+
+# same as above, but with scaling factor
+att = q @ (k.transpose(-2, -1) / scaling_factor)
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att0, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_scale_before = att @ v
+
+
+Mathematically both approaches should be equivalent, however our experimentation shows that in practice we receive different results from each approach.
+
+Using the approach above, we verified y_scale_before matches the expected output from using the scaled_dot_product_attention method while y_nanogpt does not.
+
+The torch.allclose method was used to test equivalence. Specifically, we showed that:
+
+y_sdpa = torch.nn.functional._scaled_dot_product_attention(
+	q,
+	k,
+	v,
+	attn_mask=self.bias[:,:,:T,:T] != 0,
+	dropout_p=0.0,
+	need_attn_weights=False,
+	is_causal=False,
+)
+
+torch.allclose(y_sdpa, y_nanogpt) # False, indicating fp issues
+torch.allclose(y_sdpa, y_scale_before) # True, as expected
+
+
+Appendix B: Reproducing Experiment Results
+
+Researchers seeking to reproduce these results should start with the following commit from Andrej’s nanoGPT repository - b3c17c6c6a363357623f223aaa4a8b1e89d0a465. This commit was used as the baseline when measuring the per batch speed improvements. For results which include padded vocabulary optimizations (which yielded the most significant improvements to batch speed), use the following commit - 77e7e04c2657846ddf30c1ca2dd9f7cbb93ddeab. From either checkout, selecting kernels for experimentation is made trivial with the use of the torch.backends API.
+
+The desired kernel can be selected via a context manager:
+
+with torch.backends.cuda.sdp_kernel (
+    enable_math = False,
+    enable_flash = False,
+    enable_mem_efficient = True
+):
+    train(model)
+
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>小巧型、即用型 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2023年4月19日</p>
+            <h1>
+                <a class="blog-title">使用加速 Transformer 加速大型语言模型</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Lucas Pasqualin、Driss Guessous、Christian Puhrsch、Bertrand Maher、Michael Gschwind 撰写</p>
+                    <p><strong>TL;DR.</strong> 我们展示了如何使用加速 PyTorch 2.0 Transformer 和新引入的 <code class="language-plaintext highlighter-rouge">torch.compile()</code> 方法来加速大型语言模型，以 nanoGPT 为例，nanoGPT 是 Andrej Karpathy 的 GPT 模型的一个紧凑的开源实现。使用加速 PT2 Transformer 中引入的新 <a href="https://pytorch.org/docs/master/generated/torch.nn.functional.scaled_dot_product_attention.html"> 缩放点积注意力算子 </a>，我们选择了 flash_attention 自定义内核，实现了每批次的更快训练时间（使用 Nvidia A100 GPU 测量），从 ~143ms/批次的基础值降低到 ~113 ms/批次。此外，使用 SDPA 算子增强的实现提供了更好的数值稳定性。最后，通过使用填充输入，进一步优化了性能，与 flash attention 结合后，每批次时间降低到 ~87ms。</p>
+
+<p>近期，大型语言模型（LLMs）和生成式 AI 在日常生活中的应用呈指数级增长。与这些不断增长模型紧密相连的是不断增长的训练成本——无论是时间还是硬件利用率。PyTorch 团队通过《加速 PyTorch 2 Transformers》（之前称为“更好的 Transformer”）和 PyTorch 2.0 中的即时编译（JIT Compilation）直面这些挑战。</p>
+
+<p>在这篇博客文章中，我们探讨了通过使用 SDPA（也称为缩放点积注意力）的定制内核实现获得的训练优化，SDPA 是变压器模型中的一个关键层。定制的 SDPA 内核通过用一个全局优化的内核替换多个离散的顺序操作，避免了分配大量中间 CUDA 内存。这种方法提供了一系列优势，包括但不限于：通过减少内存带宽瓶颈提高 SDPA 的计算性能，减少内存占用以支持更大的批量大小，以及通过预缩放输入张量增加了数值稳定性。这些优化在 nanoGPT 上得到了演示，nanoGPT 是 Andrej Karpathy 的开源 GPT 实现。</p>
+
+<h2 id="background">背景</h2>
+
+<p>缩放点积注意力是多头注意力的基本构建块，如《<a href="https://arxiv.org/abs/1706.03762">“注意力即所有”</a>》中介绍的那样，并在LLM和生成式 AI 模型中有广泛的应用。</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/PyTorch_Better-Transformer_Figure-1.png" alt="The Transformer model architecture" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 1：</strong> 基于 <a href="https://arxiv.org/abs/1706.03762">“Attention is All You Need”</a> 的 Transformer 模型架构。利用新的 PyTorch SDPA 算子，通过线性层进行内投影、SDPA 算子和外投影，多头注意力被高效实现。</em></small></p>
+
+<p>使用新的缩放点积注意力算子，多头注意力可以仅通过 3 个步骤实现：使用线性层进行内投影、SDPA 和线性层进行外投影。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># In Projection
+# variable descriptions:
+# q,k,v = Query, Key, Value tensors
+# bsz = batch size
+# num_heads = Numner of heads for Multihead Attention
+# tgt_len = Target length
+# src_len = Source Length
+# head_dim: Head Dimension
+    q, k, v = _in_projection(query, key, value, q_proj_weight, k_proj_weight, v_proj_weight, b_q, b_k, b_v)
+    q = q.view(bsz, num_heads, tgt_len, head_dim)
+    k = k.view(bsz, num_heads, src_len, head_dim)
+    v = v.view(bsz, num_heads, src_len, head_dim)
+
+    # Scaled Dot Product Attention
+    attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)
+
+    # Out Projection
+    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+    attn_output = linear(attn_output, out_proj_weight, out_proj_bias)
+    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+</code></pre></div></div>
+
+<p>PyTorch 2.支持针对特定用例和特定要求的多个不同内核。内核选择器会为特定的输入参数组合选择最佳内核。如果无法识别针对特定输入参数组合的优化“自定义内核”，内核选择器将选择一个可以处理所有输入组合的通用内核。</p>
+
+<p>虽然未来的版本可能会扩展此操作符集，但 PyTorch 2.0 的发布版包含 3 种 SDPA 操作符的实现：</p>
+
+<ol>
+  <li>实现 SDPA 数学方程的通用内核，其函数为 <code class="language-plaintext highlighter-rouge">sdpa_math()</code></li>
+  <li>基于论文“<a href="https://arxiv.org/abs/2205.14135">Flash Attention</a>”的优化内核，支持在计算架构 SM80（A100）上使用 16 位浮点数据类型评估 SDPA。</li>
+  <li>基于论文“<a href="https://arxiv.org/abs/2112.0568">Self-Attention Does Not Need O(n^2) Memory</a>”并实现于 <a href="https://github.com/facebookresearch/xformers">xFormer</a> 的优化内核，支持在更广泛的架构（SM40 及以后）上使用 32 位和 16 位浮点数据类型。本博客将此内核称为 <code class="language-plaintext highlighter-rouge">mem_efficient</code> 内核。</li>
+</ol>
+
+<p>注意，上述列出的优化内核（两个和三个）都支持关键填充掩码，并限制支持的注意力掩码为因果注意力。今天加速 PyTorch 2.0 Transformer 仅支持使用 <code class="language-plaintext highlighter-rouge">is_causal</code> 布尔值指定的因果掩码。当指定掩码时，将选择通用内核，因为分析提供的掩码内容以确定它是否是因果掩码的成本太高。有关每个内核的约束条件的更多解释，请参阅 <a href="https://pytorch.org/blog/accelerated-pytorch-2/"> 加速 PT2 Transformer 博客 </a>。</p>
+
+<h2 id="enabling-accelerated-transformers-with-nanogpt">使用 nanoGPT 启用加速 Transformer</h2>
+
+<p>SDPA 运算符是 GPT 模型的关键组件，我们确定了开源 nanoGPT 模型作为展示 PyTorch 2.0 加速 Transformer 实现简便性和益处的优秀候选者。以下展示了在 nanoGPT 上启用加速 Transformer 的确切过程。</p>
+
+<p>这个过程主要围绕用新添加的 F.scaled_dot_product_attention 操作符替换现有的 SDPA 实现。这个过程可以轻松地适应，以便在许多其他地方启用该操作符。用户可以选择调用 F.multi_head_attention_forward() 或直接使用 nn.MultiHeadAttention 模块。以下代码片段改编自 Karpathy 的 nanoGPT 仓库。</p>
+
+<h3 id="step-1-identify-the-existing-sdpa-implementation">第一步：识别现有的 SDPA 实现</h3>
+
+<p>在 nanoGPT 的情况下，SDPA 实现在模型的 <a href="https://github.com/karpathy/nanoGPT/blob/master/model.py#L37"> 因果自注意力 </a> 类中。以下是本文中使用的原始实现。</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/causal_attention_step_1.png" alt="The original implementation at time of writing" style="max-height:800px; width:100%"></p>
+
+<h3 id="step-2-replace-with-torchs-scaled_dot_product_attention">第二步：替换为 Torch 的 <em> 缩放点积注意力</em></h3>
+
+<p>在这一点上，我们可以注意以下内容：</p>
+
+<ul>
+  <li>第 36 至 42 行定义了 SDPA 的数学实现，这是我们正在替换的部分</li>
+  <li>由于我们使用了 scaled_dot_product_attention 的 <code class="language-plaintext highlighter-rouge">is_causal</code> 标志，第 39 行应用的掩码现在不再相关。</li>
+  <li>第 41 行使用的 dropout 层现在也变得不再必要。</li>
+</ul>
+
+<p>将 SDPA 实现替换为 torch 的 scaled_dot_product_attention 并移除现在冗余的代码，得到以下实现。</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/causal_attention_step_2.png" alt="Swapping out the SDPA implementation for torch’s scaled_dot_product_attention and removing the now redundant code yields the following implementation." style="max-height:800px; width:100%"></p>
+
+<p>或者，可以将原始掩码传递到 <code class="language-plaintext highlighter-rouge">attn_mask</code> 字段，但由于提到的内核约束，这将限制实现仅支持通用的 <code class="language-plaintext highlighter-rouge">sdpa_math</code> 内核。</p>
+
+<h3 id="step-3-bonus-faster-matmuls-with-padding">第 3 步（加分项）：使用填充加快 matmuls</h3>
+
+<p>除了 SDPA 带来的性能提升外，我们的分析还带来了一些额外的收获。用 Andrej 的话说：“迄今为止对 nanoGPT 最显著的优化（约 25%的速度提升）就是简单地增加词汇量从 50257 到 50304（64 的最近倍数）。”</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/tweet.png" alt="Tweet by Andrej Karpathy" style="max-height:800px; width:100%; max-width:600px"></p>
+
+<p>词汇量大小决定了 GPT 输出层中 matmuls 的维度，这些维度非常大，以至于它们占据了整个训练循环的大部分时间！我们发现它们的性能远低于 A100 GPU 可实现的峰值吞吐量，并从 <a href="https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html">NVIDIA 的 matmul 文档</a>中猜测 64 元素对齐将产生更好的结果。确实，对这些 matmuls 进行填充几乎实现了 3 倍的速度提升！其根本原因是未对齐的内存访问会显著降低效率。更深入的分析可以在<a href="https://twitter.com/cHHillee/status/1630274804795445248">这个 Twitter 帖子</a>中找到。</p>
+
+<p>通过这次优化，我们进一步将训练时间从大约 113 毫秒（使用 flash attention）降低到每批约 87 毫秒。</p>
+
+<h2 id="results">结果</h2>
+
+<p>下图展示了使用 Pytorch 自定义内核获得的效果。以下是具体的数字：</p>
+
+<ul>
+  <li>基准（nanoGPT 实现）：约 143ms</li>
+  <li>sdpa_math (通用): ~134ms (快 6.71%)</li>
+  <li><code class="language-plaintext highlighter-rouge">内存高效 </code> 内核: ~119ms (快 20.16%)</li>
+  <li><code class="language-plaintext highlighter-rouge">flash_attention</code> 内核: ~113ms (快 26.54%)</li>
+  <li>flash_attention + 填充过的词汇表: ~87ms (快 64.37%)</li>
+</ul>
+
+<p>所有代码均在 8 x NVIDIA Corporation A100 服务器上运行，该服务器配备 80 GB HBM [A100 SXM4 80GB]，并且为了本次实验，dropout 被设置为 0。</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/PyTorch_Better-Transformer_Chart-2.png" alt="Using scaled dot product attention with custom kernels and torch.compile delivers significant speedups for training large language models" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 2：</strong> 使用缩放点积注意力机制和自定义内核以及 torch.compile 可以为训练大型语言模型（如此处所示的 <a href="https://github.com/karpathy/nanoGPT">nanoGPT</a>）带来显著的加速。</em></small></p>
+
+<h2 id="enhancing-numerical-model-stability">提高数值模型稳定性</h2>
+
+<p>除了速度更快之外，PyTorch 的实现通过避免许多执行场景中的精度损失，提供了更高的数值稳定性。有关详细信息，请参阅<a href="https://github.com/bigscience-workshop/Megatron-DeepSpeed/pull/118">此处 </a>，但简而言之，PyTorch 实现是在乘法之前对 Query 和 Key 矩阵进行缩放，这被认为更加稳定并避免了精度损失。由于 SDPA 的合并自定义内核架构，这种缩放不会在计算注意力结果时引入额外的开销。相比之下，来自单个计算组件的实现将需要额外的预缩放，这将产生额外的成本。有关更多解释，请参阅附录 A。</p>
+
+<h3 id="improved-memory-consumption">改进的内存消耗</h3>
+
+<p>使用 torch SDPA 内核的另一个显著优势是减少内存占用，这允许使用更大的批量大小。以下图表比较了经过一小时训练后，闪存注意力和因果注意力基线实现的最佳验证损失。如图所示，基线因果注意力实现（在 8 x NVIDIA Corporation A100 服务器上，80 GB HBM）达到的最大批量大小为 24，远低于闪存注意力实现达到的 39。</p>
+
+<p><img src="/assets/images/2023-04-18-accelerating-large-language-models/chart.png" alt="Using Flash Attention enables the usage of larger batch sizes" style="max-height:800px; width:100%"></p>
+
+<p><small style="line-height: 1.1"><em><strong>图 3：</strong> 使用闪存注意力可以启用更大的批量大小，使用户在经过一小时训练后达到更低的验证损失（越小越好）。</em></small></p>
+
+<h2 id="conclusion">结论</h2>
+
+<p>加速 PyTorch 2 Transformer 旨在使最先进的 Transformer 模型的训练和生产部署变得经济实惠，并与 PyTorch 2.0 模型 JIT 编译集成。新引入的 PyTorch SDPA 算子为训练 Transformer 模型提供了改进的性能，尤其是在昂贵的 Large Language Model 训练中特别有价值。在这篇文章中，我们展示了在 nanoGPT 模型上进行的多个优化，包括：</p>
+
+<ul>
+  <li>与基准模型相比，在保持批次大小不变的情况下，训练速度提高了26%以上</li>
+  <li>通过填充词汇表实现的额外加速，使总优化效果达到基准的约64%</li>
+  <li>额外的数值稳定性</li>
+</ul>
+
+<h2 id="appendix-a-analyzing-attention-numeric-stability">附录 A：分析注意力数值稳定性</h2>
+
+<p>在本节中，我们提供了对之前提到的通过预缩放 SDPA 输入向量获得的增强数值稳定性的更深入解释。以下是对 nanoGPT 中 SDPA 数学实现的简化版本。需要注意的是，查询在进行矩阵乘法时没有进行缩放。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># nanoGPT implementation of SDPA
+# notice q (our query vector) is not scaled !
+att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_nanogpt = att @ v # (B, nh, T, T) x (B, nh, T, hs) -&gt; (B, nh, T, hs)
+</code></pre></div></div>
+
+<p>以下是在 torch 的 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention</code> 中的等效数学实现。</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># PyTorch implementation of SDPA
+embed_size = q.size(-1)
+scaling_factor = math.sqrt(math.sqrt(embed_size))
+q = q / scaling_factor 	# notice q _is_ scaled here !
+
+# same as above, but with scaling factor
+att = q @ (k.transpose(-2, -1) / scaling_factor)
+att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+att = F.softmax(att0, dim=-1)
+
+# Dropout is set to 0, so we can safely ignore this line in the implementation# att = self.attn_dropout(att) 
+
+y_scale_before = att @ v
+</code></pre></div></div>
+
+<p>从数学上讲，两种方法应该是等效的，然而我们的实验表明，在实践中，我们得到了两种方法不同的结果。</p>
+
+<p>使用上述方法，我们验证了 <code class="language-plaintext highlighter-rouge">y_scale_before</code> 与使用 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention </code> 方法得到的预期输出相匹配，而 <code class="language-plaintext highlighter-rouge">y_nanogpt</code> 则不匹配。</p>
+
+<p>使用了 <code class="language-plaintext highlighter-rouge">torch.allclose</code> 方法来测试等价性。具体来说，我们展示了：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>y_sdpa = torch.nn.functional._scaled_dot_product_attention(
+	q,
+	k,
+	v,
+	attn_mask=self.bias[:,:,:T,:T] != 0,
+	dropout_p=0.0,
+	need_attn_weights=False,
+	is_causal=False,
+)
+
+torch.allclose(y_sdpa, y_nanogpt) # False, indicating fp issues
+torch.allclose(y_sdpa, y_scale_before) # True, as expected
+</code></pre></div></div>
+
+<h2 id="appendix-b-reproducing-experiment-results">附录 B：重现实验结果</h2>
+
+<p>寻求重现这些结果的研究人员应从 Andrej 的 nanoGPT 仓库中的以下提交开始 - <strong><span style="text-decoration:underline;">b3c17c6a363357623f223aaa4a8b1e89d0a465</span></strong>。这个提交被用作测量每批速度提升的基线。对于包含填充词汇优化（这带来了最大的批速度提升）的结果，请使用以下提交 - <strong><span style="text-decoration:underline;">77e7e04c2657846ddf30c1ca2dd9f7cbb93ddeab</span></strong>。从任一检查点，使用 <a href="https://pytorch.org/docs/stable/backends.html">torch.backends</a> API 选择实验用的内核变得非常简单。</p>
+
+<p>期望的内核可以通过上下文管理器进行选择：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>with torch.backends.cuda.sdp_kernel (
+    enable_math = False,
+    enable_flash = False,
+    enable_mem_efficient = True
+):
+    train(model)
+</code></pre></div></div>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新加入 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

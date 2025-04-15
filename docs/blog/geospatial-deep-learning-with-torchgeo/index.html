@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Geospatial deep learning with TorchGeo | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="TorchGeo is a PyTorch domain library providing datasets, samplers, transforms, and pre-trained models specific to geospatial data.
+
+
+  
+
+
+
+  https://github.com/microsoft/torchgeo
+
+
+For decades, Earth observation satellites, aircraft, and more recently UAV platforms have been collecting increasing amounts of imagery of the Earth’s surface. With information about seasonal and long-term trends, remotely sensed imagery can be invaluable for solving some of the greatest challenges to humanity, including climate change adaptation, natural disaster monitoring, water resource management, and food security for a growing global population. From a computer vision perspective, this includes applications like land cover mapping (semantic segmentation), deforestation and flood monitoring (change detection), glacial flow (pixel tracking), hurricane tracking and intensity estimation (regression), and building and road detection (object detection, instance segmentation). By leveraging recent advancements in deep learning architectures, cheaper and more powerful GPUs, and petabytes of freely available satellite imagery datasets, we can come closer to solving these important problems.
+
+
+  
+
+
+
+National Oceanic and Atmospheric Administration satellite image of Hurricane Katrina, taken on August 28, 2005 (source). Geospatial machine learning libraries like TorchGeo can be used to detect, track, and predict future trajectories of hurricanes and other natural disasters.
+
+
+The challenges
+
+In traditional computer vision datasets, such as ImageNet, the image files themselves tend to be rather simple and easy to work with. Most images have 3 spectral bands (RGB), are stored in common file formats like PNG or JPEG, and can be easily loaded with popular software libraries like PIL or OpenCV. Each image in these datasets is usually small enough to pass directly into a neural network. Furthermore, most of these datasets contain a finite number of well-curated images that are assumed to be independent and identically distributed, making train-val-test splits straightforward. As a result of this relative homogeneity, the same pre-trained models (e.g., CNNs pretrained on ImageNet) have shown to be effective across a wide range of vision tasks using transfer learning methods. Existing libraries, such as torchvision, handle these simple cases well, and have been used to make large advances in vision tasks over the past decade.
+
+Remote sensing imagery is not so uniform. Instead of simple RGB images, satellites tend to capture images that are multispectral (Landsat 8 has 11 spectral bands) or even hyperspectral (Hyperion has 242 spectral bands). These images capture information at a wider range of wavelengths (400 nm–15 µm), far outside of the visible spectrum. Different satellites also have very different spatial resolutions—GOES has a resolution of 4 km/px, Maxar imagery is 30 cm/px, and drone imagery resolution can be as high as 7 mm/px. These datasets almost always have a temporal component, with satellite revisists that are daily, weekly, or biweekly. Images often have overlap with other images in the dataset, and need to be stitched together based on geographic metadata. These images tend to be very large (e.g., 10K x 10K pixels), so it isn’t possible to pass an entire image through a neural network. This data is distributed in hundreds of different raster and vector file formats like GeoTIFF and ESRI Shapefile, requiring specialty libraries like GDAL to load.
+
+
+  
+
+
+
+From left to right: Mercator, Albers Equal Area, and Interrupted Goode Homolosine projections (source). Geospatial data is associated with one of many different types of reference systems that project the 3D Earth onto a 2D representation. Combining data from different sources often involves re-projecting to a common reference system in order to ensure that all layers are aligned.
+
+
+Although each image is 2D, the Earth itself is 3D. In order to stitch together images, they first need to be projected onto a 2D representation of the Earth, called a coordinate reference system (CRS). Most people are familiar with equal angle representations like Mercator that distort the size of regions (Greenland looks larger than Africa even though Africa is 15x larger), but there are many other CRSs that are commonly used. Each dataset may use a different CRS, and each image within a single dataset may also be in a unique CRS. In order to use data from multiple layers, they must all share a common CRS, otherwise the data won’t be properly aligned. For those who aren’t familiar with remote sensing data, this can be a daunting task.
+
+
+  
+
+
+
+Even if you correctly georeference images during indexing, if you don't project them to a common CRS, you'll end up with rotated images with nodata values around them, and the images won't be pixel-aligned.
+
+
+The solution
+
+At the moment, it can be quite challenging to work with both deep learning models and geospatial data without having expertise in both of these very different fields. To address these challenges, we’ve built TorchGeo, a PyTorch domain library for working with geospatial data. TorchGeo is designed to make it simple:
+
+
+  for machine learning experts to work with geospatial data, and
+  for remote sensing experts to explore machine learning solutions.
+
+
+TorchGeo is not just a research project, but a production-quality library that uses continuous integration to test every commit with a range of Python versions on a range of platforms (Linux, macOS, Windows). It can be easily installed with any of your favorite package managers, including pip, conda, and spack:
+
+$ pip install torchgeo
+
+
+TorchGeo is designed to have the same API as other PyTorch domain libraries like torchvision, torchtext, and torchaudio. If you already use torchvision in your workflow for computer vision datasets, you can switch to TorchGeo by changing only a few lines of code. All TorchGeo datasets and samplers are compatible with the PyTorch DataLoader class, meaning that you can take advantage of wrapper libraries like PyTorch Lightning for distributed training. In the following sections, we’ll explore possible use cases for TorchGeo to show how simple it is to use.
+
+Geospatial datasets and samplers
+
+
+  
+
+
+
+Example application in which we combine A) a scene from Landsat 8 and B) Cropland Data Layer labels, even though these files are in different EPSG projections. We want to sample patches C) and D) from these datasets using a geospatial bounding box as an index.
+
+
+Many remote sensing applications involve working with geospatial datasets —datasets with geographic metadata. In TorchGeo, we define a GeoDataset class to represent these kinds of datasets. Instead of being indexed by an integer, each GeoDataset is indexed by a spatiotemporal bounding box, meaning that two or more datasets covering a different geographic extent can be intelligently combined.
+
+In this example, we show how easy it is to work with geospatial data and to sample small image patches from a combination of Landsat and Cropland Data Layer (CDL) data using TorchGeo. First, we assume that the user has Landsat 7 and 8 imagery downloaded. Since Landsat 8 has more spectral bands than Landsat 7, we’ll only use the bands that both satellites have in common. We’ll create a single dataset including all images from both Landsat 7 and 8 data by taking the union between these two datasets.
+
+from torch.utils.data import DataLoader
+from torchgeo.datasets import CDL, Landsat7, Landsat8, stack_samples
+from torchgeo.samplers import RandomGeoSampler
+
+landsat7 = Landsat7(root=" ...")="" landsat8="Landsat8(root=&quot;...&quot;," bands="Landsat8.all_bands[1:-2])" landsat="landsat7" |="" next,="" we="" take="" the="" intersection="" between="" this="" dataset="" and="" cdl="" dataset.="" want="" to="" instead="" of="" union="" ensure="" that="" only="" sample="" from="" regions="" where="" have="" both="" data.="" note="" can="" automatically="" download="" checksum="" also="" each="" these="" datasets="" may="" contain="" files="" in="" different="" crss="" or="" resolutions,="" but="" torchgeo="" ensures="" a="" matching="" crs="" resolution="" is="" used.="" &amp;="" now="" be="" used="" with="" pytorch="" data="" loader.="" unlike="" benchmark="" datasets,="" geospatial="" often="" include="" very="" large="" images.="" for="" example,="" consists="" single="" image="" covering="" entire="" contiguous="" united="" states.="" order="" using="" coordinates,="" defines="" number="" samplers.="" we’ll="" use="" random="" sampler="" returns="" 256="" x="" pixel="" images="" 10,000="" samples="" per="" epoch.="" custom="" collation="" function="" combine="" dictionary="" into="" mini-batch="" samples.="" size="256," length="10000)" dataloader="DataLoader(dataset," batch_size="128," collate_fn="stack_samples)" loader="" your="" normal="" training="" evaluation="" pipeline.="" batch="" dataloader:="" mask="batch[&quot;mask&quot;]" #="" train="" model,="" make="" predictions="" pre-trained="" model="" many="" applications="" involve="" intelligently="" composing="" based="" on="" metadata="" like="" this.="" users="" to:="" multiple="" sources="" treat="" them="" as="" equivalent="" (e.g.,="" 7="" 8)="" disparate="" locations="" chesapeake="" ny="" pa)="" combinations="" require="" all="" queries="" are="" present="" at="" least="" one="" dataset,="" created="" uniondataset.="" similarly,="" target="" labels="" simultaneously="" cdl)="" multimodal="" learning="" fusion="" sentinel)="" an="" intersectiondataset.="" composes="" you="" when="" (&amp;)="" (|)="" operators.="" multispectral="" transforms="" deep="" learning,="" it’s="" common="" augment="" transform="" so="" models="" robust="" variations="" input="" space.="" such="" seasonal="" changes="" warping="" effects,="" well="" processing="" capture="" issues="" cloud="" cover="" atmospheric="" distortion.="" utilizes="" augmentations="" kornia="" library,="" which="" supports="" gpu="" acceleration="" imagery="" more="" than="" 3="" channels.="" traditional="" analyses="" compute="" visualize="" spectral="" indices="" bands.="" designed="" highlight="" areas="" interest="" relevant="" some="" application,="" vegetation="" health,="" man-made="" change="" increasing="" urbanization,="" snow="" cover.="" numerous="" transforms,="" append="" additional="" tensor.="" below,="" show="" simple="" example="" normalized="" difference="" index="" (ndvi)="" sentinel-2="" image.="" ndvi="" measures="" presence="" health="" computed="" red="" near-infrared="" (nir)="" operate="" dictionaries="" returned="" resulting="" channel="" dimension.="" first,="" instantiate="" load="" then,="" plot="" true="" color="" (rgb)="" representation="" see="" region="" looking="" at.="" import="" matplotlib.pyplot="" plt="" torchgeo.datasets="" sentinel2="" torchgeo.transforms="" appendndvi="" fig="dataset.plot(sample)" plt.show()="" transform,="" appending="" new="" end="" uses="" 0="" its="" band="" nir="" band.="" data,="" normalize="" values="" range="" -1="" 1,="" 1="" plotting.="" index_nir="3)" sample["image"][-1]="(sample[&quot;image&quot;][-1]" +="" 1)="" 2="" plt.imshow(sample["image"][-1],="" cmap="RdYlGn_r" )="" (left)="" (right)="" texas="" hill="" region,="" taken="" november="" 16,="" 2018="" by="" satellite.="" image,="" indicates="" water="" bodies,="" yellow="" barren="" soil,="" light="" green="" unhealthy="" vegetation,="" dark="" healthy="" vegetation.="" driving="" factors="" behind="" progress="" computer="" vision="" existence="" standardized="" imagenet="" mnist.="" researchers="" directly="" compare="" performance="" procedures="" determine="" perform="" best.="" remote="" sensing="" domain,="" there="" due="" aforementioned="" difficulties="" working="" lack="" existing="" libraries="" loading="" opt="" their="" own="" datasets.="" goals="" provide="" easy-to-use="" loaders="" includes="" —datasets="" labels.="" tasks="" classification,="" regression,="" semantic="" segmentation,="" object="" detection,="" instance="" more.="" if="" you’ve="" torchvision="" before,="" types="" should="" familiar.="" create="" northwestern="" polytechnical="" university="" (nwpu)="" very-high-resolution="" ten-class="" (vhr-10)="" detection="" downloaded,="" checksummed,="" extracted,="" just="" torchvision.="" torch.utils.data="" vhr10="" shuffle="True," num_workers="4)" label="batch[&quot;label&quot;]" compatible="" loaders,="" making="" easy="" integrate="" workflows.="" similar="" keys="" r-cnn="" trained="" nwpu="" vhr-10="" predicts="" sharp="" bounding="" boxes="" masks="" objects="" high="" confidence="" scores.="" reproducibility="" lightning="" another="" key="" goal="" reproducibility.="" no="" predefined="" train-val-test="" split,="" split="" has="" class="" imbalance="" geographic="" distribution.="" result,="" metrics="" reported="" literature="" either="" can’t="" reproduced,="" aren’t="" indicative="" how="" would="" work="" location.="" facilitate="" direct="" comparisons="" results="" published="" further="" reduce="" boilerplate="" code="" needed="" run="" experiments="" torchgeo,="" datamodules="" well-defined="" splits="" trainers="" various="" segmentation.="" incorporate="" preprocessing="" (with="" pre-calculated="" statistics),="" let="" easily="" experiment="" hyperparameters="" related="" itself="" (as="" opposed="" modeling="" process).="" segmentation="" inria="" aerial="" labeling="" few="" imports="" four="" lines="" code.="" pytorch_lightning="" trainer="" torchgeo.datamodules="" inriaaerialimagelabelingdatamodule="" torchgeo.trainers="" semanticsegmentationtask="" datamodule="InriaAerialImageLabelingDataModule(root_dir=&quot;...&quot;," task="SemanticSegmentationTask(segmentation_model=&quot;unet&quot;," encoder_weights="imagenet" ,="" learning_rate="0.1)" default_root_dir="..." trainer.fit(model="task," building="" segmentations="" produced="" u-net="" reproducing="" code,="" comparison="" techniques="" easy.="" our="" preprint="" set="" approaches="" several="" torchgeo.="" find="" resnet-50="" achieve="" state-of-the-art="" so2sat="" baseline="" important="" evaluating="" contribution="" choices="" tackling="" problems="" remotely="" sensed="" future="" contributing="" still="" lot="" remaining="" done="" possible,="" especially="" without="" prior="" experience.="" ways="" plan="" expanding="" tutorials="" subjects="" “writing="" dataset”="" “transfer="" learning”,="" “land="" mapping”="" “object="" detection”.="" project="" pre-training="" models.="" most="" small="" labeled="" could="" benefit="" transfer="" approaches.="" first="" library="" imagery.="" modalities="" (optical,="" sar,="" multispectral)="" specific="" platforms="" (landsat,="" sentinel,="" modis)="" showing="" amounts="" self-supervised="" promising="" method="" satellite="" petabytes="" imagery,="" accurately="" much="" harder="" come="" by.="" methods="" will="" allow="" us="" raw="" needing="" aside="" larger="" projects,="" we’re="" always="" add="" augmentation="" sampling="" strategies.="" you’re="" python="" savvy="" interested="" love="" contributions!="" open="" source="" under="" mit="" license,="" it="" almost="" any="" project.="" external="" links:="" homepage:="" https:="" github.com="" microsoft="" documentation:="" torchgeo.readthedocs.io="" pypi:="" pypi.org="" paper:="" arxiv.org="" abs="" 2111.08872="" give="" star="" github!="" work,="" please="" cite="" paper.="" acknowledgments="" thank="" contributors="" efforts="" creating="" ai="" good="" program="" support,="" team="" guidance.="" research="" part="" blue="" waters="" sustained-petascale="" computing="" project,="" supported="" national="" science="" foundation="" (awards="" oci-0725070="" aci-1238993),="" state="" illinois,="" december,="" 2019,="" geospatial-intelligence="" agency.="" joint="" effort="" illinois="" urbana-champaign="" center="" supercomputing="" applications.="" was="" nsf="" grants="" iis-1908104,="" oac-1934634,="" dbi-2021898.="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/torchgeo-hurricane.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/torchgeo-hurricane.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Geospatial deep learning with TorchGeo">
+<meta property="og:description" content="TorchGeo is a PyTorch domain library providing datasets, samplers, transforms, and pre-trained models specific to geospatial data.
+
+
+  
+
+
+
+  https://github.com/microsoft/torchgeo
+
+
+For decades, Earth observation satellites, aircraft, and more recently UAV platforms have been collecting increasing amounts of imagery of the Earth’s surface. With information about seasonal and long-term trends, remotely sensed imagery can be invaluable for solving some of the greatest challenges to humanity, including climate change adaptation, natural disaster monitoring, water resource management, and food security for a growing global population. From a computer vision perspective, this includes applications like land cover mapping (semantic segmentation), deforestation and flood monitoring (change detection), glacial flow (pixel tracking), hurricane tracking and intensity estimation (regression), and building and road detection (object detection, instance segmentation). By leveraging recent advancements in deep learning architectures, cheaper and more powerful GPUs, and petabytes of freely available satellite imagery datasets, we can come closer to solving these important problems.
+
+
+  
+
+
+
+National Oceanic and Atmospheric Administration satellite image of Hurricane Katrina, taken on August 28, 2005 (source). Geospatial machine learning libraries like TorchGeo can be used to detect, track, and predict future trajectories of hurricanes and other natural disasters.
+
+
+The challenges
+
+In traditional computer vision datasets, such as ImageNet, the image files themselves tend to be rather simple and easy to work with. Most images have 3 spectral bands (RGB), are stored in common file formats like PNG or JPEG, and can be easily loaded with popular software libraries like PIL or OpenCV. Each image in these datasets is usually small enough to pass directly into a neural network. Furthermore, most of these datasets contain a finite number of well-curated images that are assumed to be independent and identically distributed, making train-val-test splits straightforward. As a result of this relative homogeneity, the same pre-trained models (e.g., CNNs pretrained on ImageNet) have shown to be effective across a wide range of vision tasks using transfer learning methods. Existing libraries, such as torchvision, handle these simple cases well, and have been used to make large advances in vision tasks over the past decade.
+
+Remote sensing imagery is not so uniform. Instead of simple RGB images, satellites tend to capture images that are multispectral (Landsat 8 has 11 spectral bands) or even hyperspectral (Hyperion has 242 spectral bands). These images capture information at a wider range of wavelengths (400 nm–15 µm), far outside of the visible spectrum. Different satellites also have very different spatial resolutions—GOES has a resolution of 4 km/px, Maxar imagery is 30 cm/px, and drone imagery resolution can be as high as 7 mm/px. These datasets almost always have a temporal component, with satellite revisists that are daily, weekly, or biweekly. Images often have overlap with other images in the dataset, and need to be stitched together based on geographic metadata. These images tend to be very large (e.g., 10K x 10K pixels), so it isn’t possible to pass an entire image through a neural network. This data is distributed in hundreds of different raster and vector file formats like GeoTIFF and ESRI Shapefile, requiring specialty libraries like GDAL to load.
+
+
+  
+
+
+
+From left to right: Mercator, Albers Equal Area, and Interrupted Goode Homolosine projections (source). Geospatial data is associated with one of many different types of reference systems that project the 3D Earth onto a 2D representation. Combining data from different sources often involves re-projecting to a common reference system in order to ensure that all layers are aligned.
+
+
+Although each image is 2D, the Earth itself is 3D. In order to stitch together images, they first need to be projected onto a 2D representation of the Earth, called a coordinate reference system (CRS). Most people are familiar with equal angle representations like Mercator that distort the size of regions (Greenland looks larger than Africa even though Africa is 15x larger), but there are many other CRSs that are commonly used. Each dataset may use a different CRS, and each image within a single dataset may also be in a unique CRS. In order to use data from multiple layers, they must all share a common CRS, otherwise the data won’t be properly aligned. For those who aren’t familiar with remote sensing data, this can be a daunting task.
+
+
+  
+
+
+
+Even if you correctly georeference images during indexing, if you don't project them to a common CRS, you'll end up with rotated images with nodata values around them, and the images won't be pixel-aligned.
+
+
+The solution
+
+At the moment, it can be quite challenging to work with both deep learning models and geospatial data without having expertise in both of these very different fields. To address these challenges, we’ve built TorchGeo, a PyTorch domain library for working with geospatial data. TorchGeo is designed to make it simple:
+
+
+  for machine learning experts to work with geospatial data, and
+  for remote sensing experts to explore machine learning solutions.
+
+
+TorchGeo is not just a research project, but a production-quality library that uses continuous integration to test every commit with a range of Python versions on a range of platforms (Linux, macOS, Windows). It can be easily installed with any of your favorite package managers, including pip, conda, and spack:
+
+$ pip install torchgeo
+
+
+TorchGeo is designed to have the same API as other PyTorch domain libraries like torchvision, torchtext, and torchaudio. If you already use torchvision in your workflow for computer vision datasets, you can switch to TorchGeo by changing only a few lines of code. All TorchGeo datasets and samplers are compatible with the PyTorch DataLoader class, meaning that you can take advantage of wrapper libraries like PyTorch Lightning for distributed training. In the following sections, we’ll explore possible use cases for TorchGeo to show how simple it is to use.
+
+Geospatial datasets and samplers
+
+
+  
+
+
+
+Example application in which we combine A) a scene from Landsat 8 and B) Cropland Data Layer labels, even though these files are in different EPSG projections. We want to sample patches C) and D) from these datasets using a geospatial bounding box as an index.
+
+
+Many remote sensing applications involve working with geospatial datasets —datasets with geographic metadata. In TorchGeo, we define a GeoDataset class to represent these kinds of datasets. Instead of being indexed by an integer, each GeoDataset is indexed by a spatiotemporal bounding box, meaning that two or more datasets covering a different geographic extent can be intelligently combined.
+
+In this example, we show how easy it is to work with geospatial data and to sample small image patches from a combination of Landsat and Cropland Data Layer (CDL) data using TorchGeo. First, we assume that the user has Landsat 7 and 8 imagery downloaded. Since Landsat 8 has more spectral bands than Landsat 7, we’ll only use the bands that both satellites have in common. We’ll create a single dataset including all images from both Landsat 7 and 8 data by taking the union between these two datasets.
+
+from torch.utils.data import DataLoader
+from torchgeo.datasets import CDL, Landsat7, Landsat8, stack_samples
+from torchgeo.samplers import RandomGeoSampler
+
+landsat7 = Landsat7(root=" ...")="" landsat8="Landsat8(root=&quot;...&quot;," bands="Landsat8.all_bands[1:-2])" landsat="landsat7" |="" next,="" we="" take="" the="" intersection="" between="" this="" dataset="" and="" cdl="" dataset.="" want="" to="" instead="" of="" union="" ensure="" that="" only="" sample="" from="" regions="" where="" have="" both="" data.="" note="" can="" automatically="" download="" checksum="" also="" each="" these="" datasets="" may="" contain="" files="" in="" different="" crss="" or="" resolutions,="" but="" torchgeo="" ensures="" a="" matching="" crs="" resolution="" is="" used.="" &amp;="" now="" be="" used="" with="" pytorch="" data="" loader.="" unlike="" benchmark="" datasets,="" geospatial="" often="" include="" very="" large="" images.="" for="" example,="" consists="" single="" image="" covering="" entire="" contiguous="" united="" states.="" order="" using="" coordinates,="" defines="" number="" samplers.="" we’ll="" use="" random="" sampler="" returns="" 256="" x="" pixel="" images="" 10,000="" samples="" per="" epoch.="" custom="" collation="" function="" combine="" dictionary="" into="" mini-batch="" samples.="" size="256," length="10000)" dataloader="DataLoader(dataset," batch_size="128," collate_fn="stack_samples)" loader="" your="" normal="" training="" evaluation="" pipeline.="" batch="" dataloader:="" mask="batch[&quot;mask&quot;]" #="" train="" model,="" make="" predictions="" pre-trained="" model="" many="" applications="" involve="" intelligently="" composing="" based="" on="" metadata="" like="" this.="" users="" to:="" multiple="" sources="" treat="" them="" as="" equivalent="" (e.g.,="" 7="" 8)="" disparate="" locations="" chesapeake="" ny="" pa)="" combinations="" require="" all="" queries="" are="" present="" at="" least="" one="" dataset,="" created="" uniondataset.="" similarly,="" target="" labels="" simultaneously="" cdl)="" multimodal="" learning="" fusion="" sentinel)="" an="" intersectiondataset.="" composes="" you="" when="" (&amp;)="" (|)="" operators.="" multispectral="" transforms="" deep="" learning,="" it’s="" common="" augment="" transform="" so="" models="" robust="" variations="" input="" space.="" such="" seasonal="" changes="" warping="" effects,="" well="" processing="" capture="" issues="" cloud="" cover="" atmospheric="" distortion.="" utilizes="" augmentations="" kornia="" library,="" which="" supports="" gpu="" acceleration="" imagery="" more="" than="" 3="" channels.="" traditional="" analyses="" compute="" visualize="" spectral="" indices="" bands.="" designed="" highlight="" areas="" interest="" relevant="" some="" application,="" vegetation="" health,="" man-made="" change="" increasing="" urbanization,="" snow="" cover.="" numerous="" transforms,="" append="" additional="" tensor.="" below,="" show="" simple="" example="" normalized="" difference="" index="" (ndvi)="" sentinel-2="" image.="" ndvi="" measures="" presence="" health="" computed="" red="" near-infrared="" (nir)="" operate="" dictionaries="" returned="" resulting="" channel="" dimension.="" first,="" instantiate="" load="" then,="" plot="" true="" color="" (rgb)="" representation="" see="" region="" looking="" at.="" import="" matplotlib.pyplot="" plt="" torchgeo.datasets="" sentinel2="" torchgeo.transforms="" appendndvi="" fig="dataset.plot(sample)" plt.show()="" transform,="" appending="" new="" end="" uses="" 0="" its="" band="" nir="" band.="" data,="" normalize="" values="" range="" -1="" 1,="" 1="" plotting.="" index_nir="3)" sample["image"][-1]="(sample[&quot;image&quot;][-1]" +="" 1)="" 2="" plt.imshow(sample["image"][-1],="" cmap="RdYlGn_r" )="" (left)="" (right)="" texas="" hill="" region,="" taken="" november="" 16,="" 2018="" by="" satellite.="" image,="" indicates="" water="" bodies,="" yellow="" barren="" soil,="" light="" green="" unhealthy="" vegetation,="" dark="" healthy="" vegetation.="" driving="" factors="" behind="" progress="" computer="" vision="" existence="" standardized="" imagenet="" mnist.="" researchers="" directly="" compare="" performance="" procedures="" determine="" perform="" best.="" remote="" sensing="" domain,="" there="" due="" aforementioned="" difficulties="" working="" lack="" existing="" libraries="" loading="" opt="" their="" own="" datasets.="" goals="" provide="" easy-to-use="" loaders="" includes="" —datasets="" labels.="" tasks="" classification,="" regression,="" semantic="" segmentation,="" object="" detection,="" instance="" more.="" if="" you’ve="" torchvision="" before,="" types="" should="" familiar.="" create="" northwestern="" polytechnical="" university="" (nwpu)="" very-high-resolution="" ten-class="" (vhr-10)="" detection="" downloaded,="" checksummed,="" extracted,="" just="" torchvision.="" torch.utils.data="" vhr10="" shuffle="True," num_workers="4)" label="batch[&quot;label&quot;]" compatible="" loaders,="" making="" easy="" integrate="" workflows.="" similar="" keys="" r-cnn="" trained="" nwpu="" vhr-10="" predicts="" sharp="" bounding="" boxes="" masks="" objects="" high="" confidence="" scores.="" reproducibility="" lightning="" another="" key="" goal="" reproducibility.="" no="" predefined="" train-val-test="" split,="" split="" has="" class="" imbalance="" geographic="" distribution.="" result,="" metrics="" reported="" literature="" either="" can’t="" reproduced,="" aren’t="" indicative="" how="" would="" work="" location.="" facilitate="" direct="" comparisons="" results="" published="" further="" reduce="" boilerplate="" code="" needed="" run="" experiments="" torchgeo,="" datamodules="" well-defined="" splits="" trainers="" various="" segmentation.="" incorporate="" preprocessing="" (with="" pre-calculated="" statistics),="" let="" easily="" experiment="" hyperparameters="" related="" itself="" (as="" opposed="" modeling="" process).="" segmentation="" inria="" aerial="" labeling="" few="" imports="" four="" lines="" code.="" pytorch_lightning="" trainer="" torchgeo.datamodules="" inriaaerialimagelabelingdatamodule="" torchgeo.trainers="" semanticsegmentationtask="" datamodule="InriaAerialImageLabelingDataModule(root_dir=&quot;...&quot;," task="SemanticSegmentationTask(segmentation_model=&quot;unet&quot;," encoder_weights="imagenet" ,="" learning_rate="0.1)" default_root_dir="..." trainer.fit(model="task," building="" segmentations="" produced="" u-net="" reproducing="" code,="" comparison="" techniques="" easy.="" our="" preprint="" set="" approaches="" several="" torchgeo.="" find="" resnet-50="" achieve="" state-of-the-art="" so2sat="" baseline="" important="" evaluating="" contribution="" choices="" tackling="" problems="" remotely="" sensed="" future="" contributing="" still="" lot="" remaining="" done="" possible,="" especially="" without="" prior="" experience.="" ways="" plan="" expanding="" tutorials="" subjects="" “writing="" dataset”="" “transfer="" learning”,="" “land="" mapping”="" “object="" detection”.="" project="" pre-training="" models.="" most="" small="" labeled="" could="" benefit="" transfer="" approaches.="" first="" library="" imagery.="" modalities="" (optical,="" sar,="" multispectral)="" specific="" platforms="" (landsat,="" sentinel,="" modis)="" showing="" amounts="" self-supervised="" promising="" method="" satellite="" petabytes="" imagery,="" accurately="" much="" harder="" come="" by.="" methods="" will="" allow="" us="" raw="" needing="" aside="" larger="" projects,="" we’re="" always="" add="" augmentation="" sampling="" strategies.="" you’re="" python="" savvy="" interested="" love="" contributions!="" open="" source="" under="" mit="" license,="" it="" almost="" any="" project.="" external="" links:="" homepage:="" https:="" github.com="" microsoft="" documentation:="" torchgeo.readthedocs.io="" pypi:="" pypi.org="" paper:="" arxiv.org="" abs="" 2111.08872="" give="" star="" github!="" work,="" please="" cite="" paper.="" acknowledgments="" thank="" contributors="" efforts="" creating="" ai="" good="" program="" support,="" team="" guidance.="" research="" part="" blue="" waters="" sustained-petascale="" computing="" project,="" supported="" national="" science="" foundation="" (awards="" oci-0725070="" aci-1238993),="" state="" illinois,="" december,="" 2019,="" geospatial-intelligence="" agency.="" joint="" effort="" illinois="" urbana-champaign="" center="" supercomputing="" applications.="" was="" nsf="" grants="" iis-1908104,="" oac-1934634,="" dbi-2021898.="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Geospatial deep learning with TorchGeo">
+<meta name="twitter:description" content="TorchGeo is a PyTorch domain library providing datasets, samplers, transforms, and pre-trained models specific to geospatial data.
+
+
+  
+
+
+
+  https://github.com/microsoft/torchgeo
+
+
+For decades, Earth observation satellites, aircraft, and more recently UAV platforms have been collecting increasing amounts of imagery of the Earth’s surface. With information about seasonal and long-term trends, remotely sensed imagery can be invaluable for solving some of the greatest challenges to humanity, including climate change adaptation, natural disaster monitoring, water resource management, and food security for a growing global population. From a computer vision perspective, this includes applications like land cover mapping (semantic segmentation), deforestation and flood monitoring (change detection), glacial flow (pixel tracking), hurricane tracking and intensity estimation (regression), and building and road detection (object detection, instance segmentation). By leveraging recent advancements in deep learning architectures, cheaper and more powerful GPUs, and petabytes of freely available satellite imagery datasets, we can come closer to solving these important problems.
+
+
+  
+
+
+
+National Oceanic and Atmospheric Administration satellite image of Hurricane Katrina, taken on August 28, 2005 (source). Geospatial machine learning libraries like TorchGeo can be used to detect, track, and predict future trajectories of hurricanes and other natural disasters.
+
+
+The challenges
+
+In traditional computer vision datasets, such as ImageNet, the image files themselves tend to be rather simple and easy to work with. Most images have 3 spectral bands (RGB), are stored in common file formats like PNG or JPEG, and can be easily loaded with popular software libraries like PIL or OpenCV. Each image in these datasets is usually small enough to pass directly into a neural network. Furthermore, most of these datasets contain a finite number of well-curated images that are assumed to be independent and identically distributed, making train-val-test splits straightforward. As a result of this relative homogeneity, the same pre-trained models (e.g., CNNs pretrained on ImageNet) have shown to be effective across a wide range of vision tasks using transfer learning methods. Existing libraries, such as torchvision, handle these simple cases well, and have been used to make large advances in vision tasks over the past decade.
+
+Remote sensing imagery is not so uniform. Instead of simple RGB images, satellites tend to capture images that are multispectral (Landsat 8 has 11 spectral bands) or even hyperspectral (Hyperion has 242 spectral bands). These images capture information at a wider range of wavelengths (400 nm–15 µm), far outside of the visible spectrum. Different satellites also have very different spatial resolutions—GOES has a resolution of 4 km/px, Maxar imagery is 30 cm/px, and drone imagery resolution can be as high as 7 mm/px. These datasets almost always have a temporal component, with satellite revisists that are daily, weekly, or biweekly. Images often have overlap with other images in the dataset, and need to be stitched together based on geographic metadata. These images tend to be very large (e.g., 10K x 10K pixels), so it isn’t possible to pass an entire image through a neural network. This data is distributed in hundreds of different raster and vector file formats like GeoTIFF and ESRI Shapefile, requiring specialty libraries like GDAL to load.
+
+
+  
+
+
+
+From left to right: Mercator, Albers Equal Area, and Interrupted Goode Homolosine projections (source). Geospatial data is associated with one of many different types of reference systems that project the 3D Earth onto a 2D representation. Combining data from different sources often involves re-projecting to a common reference system in order to ensure that all layers are aligned.
+
+
+Although each image is 2D, the Earth itself is 3D. In order to stitch together images, they first need to be projected onto a 2D representation of the Earth, called a coordinate reference system (CRS). Most people are familiar with equal angle representations like Mercator that distort the size of regions (Greenland looks larger than Africa even though Africa is 15x larger), but there are many other CRSs that are commonly used. Each dataset may use a different CRS, and each image within a single dataset may also be in a unique CRS. In order to use data from multiple layers, they must all share a common CRS, otherwise the data won’t be properly aligned. For those who aren’t familiar with remote sensing data, this can be a daunting task.
+
+
+  
+
+
+
+Even if you correctly georeference images during indexing, if you don't project them to a common CRS, you'll end up with rotated images with nodata values around them, and the images won't be pixel-aligned.
+
+
+The solution
+
+At the moment, it can be quite challenging to work with both deep learning models and geospatial data without having expertise in both of these very different fields. To address these challenges, we’ve built TorchGeo, a PyTorch domain library for working with geospatial data. TorchGeo is designed to make it simple:
+
+
+  for machine learning experts to work with geospatial data, and
+  for remote sensing experts to explore machine learning solutions.
+
+
+TorchGeo is not just a research project, but a production-quality library that uses continuous integration to test every commit with a range of Python versions on a range of platforms (Linux, macOS, Windows). It can be easily installed with any of your favorite package managers, including pip, conda, and spack:
+
+$ pip install torchgeo
+
+
+TorchGeo is designed to have the same API as other PyTorch domain libraries like torchvision, torchtext, and torchaudio. If you already use torchvision in your workflow for computer vision datasets, you can switch to TorchGeo by changing only a few lines of code. All TorchGeo datasets and samplers are compatible with the PyTorch DataLoader class, meaning that you can take advantage of wrapper libraries like PyTorch Lightning for distributed training. In the following sections, we’ll explore possible use cases for TorchGeo to show how simple it is to use.
+
+Geospatial datasets and samplers
+
+
+  
+
+
+
+Example application in which we combine A) a scene from Landsat 8 and B) Cropland Data Layer labels, even though these files are in different EPSG projections. We want to sample patches C) and D) from these datasets using a geospatial bounding box as an index.
+
+
+Many remote sensing applications involve working with geospatial datasets —datasets with geographic metadata. In TorchGeo, we define a GeoDataset class to represent these kinds of datasets. Instead of being indexed by an integer, each GeoDataset is indexed by a spatiotemporal bounding box, meaning that two or more datasets covering a different geographic extent can be intelligently combined.
+
+In this example, we show how easy it is to work with geospatial data and to sample small image patches from a combination of Landsat and Cropland Data Layer (CDL) data using TorchGeo. First, we assume that the user has Landsat 7 and 8 imagery downloaded. Since Landsat 8 has more spectral bands than Landsat 7, we’ll only use the bands that both satellites have in common. We’ll create a single dataset including all images from both Landsat 7 and 8 data by taking the union between these two datasets.
+
+from torch.utils.data import DataLoader
+from torchgeo.datasets import CDL, Landsat7, Landsat8, stack_samples
+from torchgeo.samplers import RandomGeoSampler
+
+landsat7 = Landsat7(root=" ...")="" landsat8="Landsat8(root=&quot;...&quot;," bands="Landsat8.all_bands[1:-2])" landsat="landsat7" |="" next,="" we="" take="" the="" intersection="" between="" this="" dataset="" and="" cdl="" dataset.="" want="" to="" instead="" of="" union="" ensure="" that="" only="" sample="" from="" regions="" where="" have="" both="" data.="" note="" can="" automatically="" download="" checksum="" also="" each="" these="" datasets="" may="" contain="" files="" in="" different="" crss="" or="" resolutions,="" but="" torchgeo="" ensures="" a="" matching="" crs="" resolution="" is="" used.="" &amp;="" now="" be="" used="" with="" pytorch="" data="" loader.="" unlike="" benchmark="" datasets,="" geospatial="" often="" include="" very="" large="" images.="" for="" example,="" consists="" single="" image="" covering="" entire="" contiguous="" united="" states.="" order="" using="" coordinates,="" defines="" number="" samplers.="" we’ll="" use="" random="" sampler="" returns="" 256="" x="" pixel="" images="" 10,000="" samples="" per="" epoch.="" custom="" collation="" function="" combine="" dictionary="" into="" mini-batch="" samples.="" size="256," length="10000)" dataloader="DataLoader(dataset," batch_size="128," collate_fn="stack_samples)" loader="" your="" normal="" training="" evaluation="" pipeline.="" batch="" dataloader:="" mask="batch[&quot;mask&quot;]" #="" train="" model,="" make="" predictions="" pre-trained="" model="" many="" applications="" involve="" intelligently="" composing="" based="" on="" metadata="" like="" this.="" users="" to:="" multiple="" sources="" treat="" them="" as="" equivalent="" (e.g.,="" 7="" 8)="" disparate="" locations="" chesapeake="" ny="" pa)="" combinations="" require="" all="" queries="" are="" present="" at="" least="" one="" dataset,="" created="" uniondataset.="" similarly,="" target="" labels="" simultaneously="" cdl)="" multimodal="" learning="" fusion="" sentinel)="" an="" intersectiondataset.="" composes="" you="" when="" (&amp;)="" (|)="" operators.="" multispectral="" transforms="" deep="" learning,="" it’s="" common="" augment="" transform="" so="" models="" robust="" variations="" input="" space.="" such="" seasonal="" changes="" warping="" effects,="" well="" processing="" capture="" issues="" cloud="" cover="" atmospheric="" distortion.="" utilizes="" augmentations="" kornia="" library,="" which="" supports="" gpu="" acceleration="" imagery="" more="" than="" 3="" channels.="" traditional="" analyses="" compute="" visualize="" spectral="" indices="" bands.="" designed="" highlight="" areas="" interest="" relevant="" some="" application,="" vegetation="" health,="" man-made="" change="" increasing="" urbanization,="" snow="" cover.="" numerous="" transforms,="" append="" additional="" tensor.="" below,="" show="" simple="" example="" normalized="" difference="" index="" (ndvi)="" sentinel-2="" image.="" ndvi="" measures="" presence="" health="" computed="" red="" near-infrared="" (nir)="" operate="" dictionaries="" returned="" resulting="" channel="" dimension.="" first,="" instantiate="" load="" then,="" plot="" true="" color="" (rgb)="" representation="" see="" region="" looking="" at.="" import="" matplotlib.pyplot="" plt="" torchgeo.datasets="" sentinel2="" torchgeo.transforms="" appendndvi="" fig="dataset.plot(sample)" plt.show()="" transform,="" appending="" new="" end="" uses="" 0="" its="" band="" nir="" band.="" data,="" normalize="" values="" range="" -1="" 1,="" 1="" plotting.="" index_nir="3)" sample["image"][-1]="(sample[&quot;image&quot;][-1]" +="" 1)="" 2="" plt.imshow(sample["image"][-1],="" cmap="RdYlGn_r" )="" (left)="" (right)="" texas="" hill="" region,="" taken="" november="" 16,="" 2018="" by="" satellite.="" image,="" indicates="" water="" bodies,="" yellow="" barren="" soil,="" light="" green="" unhealthy="" vegetation,="" dark="" healthy="" vegetation.="" driving="" factors="" behind="" progress="" computer="" vision="" existence="" standardized="" imagenet="" mnist.="" researchers="" directly="" compare="" performance="" procedures="" determine="" perform="" best.="" remote="" sensing="" domain,="" there="" due="" aforementioned="" difficulties="" working="" lack="" existing="" libraries="" loading="" opt="" their="" own="" datasets.="" goals="" provide="" easy-to-use="" loaders="" includes="" —datasets="" labels.="" tasks="" classification,="" regression,="" semantic="" segmentation,="" object="" detection,="" instance="" more.="" if="" you’ve="" torchvision="" before,="" types="" should="" familiar.="" create="" northwestern="" polytechnical="" university="" (nwpu)="" very-high-resolution="" ten-class="" (vhr-10)="" detection="" downloaded,="" checksummed,="" extracted,="" just="" torchvision.="" torch.utils.data="" vhr10="" shuffle="True," num_workers="4)" label="batch[&quot;label&quot;]" compatible="" loaders,="" making="" easy="" integrate="" workflows.="" similar="" keys="" r-cnn="" trained="" nwpu="" vhr-10="" predicts="" sharp="" bounding="" boxes="" masks="" objects="" high="" confidence="" scores.="" reproducibility="" lightning="" another="" key="" goal="" reproducibility.="" no="" predefined="" train-val-test="" split,="" split="" has="" class="" imbalance="" geographic="" distribution.="" result,="" metrics="" reported="" literature="" either="" can’t="" reproduced,="" aren’t="" indicative="" how="" would="" work="" location.="" facilitate="" direct="" comparisons="" results="" published="" further="" reduce="" boilerplate="" code="" needed="" run="" experiments="" torchgeo,="" datamodules="" well-defined="" splits="" trainers="" various="" segmentation.="" incorporate="" preprocessing="" (with="" pre-calculated="" statistics),="" let="" easily="" experiment="" hyperparameters="" related="" itself="" (as="" opposed="" modeling="" process).="" segmentation="" inria="" aerial="" labeling="" few="" imports="" four="" lines="" code.="" pytorch_lightning="" trainer="" torchgeo.datamodules="" inriaaerialimagelabelingdatamodule="" torchgeo.trainers="" semanticsegmentationtask="" datamodule="InriaAerialImageLabelingDataModule(root_dir=&quot;...&quot;," task="SemanticSegmentationTask(segmentation_model=&quot;unet&quot;," encoder_weights="imagenet" ,="" learning_rate="0.1)" default_root_dir="..." trainer.fit(model="task," building="" segmentations="" produced="" u-net="" reproducing="" code,="" comparison="" techniques="" easy.="" our="" preprint="" set="" approaches="" several="" torchgeo.="" find="" resnet-50="" achieve="" state-of-the-art="" so2sat="" baseline="" important="" evaluating="" contribution="" choices="" tackling="" problems="" remotely="" sensed="" future="" contributing="" still="" lot="" remaining="" done="" possible,="" especially="" without="" prior="" experience.="" ways="" plan="" expanding="" tutorials="" subjects="" “writing="" dataset”="" “transfer="" learning”,="" “land="" mapping”="" “object="" detection”.="" project="" pre-training="" models.="" most="" small="" labeled="" could="" benefit="" transfer="" approaches.="" first="" library="" imagery.="" modalities="" (optical,="" sar,="" multispectral)="" specific="" platforms="" (landsat,="" sentinel,="" modis)="" showing="" amounts="" self-supervised="" promising="" method="" satellite="" petabytes="" imagery,="" accurately="" much="" harder="" come="" by.="" methods="" will="" allow="" us="" raw="" needing="" aside="" larger="" projects,="" we’re="" always="" add="" augmentation="" sampling="" strategies.="" you’re="" python="" savvy="" interested="" love="" contributions!="" open="" source="" under="" mit="" license,="" it="" almost="" any="" project.="" external="" links:="" homepage:="" https:="" github.com="" microsoft="" documentation:="" torchgeo.readthedocs.io="" pypi:="" pypi.org="" paper:="" arxiv.org="" abs="" 2111.08872="" give="" star="" github!="" work,="" please="" cite="" paper.="" acknowledgments="" thank="" contributors="" efforts="" creating="" ai="" good="" program="" support,="" team="" guidance.="" research="" part="" blue="" waters="" sustained-petascale="" computing="" project,="" supported="" national="" science="" foundation="" (awards="" oci-0725070="" aci-1238993),="" state="" illinois,="" december,="" 2019,="" geospatial-intelligence="" agency.="" joint="" effort="" illinois="" urbana-champaign="" center="" supercomputing="" applications.="" was="" nsf="" grants="" iis-1908104,="" oac-1934634,="" dbi-2021898.="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 食谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
+            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并获得问题解答</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">贡献者奖项 - 2024</span>
+            <p>本年 PyTorch 大会揭晓获奖者</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">ExecuTorch</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>捕捉最新的技术新闻和事件</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年6月23日</p>
+            <h1>
+                <a class="blog-title">基于 TorchGeo 的地理空间深度学习</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由亚当·斯图尔特（伊利诺伊大学厄巴纳-香槟分校）、凯勒布·罗宾逊（微软 AI for Good 研究实验室）、艾萨克·科尔利（德克萨斯大学圣安东尼奥分校）撰写</p>
+                    <p>TorchGeo 是一个提供地理空间数据集、采样器、转换和预训练模型的 PyTorch 领域库。</p>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-logo.png" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/microsoft/torchgeo">https://github.com/microsoft/torchgeo</a>
+</p>
+
+<p>几十年来，地球观测卫星、飞机以及最近的无人平台一直在收集地球表面的不断增加的图像。有了关于季节性和长期趋势的信息，遥感图像对于解决人类面临的一些最大挑战，包括气候变化适应、自然灾害监测、水资源管理和不断增长的全球人口粮食安全，具有无价的价值。从计算机视觉的角度来看，这包括土地覆盖制图（语义分割）、森林砍伐和洪水监测（变化检测）、冰川流动（像素跟踪）、飓风追踪和强度估计（回归）以及建筑和道路检测（目标检测、实例分割）等应用。通过利用深度学习架构的最新进展、更便宜且更强大的 GPU 以及数 PB 的免费卫星图像数据集，我们可以更接近解决这些重要问题。</p>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-hurricane.jpg" width="80%">
+</p>
+
+<p align="center">国家海洋和大气管理局卫星拍摄的 2005 年 8 月 28 日飓风卡特里娜的照片，<a href="https://www.whoi.edu/know-your-ocean/ocean-topics/hazards/hurricanes/"> 来源 </a>。可以使用像 TorchGeo 这样的地理空间机器学习库来检测、追踪和预测飓风和其他自然灾害的未来轨迹。</p>
+
+<h1 id="the-challenges">挑战</h1>
+
+<p>在传统的计算机视觉数据集中，如 ImageNet，图像文件本身通常相对简单且易于处理。大多数图像具有 3 个光谱波段（RGB），存储在常见的文件格式如 PNG 或 JPEG 中，并且可以轻松地使用流行的软件库如 <a href="https://pillow.readthedocs.io/en/stable/">PIL</a> 或 <a href="https://opencv.org/">OpenCV</a> 加载。这些数据集中的每张图像通常足够小，可以直接输入到神经网络中。此外，这些数据集大多数包含有限数量的精心制作的图像，这些图像被认为是独立且同分布的，使得训练-验证-测试划分变得简单。由于这种相对的同质性，相同的预训练模型（例如，在 ImageNet 上预训练的 CNN）在广泛的视觉任务中通过迁移学习方法已被证明是有效的。现有的库，如 <a href="https://github.com/pytorch/vision">torchvision</a>，很好地处理这些简单情况，并在过去十年中在视觉任务上取得了重大进展。</p>
+
+<p>遥感影像并不那么均匀。卫星通常捕获的不是简单的 RGB 图像，而是多光谱（<a href="https://www.usgs.gov/landsat-missions">Landsat 8</a> 有 11 个光谱波段）甚至超光谱（<a href="https://www.usgs.gov/centers/eros/science/usgs-eros-archive-earth-observing-one-eo-1-hyperion">Hyperion</a> 有 242 个光谱波段）的图像。这些图像在更宽的波长范围内捕获信息（400 nm–15 µm），远远超出可见光谱。不同的卫星也具有非常不同的空间分辨率——<a href="https://www.goes.noaa.gov/">GOES</a> 的分辨率为 4 公里/像素，<a href="https://www.maxar.com/products/satellite-imagery">Maxar</a> 影像为 30 厘米/像素，而无人机影像的分辨率可高达 7 毫米/像素。这些数据集几乎总是具有时间成分，卫星重访周期为每日、每周或双周。图像通常与其他数据集中的图像重叠，需要根据地理元数据拼接。这些图像往往非常大（例如，10K x 10K 像素），因此不可能将整个图像通过神经网络。这些数据以数百种不同的栅格和矢量文件格式（如 GeoTIFF 和 ESRI Shapefile）进行分发，需要使用像 <a href="https://gdal.org/">GDAL</a> 这样的专业库来加载。</p>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-map.png" width="80%">
+</p>
+
+<p align="center">从左到右：墨卡托、阿尔贝斯等面积和中断的哥德投影（<a href="https://scitools.org.uk/cartopy/docs/latest/reference/projections.html"> 来源 </a>）。地理空间数据与许多不同类型的参考系统相关联，这些参考系统将 3D 地球投影到 2D 表示形式。结合来自不同来源的数据通常需要重新投影到公共参考系统，以确保所有图层对齐。</p>
+
+<p>虽然每个图像都是 2D 的，但地球本身是 3D 的。为了拼接图像，它们首先需要投影到地球的 2D 表示形式，即坐标参考系统（CRS）。大多数人熟悉像墨卡托这样的等角表示，它会扭曲区域的大小（尽管非洲比格陵兰大 15 倍，但格陵兰看起来比非洲大），但还有许多其他常用的 CRS。每个数据集可能使用不同的 CRS，单个数据集中的每个图像也可能在独特的 CRS 中。为了使用多个图层的数据，它们必须共享一个公共 CRS，否则数据将无法正确对齐。对于那些不熟悉遥感数据的人来说，这可能是一项艰巨的任务。</p>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-reproject.png" width="80%">
+</p>
+
+<p align="center">即使在索引过程中正确地理配准图像，如果没有将它们投影到公共 CRS，最终会得到周围带有 nodata 值的旋转图像，并且图像不会像素对齐。</p>
+
+<h1 id="the-solution">解决方案</h1>
+
+<p>目前，在没有这两个非常不同领域的专业知识的情况下，同时处理深度学习模型和地理空间数据可能相当具有挑战性。为了解决这些挑战，我们构建了 TorchGeo，这是一个用于处理地理空间数据的 PyTorch 领域库。TorchGeo 旨在使以下操作变得简单：</p>
+
+<ol>
+  <li>对于机器学习专家来说，处理地理空间数据，并且</li>
+  <li>为遥感专家探索机器学习解决方案。</li>
+</ol>
+
+<p>TorchGeo 不仅仅是一个研究项目，而是一个生产级别的库，它使用持续集成来测试每个提交在多种 Python 版本和多种平台（Linux、macOS、Windows）上的兼容性。您可以使用任何喜欢的包管理器轻松安装，包括 pip、conda 和 <a href="https://spack.io">spack</a>：</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ pip install torchgeo
+</code></pre></div></div>
+
+<p>TorchGeo 旨在拥有与其他 PyTorch 领域库（如 torchvision、torchtext 和 torchaudio）相同的 API。如果您已经在工作流程中使用 torchvision 进行计算机视觉数据集，则只需更改几行代码即可切换到 TorchGeo。所有 TorchGeo 数据集和采样器都与 PyTorch <code class="language-plaintext highlighter-rouge">DataLoader</code> 类兼容，这意味着您可以利用像 <a href="https://www.pytorchlightning.ai/">PyTorch Lightning</a> 这样的包装库进行分布式训练。在以下章节中，我们将探讨 TorchGeo 的可能用例，以展示其使用之简单。</p>
+
+<h1 id="geospatial-datasets-and-samplers">地理空间数据集和采样器</h1>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-sample.png" width="80%">
+</p>
+
+<p align="center">以下是一个示例应用，我们将 A）来自 <a href="https://www.usgs.gov/landsat-missions">Landsat 8</a> 的场景和 B）<a href="https://data.nal.usda.gov/dataset/cropscape-cropland-data-layer">Cropland Data Layer</a> 标签结合起来，尽管这些文件位于不同的 EPSG 投影中。我们希望使用地理空间边界框作为索引，从这些数据集中采样 C）和 D）。</p>
+
+<p>许多遥感应用涉及处理地理空间数据集——带有地理元数据的集合。在 TorchGeo 中，我们定义了一个 <code class="language-plaintext highlighter-rouge">GeoDataset</code> 类来表示这类数据集。与按整数索引不同，每个 <code class="language-plaintext highlighter-rouge">GeoDataset</code> 都是按时空边界框索引的，这意味着可以智能地组合覆盖不同地理范围的两个或多个数据集。</p>
+
+<p>在本例中，我们展示了使用 TorchGeo 处理地理空间数据以及从 Landsat 和 Cropland Data Layer (CDL)数据的组合中采样小图像块是多么简单。首先，我们假设用户已经下载了 Landsat 7 和 8 的影像。由于 Landsat 8 比 Landsat 7 具有更多的光谱波段，我们将只使用这两个卫星共有的波段。我们将通过这两个数据集的并集创建一个包含 Landsat 7 和 8 所有图像的单个数据集。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">from</span> <span class="n">torch</span><span class="p">.</span><span class="n">utils</span><span class="p">.</span><span class="n">data</span> <span class="n">import</span> <span class="n">DataLoader</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">datasets</span> <span class="n">import</span> <span class="n">CDL</span><span class="p">,</span> <span class="n">Landsat7</span><span class="p">,</span> <span class="n">Landsat8</span><span class="p">,</span> <span class="n">stack_samples</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">samplers</span> <span class="n">import</span> <span class="n">RandomGeoSampler</span>
+
+<span class="n">landsat7</span> <span class="o">=</span> <span class="n">Landsat7</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s">"..."</span><span class="p">)</span>
+<span class="n">landsat8</span> <span class="o">=</span> <span class="n">Landsat8</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s">"..."</span><span class="p">,</span> <span class="n">bands</span><span class="o">=</span><span class="n">Landsat8</span><span class="p">.</span><span class="n">all_bands</span><span class="p">[</span><span class="mi">1</span><span class="o">:-</span><span class="mi">2</span><span class="p">])</span>
+<span class="n">landsat</span> <span class="o">=</span> <span class="n">landsat7</span> <span class="o">|</span> <span class="n">landsat8</span>
+</code></pre></div></div>
+
+<p>接下来，我们将此数据集与 CDL 数据集进行交集运算。我们选择交集而不是并集，以确保我们只从既有 Landsat 又有 CDL 数据的地域进行采样。请注意，我们可以自动下载并校验 CDL 数据。另外，请注意，这些数据集中可能包含不同 CRS 或分辨率的文件，但 TorchGeo 会自动确保使用匹配的 CRS 和分辨率。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">cdl</span> <span class="o">=</span> <span class="n">CDL</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s">"..."</span><span class="p">,</span> <span class="n">download</span><span class="o">=</span><span class="n">True</span><span class="p">,</span> <span class="n">checksum</span><span class="o">=</span><span class="n">True</span><span class="p">)</span>
+<span class="n">dataset</span> <span class="o">=</span> <span class="n">landsat</span> <span class="o">&amp;</span> <span class="n">cdl</span>
+</code></pre></div></div>
+
+<p>现在，该数据集可以与 PyTorch 数据加载器一起使用。与基准数据集不同，地理空间数据集通常包含非常大的图像。例如，CDL 数据集由一张覆盖整个美国大陆的单张图像组成。为了使用地理坐标从这些数据集中采样，TorchGeo 定义了一系列<a href="https://torchgeo.readthedocs.io/en/latest/api/samplers.html"><em>采样器 </em></a>。在本例中，我们将使用随机采样器，它返回 256 x 256 像素的图像，每个 epoch 返回 10,000 个样本。我们还将使用自定义的合并函数将每个样本字典组合成样本的小批量。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">sampler</span> <span class="o">=</span> <span class="n">RandomGeoSampler</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span> <span class="n">length</span><span class="o">=</span><span class="mi">10000</span><span class="p">)</span>
+<span class="n">dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">sampler</span><span class="o">=</span><span class="n">sampler</span><span class="p">,</span> <span class="n">collate_fn</span><span class="o">=</span><span class="n">stack_samples</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>现在，您可以将此数据加载器用于正常的训练/评估流程。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">for</span> <span class="n">batch</span> <span class="n">in</span> <span class="n">dataloader</span><span class="o">:</span>
+    <span class="n">image</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s">"image"</span><span class="p">]</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s">"mask"</span><span class="p">]</span>
+
+    <span class="cp"># train a model, or make predictions using a pre-trained model
+</span></code></pre></div></div>
+
+<p>许多应用程序涉及根据此类地理空间元数据智能组合数据集。例如，用户可能想要：</p>
+
+<ul>
+  <li>将来自多个图像来源的数据集合并，并将它们视为等效（例如，Landsat 7 和 8）</li>
+  <li>将来自不同地理空间位置的数据集合并（例如，切萨皮克湾的纽约和宾夕法尼亚州）</li>
+</ul>
+
+<p>这些组合要求所有查询至少存在于一个数据集中，并且可以使用 <code class="language-plaintext highlighter-rouge">UnionDataset</code> 创建。同样，用户可能想要：</p>
+
+<ul>
+  <li>将图像和目标标签结合并从两者中同时采样（例如，Landsat 和 CDL）</li>
+  <li>将多个图像来源的数据集结合用于多模态学习或数据融合（例如，Landsat 和 Sentinel）</li>
+</ul>
+
+<p>这些组合要求所有查询都存在于<em>两者</em>数据集中，并且可以使用 <code class="language-plaintext highlighter-rouge">IntersectionDataset</code> 创建。当您使用交集（<code class="language-plaintext highlighter-rouge">&amp;</code>）和并集（<code class="language-plaintext highlighter-rouge">|</code>）运算符时，TorchGeo 会自动为您组合这些数据集。</p>
+
+<h1 id="multispectral-and-geospatial-transforms">多光谱和地理空间变换</h1>
+
+<p>在深度学习中，对数据进行增强和转换以使模型对输入空间中的变化具有鲁棒性是很常见的。地理空间数据可能存在季节变化和扭曲效应等变化，以及云层覆盖和大气畸变等图像处理和捕获问题。TorchGeo 利用来自 <a href="https://kornia.github.io/">Kornia</a> 库的增强和转换，该库支持 GPU 加速，并支持具有 3 个以上通道的多光谱图像。</p>
+
+<p>传统地理空间分析计算和可视化光谱指数，这些指数是多光谱波段的组合。光谱指数旨在突出多光谱图像中与某些应用相关的感兴趣区域，例如植被健康、人造变化区域或不断增长的城镇化，或积雪覆盖。TorchGeo 支持多种<a href="https://torchgeo.readthedocs.io/en/latest/api/transforms.html"><em>转换 </em></a>，可以计算常见的光谱指数并将它们作为额外的波段附加到多光谱图像张量中。</p>
+
+<p>下面，我们展示了一个简单的示例，其中我们在 Sentinel-2 图像上计算归一化植被指数（NDVI）。NDVI 衡量植被的存在和植被健康，它是红光和近红外（NIR）光谱波段之间的归一化差值。光谱指数变换操作在 TorchGeo 数据集返回的样本字典上执行，并将生成的光谱指数添加到图像通道维度。</p>
+
+<p>首先，我们实例化一个 Sentinel-2 数据集并加载一个样本图像。然后，我们绘制该数据的真彩色（RGB）表示，以查看我们正在查看的区域。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">import</span> <span class="n">matplotlib</span><span class="p">.</span><span class="n">pyplot</span> <span class="n">as</span> <span class="n">plt</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">datasets</span> <span class="n">import</span> <span class="n">Sentinel2</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">transforms</span> <span class="n">import</span> <span class="n">AppendNDVI</span>
+
+<span class="n">dataset</span> <span class="o">=</span> <span class="n">Sentinel2</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s">"..."</span><span class="p">)</span>
+<span class="n">sample</span> <span class="o">=</span> <span class="n">dataset</span><span class="p">[...]</span>
+<span class="n">fig</span> <span class="o">=</span> <span class="n">dataset</span><span class="p">.</span><span class="n">plot</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">show</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p>接下来，我们实例化和计算一个 NDVI 变换，将这个新通道添加到图像的末尾。Sentinel-2 图像使用索引 0 表示红光波段，索引 3 表示近红外波段。为了可视化数据，我们还对图像进行了归一化。NDVI 的值范围可以从-1 到 1，但为了绘图，我们希望使用 0 到 1 的范围。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">transform</span> <span class="o">=</span> <span class="n">AppendNDVI</span><span class="p">(</span><span class="n">index_red</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">index_nir</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<span class="n">sample</span> <span class="o">=</span> <span class="n">transform</span><span class="p">(</span><span class="n">sample</span><span class="p">)</span>
+<span class="n">sample</span><span class="p">[</span><span class="s">"image"</span><span class="p">][</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">sample</span><span class="p">[</span><span class="s">"image"</span><span class="p">][</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">sample</span><span class="p">[</span><span class="s">"image"</span><span class="p">][</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">cmap</span><span class="o">=</span><span class="s">"RdYlGn_r"</span><span class="p">)</span>
+<span class="n">plt</span><span class="p">.</span><span class="n">show</span><span class="p">()</span>
+</code></pre></div></div>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-true-ndvi.png" width="100%">
+</p>
+
+<p align="center">2018 年 11 月 16 日由 <a href="https://sentinel.esa.int/web/sentinel/missions/sentinel-2">Sentinel-2</a> 卫星拍摄的德克萨斯丘陵地区真彩色（左侧）和归一化植被指数（右侧）图像。在归一化植被指数图像中，红色表示水体，黄色表示荒地，浅绿色表示不健康植被，深绿色表示健康植被。</p>
+
+<h1 id="benchmark-datasets">基准数据集</h1>
+
+<p>计算机视觉进步背后的推动因素之一是存在像 ImageNet 和 MNIST 这样的标准化基准数据集。使用这些数据集，研究人员可以直接比较不同模型和训练过程的性能，以确定哪些表现最佳。在遥感领域，有许多这样的数据集，但由于上述处理这些数据困难和缺乏加载这些数据集的现有库，许多研究人员选择使用他们自己的定制数据集。</p>
+
+<p>TorchGeo 的目标之一是提供易于使用的现有数据集加载器。TorchGeo 包含一系列<a href="https://torchgeo.readthedocs.io/en/latest/api/datasets.html#non-geospatial-datasets"><em>基准数据集 </em></a>——这些数据集包含输入图像和目标标签。这包括图像分类、回归、语义分割、目标检测、实例分割、变化检测等任务的数据集。</p>
+
+<p>如果您之前使用过 torchvision，这些类型的数据集应该很熟悉。在这个例子中，我们将创建一个用于西北工业大学（NWPU）非常高分辨率的十类（VHR-10）地理空间目标检测数据集的数据集。这个数据集可以像 torchvision 一样自动下载、校验和提取。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">from</span> <span class="n">torch</span><span class="p">.</span><span class="n">utils</span><span class="p">.</span><span class="n">data</span> <span class="n">import</span> <span class="n">DataLoader</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">datasets</span> <span class="n">import</span> <span class="n">VHR10</span>
+
+<span class="n">dataset</span> <span class="o">=</span> <span class="n">VHR10</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="s">"..."</span><span class="p">,</span> <span class="n">download</span><span class="o">=</span><span class="n">True</span><span class="p">,</span> <span class="n">checksum</span><span class="o">=</span><span class="n">True</span><span class="p">)</span>
+<span class="n">dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">shuffle</span><span class="o">=</span><span class="n">True</span><span class="p">,</span> <span class="n">num_workers</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">batch</span> <span class="n">in</span> <span class="n">dataloader</span><span class="o">:</span>
+    <span class="n">image</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s">"image"</span><span class="p">]</span>
+    <span class="n">label</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s">"label"</span><span class="p">]</span>
+
+    <span class="cp"># train a model, or make predictions using a pre-trained model
+</span></code></pre></div></div>
+
+<p>所有 TorchGeo 数据集都与 PyTorch 数据加载器兼容，使它们易于集成到现有的训练流程中。TorchGeo 中的基准数据集与 torchvision 中的类似数据集之间的唯一区别是，每个数据集都返回一个包含每个 PyTorch <code class="language-plaintext highlighter-rouge">Tensor</code> 键的字典。</p>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-nwpu.png" width="100%">
+</p>
+
+<p align="center">来自在 <a href="https://github.com/chaozhong2010/VHR-10_dataset_coco">NWPU VHR-10</a> 数据集上训练的 Mask R-CNN 模型的示例预测。该模型对所有具有高置信度分数的对象预测出锐利的边界框和掩码。</p>
+
+<h1 id="reproducibility-with-pytorch-lightning">使用 PyTorch Lightning 实现的可重复性</h1>
+
+<p>TorchGeo 的另一个关键目标是可重复性。对于这些基准数据集中的许多，没有预定义的训练-验证-测试划分，或者预定义的划分存在类别不平衡或地理分布问题。因此，文献中报告的性能指标要么无法重现，要么不能表明预训练模型在不同地理位置上的表现如何。</p>
+
+<p>为了方便直接比较文献中发布的结果，并进一步减少在 TorchGeo 数据集上运行实验所需的样板代码，我们创建了具有明确定义的训练-验证-测试分割和各种任务（如分类、回归和语义分割）的<a href="https://torchgeo.readthedocs.io/en/latest/api/datamodules.html"><em>数据模块</em></a>和<a href="https://torchgeo.readthedocs.io/en/latest/api/trainers.html"><em>训练器 </em></a>。这些数据模块展示了如何结合 kornia 库中的增强，包括预处理转换（带有预计算的通道统计信息），并使用户能够轻松地实验与数据本身相关的超参数（而不是建模过程）。在 Inria Aerial Image Labeling 数据集上训练语义分割模型就像导入几个模块和几行代码那么简单。</p>
+
+<div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">from</span> <span class="n">pytorch_lightning</span> <span class="n">import</span> <span class="n">Trainer</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">datamodules</span> <span class="n">import</span> <span class="n">InriaAerialImageLabelingDataModule</span>
+<span class="n">from</span> <span class="n">torchgeo</span><span class="p">.</span><span class="n">trainers</span> <span class="n">import</span> <span class="n">SemanticSegmentationTask</span>
+
+<span class="n">datamodule</span> <span class="o">=</span> <span class="n">InriaAerialImageLabelingDataModule</span><span class="p">(</span><span class="n">root_dir</span><span class="o">=</span><span class="s">"..."</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_workers</span><span class="o">=</span><span class="mi">6</span><span class="p">)</span>
+<span class="n">task</span> <span class="o">=</span> <span class="n">SemanticSegmentationTask</span><span class="p">(</span><span class="n">segmentation_model</span><span class="o">=</span><span class="s">"unet"</span><span class="p">,</span> <span class="n">encoder_weights</span><span class="o">=</span><span class="s">"imagenet"</span><span class="p">,</span> <span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+<span class="n">trainer</span> <span class="o">=</span> <span class="n">Trainer</span><span class="p">(</span><span class="n">gpus</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">default_root_dir</span><span class="o">=</span><span class="s">"..."</span><span class="p">)</span>
+
+<span class="n">trainer</span><span class="p">.</span><span class="n">fit</span><span class="p">(</span><span class="n">model</span><span class="o">=</span><span class="n">task</span><span class="p">,</span> <span class="n">datamodule</span><span class="o">=</span><span class="n">datamodule</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p align="center">
+  <img src="/assets/images/torchgeo-inria.png" width="100%">
+</p>
+
+<p align="center">使用在 <a href="https://project.inria.fr/aerialimagelabeling/">Inria Aerial Image Labeling</a> 数据集上训练的 U-Net 模型生成的分割。重现这些结果就像导入几个模块和几行代码那么简单，这使得比较不同的模型和训练技术变得简单且容易。</p>
+
+<p>在我们的<a href="https://arxiv.org/abs/2111.08872">预印本</a>中，我们展示了一系列使用上述 datamodules 和 trainers 对 TorchGeo 中多个数据集进行基准测试的简单建模方法的结果。例如，我们发现简单的 ResNet-50 可以在 <a href="https://ieeexplore.ieee.org/document/9014553">So2Sat</a> 数据集上达到最先进的性能。这些类型的基线结果对于评估解决遥感数据问题时不同建模选择的贡献非常重要。</p>
+
+<h1 id="future-work-and-contributing">未来工作与贡献</h1>
+
+<p>为了使 TorchGeo 尽可能易于使用，特别是对于没有先前深度学习经验的用户，我们还有很多工作要做。我们计划通过扩展我们的教程来包括“编写自定义数据集”和“迁移学习”等主题，或者“土地覆盖制图”和“目标检测”等任务。</p>
+
+<p>我们正在努力进行的另一个重要项目是预训练模型。大多数遥感研究人员都使用非常小的标记数据集，可以从预训练模型和迁移学习技术中受益。TorchGeo 是第一个在多光谱影像上预训练模型的深度学习库。我们的目标是提供不同图像模态（光学、SAR、多光谱）和特定平台（Landsat、Sentinel、MODIS）的模型，以及展示它们在不同训练数据量下的性能基准结果。自监督学习是训练此类模型的有前景的方法。卫星影像数据集通常包含 PB 级的影像，但准确标记的数据集却很难获得。自监督学习方法将使我们能够直接在原始影像上训练，而无需大量标记数据集。</p>
+
+<p>除了这些大型项目之外，我们一直在寻找添加新的数据集、数据增强转换和采样策略。如果您熟悉 Python 并且有兴趣为 TorchGeo 做出贡献，我们将非常欢迎！TorchGeo 遵循 MIT 开源许可，因此您几乎可以在任何项目中使用它。</p>
+
+<p>外部链接：</p>
+
+<ul>
+  <li><strong>主页 </strong>: <a href="https://github.com/microsoft/torchgeo">https://github.com/microsoft/torchgeo</a></li>
+  <li><strong>文档 </strong>: <a href="https://torchgeo.readthedocs.io/">https://torchgeo.readthedocs.io/</a></li>
+  <li><strong>PyPI</strong>: <a href="https://pypi.org/project/torchgeo/">https://pypi.org/project/torchgeo/</a></li>
+  <li><strong>论文 </strong>: <a href="https://arxiv.org/abs/2111.08872">https://arxiv.org/abs/2111.08872</a></li>
+</ul>
+
+<p>如果您喜欢 TorchGeo，请在 GitHub 上给我们点个赞！如果您在工作中使用了 TorchGeo，请引用我们的论文。</p>
+
+<h1 id="acknowledgments">致谢</h1>
+
+<p><em>我们感谢所有为创建 TorchGeo 库做出努力的贡献者，感谢微软 AI for Good 项目提供支持，以及感谢 PyTorch 团队提供的指导。这项研究是 Blue Waters 持续百万亿次计算项目的一部分，该项目由美国国家科学基金会（奖项 OCI-0725070 和 ACI-1238993）、伊利诺伊州以及截至 2019 年 12 月的国家地理空间情报局支持。Blue Waters 是伊利诺伊大学香槟分校及其国家超级计算应用中心的一项联合努力。该研究部分得到了美国国家科学基金会资助的 IIS-1908104、OAC-1934634 和 DBI-2021898 号项目资助。</em></p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">ExecuTorch</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

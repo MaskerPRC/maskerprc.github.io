@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      New PyTorch library releases including TorchVision Mobile, TorchAudio I/O, and more | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.8 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio as well as new version of TorchCSPRNG. These releases include a number of new features and improvements and, along with the PyTorch 1.8 release, provide a broad set of updates for the PyTorch community to build on and leverage.
+
+Some highlights include:
+
+  TorchVision - Added support for PyTorch Mobile including Detectron2Go (D2Go), auto-augmentation of data during training, on the fly type conversion, and AMP autocasting.
+  TorchAudio - Major improvements to I/O, including defaulting to sox_io backend and file-like object support. Added Kaldi Pitch feature and support for CMake based build allowing TorchAudio to better support no-Python environments.
+  TorchText - Updated the dataset loading API to be compatible with standard PyTorch data loading utilities.
+  TorchCSPRNG - Support for cryptographically secure pseudorandom number generators for PyTorch is now stable with new APIs for AES128 ECB/CTR and CUDA support on Windows.
+
+
+Please note that, starting in PyTorch 1.6, features are classified as Stable, Beta, and Prototype. Prototype features are not included as part of the binary distribution and are instead available through either building from source, using nightlies or via compiler flag. You can see the detailed announcement here.
+
+TorchVision 0.9.0
+[Stable] TorchVision Mobile: Operators, Android Binaries, and Tutorial
+We are excited to announce the first on-device support and binaries for a PyTorch domain library. We have seen significant appetite in both research and industry for on-device vision support to allow low latency, privacy friendly, and resource efficient mobile vision experiences. You can follow this new tutorial to build your own Android object detection app using TorchVision operators, D2Go, or your own custom operators and model.
+
+
+  
+
+
+[Stable] New Mobile models for Classification, Object Detection and Semantic Segmentation
+We have added support for the MobileNetV3 architecture and provided pre-trained weights for Classification, Object Detection and Segmentation. It is easy to get up and running with these models, just import and load them as you would any torchvision model:
+import torch
+import torchvision
+
+# Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Quantized Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.quantization.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Object Detection: Highly Accurate High Resolution Mobile Model
+x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_fpn(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Semantic Segmentation: Highly Accurate Mobile Model
+x = torch.rand(1, 3, 520, 520)
+m_segmenter = torchvision.models.segmentation.deeplabv3_mobilenet_v3_large(pretrained=True)
+m_segmenter.eval()
+predictions = m_segmenter(x)
+
+These models are highly competitive with TorchVision’s existing models on resource efficiency, speed, and accuracy. See our release notes for detailed performance metrics.
+
+[Stable] AutoAugment
+AutoAugment is a common Data Augmentation technique that can increase the accuracy of Scene Classification models. Though the data augmentation policies are directly linked to their trained dataset, empirical studies show that ImageNet policies provide significant improvements when applied to other datasets. We’ve implemented 3 policies learned on the following datasets: ImageNet, CIFA10 and SVHN. These can be used standalone or mixed-and-matched with existing transforms:
+from torchvision import transforms
+
+t = transforms.AutoAugment()
+transformed = t(image)
+
+
+transform=transforms.Compose([
+   transforms.Resize(256),
+   transforms.AutoAugment(),
+   transforms.ToTensor()])
+
+Other New Features for TorchVision
+
+  [Stable] All read and decode methods in the io.image package now support:
+    
+      Palette, Grayscale Alpha and RBG Alpha image types during PNG decoding
+      On-the-fly conversion of image from one type to the other during read
+    
+  
+  [Stable] WiderFace dataset
+  [Stable] Improved FasterRCNN speed and accuracy by introducing a score threshold on RPN
+  [Stable] Modulation input for DeformConv2D
+  [Stable] Option to write audio to a video file
+  [Stable] Utility to draw bounding boxes
+  [Beta] Autocast support in all Operators
+Find the full TorchVision release notes here.
+
+
+TorchAudio 0.8.0
+I/O Improvements
+We have continued our work from the previous release to improve TorchAudio’s I/O support, including:
+
+  [Stable] Changing the default backend to “sox_io” (for Linux/macOS), and updating the “soundfile” backend’s interface to align with that of “sox_io”. The legacy backend and interface are still accessible, though it is strongly discouraged to use them.
+  [Stable] File-like object support in both “sox_io” backend, “soundfile” backend and sox_effects.
+  [Stable] New options to change the format, encoding, and bits_per_sample when saving.
+  [Stable] Added GSM, HTK, AMB, AMR-NB and AMR-WB format support to the “sox_io” backend.
+  [Beta] A new functional.apply_codec function which can degrade audio data by applying audio codecs supported by “sox_io” backend in an in-memory fashion.
+Here are some examples of features landed in this release:
+
+
+# Load audio over HTTP
+with requests.get(URL, stream=True) as response:
+    waveform, sample_rate = torchaudio.load(response.raw)
+ 
+# Saving to Bytes buffer as 32-bit floating-point PCM
+buffer_ = io.BytesIO()
+torchaudio.save(
+    buffer_, waveform, sample_rate,
+    format=" wav",="" encoding="PCM_S" ,="" bits_per_sample="16)" #="" apply="" effects="" while="" loading="" audio="" from="" s3="" client="boto3.client('s3')" response="client.get_object(Bucket=S3_BUCKET," key="S3_KEY)" waveform,="" sample_rate="torchaudio.sox_effects.apply_effect_file(" response['body'],="" [["lowpass",="" "-1",="" "300"],="" ["rate",="" "8000"]])="" gsm="" codec="" to="" tensor="" encoded="torchaudio.functional.apply_codec(" sample_rate,="" format="gsm" )="" check="" out="" the="" revamped="" preprocessing="" tutorial,="" manipulation="" with="" torchaudio.="" [stable]="" switch="" cmake-based="" build="" in="" previous="" version="" of="" torchaudio,="" it="" was="" utilizing="" cmake="" third="" party="" dependencies.="" starting="" 0.8.0,="" torchaaudio="" uses="" its="" c++="" extension.="" this="" will="" open="" door="" integrate="" torchaudio="" non-python="" environments="" (such="" as="" applications="" and="" mobile).="" we="" continue="" working="" on="" adding="" example="" mobile="" integrations.="" [beta]="" improved="" new="" transforms="" have="" added="" two="" widely="" requested="" operators="" release:="" spectralcentroid="" transform="" kaldi="" pitch="" feature="" extraction="" (detailed="" “a="" algorithm="" tuned="" for="" automatic="" speech="" recognition”).="" we’ve="" also="" exposed="" a="" normalization="" method="" mel="" transforms,="" additional="" stft="" arguments="" spectrogram.="" would="" like="" ask="" our="" community="" raise="" requests="" core="" processing="" features="" these!="" contributions="" had="" more="" source="" release="" than="" ever="" before,="" including="" several="" completely="" features.="" extend="" sincere="" thanks="" community.="" please="" newly="" contributing.md="" ways="" contribute="" code,="" remember="" that="" reporting="" bugs="" requesting="" are="" just="" valuable.="" posting="" well-scoped="" work="" items="" issues="" labeled="" “help-wanted”="" “contributions-welcome”="" anyone="" who="" happy="" coach="" contributors="" through="" contribution="" process.="" find="" full="" notes="" here.="" torchtext="" 0.9.0="" dataset="" api="" updates="" release,="" updating="" torchtext’s="" be="" compatible="" pytorch="" data="" utilities,="" such="" dataloader,="" deprecating="" custom="" abstractions="" field.="" updated="" datasets="" simple="" string-by-string="" iterators="" over="" data.="" guidance="" about="" migrating="" legacy="" use="" modern="" refer="" migration="" guide.="" text="" listed="" below="" been="" part="" work.="" examples="" how="" these="" datasets,="" end-to-end="" classification="" tutorial.="" language="" modeling:="" wikitext2,="" wikitext103,="" penntreebank,="" enwik9="" classification:="" ag_news,="" sogounews,="" dbpedia,="" yelpreviewpolarity,="" yelpreviewfull,="" yahooanswers,="" amazonreviewpolarity,="" amazonreviewfull,="" imdb="" sequence="" tagging:="" udpos,="" conll2000chunking="" translation:="" iwslt2016,="" iwslt2017="" question="" answer:="" squad1,="" squad2="" torchcsprng="" 0.2.0="" released="" august="" 2020,="" cuda="" extension="" provides="" cryptographically="" secure="" pseudorandom="" number="" generators="" pytorch.="" today,="" releasing="" designating="" library="" stable.="" includes="" encrypt="" decrypt="" aes128="" ecb="" ctr="" well="" 11="" windows="" support.="" reading,="" if="" you="" excited="" want="" participate="" future="" pytorch,="" encourage="" join="" discussion="" forums="" github="" issues.="" cheers!="" team="" "="">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="New PyTorch library releases including TorchVision Mobile, TorchAudio I/O, and more">
+<meta property="og:description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.8 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio as well as new version of TorchCSPRNG. These releases include a number of new features and improvements and, along with the PyTorch 1.8 release, provide a broad set of updates for the PyTorch community to build on and leverage.
+
+Some highlights include:
+
+  TorchVision - Added support for PyTorch Mobile including Detectron2Go (D2Go), auto-augmentation of data during training, on the fly type conversion, and AMP autocasting.
+  TorchAudio - Major improvements to I/O, including defaulting to sox_io backend and file-like object support. Added Kaldi Pitch feature and support for CMake based build allowing TorchAudio to better support no-Python environments.
+  TorchText - Updated the dataset loading API to be compatible with standard PyTorch data loading utilities.
+  TorchCSPRNG - Support for cryptographically secure pseudorandom number generators for PyTorch is now stable with new APIs for AES128 ECB/CTR and CUDA support on Windows.
+
+
+Please note that, starting in PyTorch 1.6, features are classified as Stable, Beta, and Prototype. Prototype features are not included as part of the binary distribution and are instead available through either building from source, using nightlies or via compiler flag. You can see the detailed announcement here.
+
+TorchVision 0.9.0
+[Stable] TorchVision Mobile: Operators, Android Binaries, and Tutorial
+We are excited to announce the first on-device support and binaries for a PyTorch domain library. We have seen significant appetite in both research and industry for on-device vision support to allow low latency, privacy friendly, and resource efficient mobile vision experiences. You can follow this new tutorial to build your own Android object detection app using TorchVision operators, D2Go, or your own custom operators and model.
+
+
+  
+
+
+[Stable] New Mobile models for Classification, Object Detection and Semantic Segmentation
+We have added support for the MobileNetV3 architecture and provided pre-trained weights for Classification, Object Detection and Segmentation. It is easy to get up and running with these models, just import and load them as you would any torchvision model:
+import torch
+import torchvision
+
+# Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Quantized Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.quantization.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Object Detection: Highly Accurate High Resolution Mobile Model
+x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_fpn(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Semantic Segmentation: Highly Accurate Mobile Model
+x = torch.rand(1, 3, 520, 520)
+m_segmenter = torchvision.models.segmentation.deeplabv3_mobilenet_v3_large(pretrained=True)
+m_segmenter.eval()
+predictions = m_segmenter(x)
+
+These models are highly competitive with TorchVision’s existing models on resource efficiency, speed, and accuracy. See our release notes for detailed performance metrics.
+
+[Stable] AutoAugment
+AutoAugment is a common Data Augmentation technique that can increase the accuracy of Scene Classification models. Though the data augmentation policies are directly linked to their trained dataset, empirical studies show that ImageNet policies provide significant improvements when applied to other datasets. We’ve implemented 3 policies learned on the following datasets: ImageNet, CIFA10 and SVHN. These can be used standalone or mixed-and-matched with existing transforms:
+from torchvision import transforms
+
+t = transforms.AutoAugment()
+transformed = t(image)
+
+
+transform=transforms.Compose([
+   transforms.Resize(256),
+   transforms.AutoAugment(),
+   transforms.ToTensor()])
+
+Other New Features for TorchVision
+
+  [Stable] All read and decode methods in the io.image package now support:
+    
+      Palette, Grayscale Alpha and RBG Alpha image types during PNG decoding
+      On-the-fly conversion of image from one type to the other during read
+    
+  
+  [Stable] WiderFace dataset
+  [Stable] Improved FasterRCNN speed and accuracy by introducing a score threshold on RPN
+  [Stable] Modulation input for DeformConv2D
+  [Stable] Option to write audio to a video file
+  [Stable] Utility to draw bounding boxes
+  [Beta] Autocast support in all Operators
+Find the full TorchVision release notes here.
+
+
+TorchAudio 0.8.0
+I/O Improvements
+We have continued our work from the previous release to improve TorchAudio’s I/O support, including:
+
+  [Stable] Changing the default backend to “sox_io” (for Linux/macOS), and updating the “soundfile” backend’s interface to align with that of “sox_io”. The legacy backend and interface are still accessible, though it is strongly discouraged to use them.
+  [Stable] File-like object support in both “sox_io” backend, “soundfile” backend and sox_effects.
+  [Stable] New options to change the format, encoding, and bits_per_sample when saving.
+  [Stable] Added GSM, HTK, AMB, AMR-NB and AMR-WB format support to the “sox_io” backend.
+  [Beta] A new functional.apply_codec function which can degrade audio data by applying audio codecs supported by “sox_io” backend in an in-memory fashion.
+Here are some examples of features landed in this release:
+
+
+# Load audio over HTTP
+with requests.get(URL, stream=True) as response:
+    waveform, sample_rate = torchaudio.load(response.raw)
+ 
+# Saving to Bytes buffer as 32-bit floating-point PCM
+buffer_ = io.BytesIO()
+torchaudio.save(
+    buffer_, waveform, sample_rate,
+    format=" wav",="" encoding="PCM_S" ,="" bits_per_sample="16)" #="" apply="" effects="" while="" loading="" audio="" from="" s3="" client="boto3.client('s3')" response="client.get_object(Bucket=S3_BUCKET," key="S3_KEY)" waveform,="" sample_rate="torchaudio.sox_effects.apply_effect_file(" response['body'],="" [["lowpass",="" "-1",="" "300"],="" ["rate",="" "8000"]])="" gsm="" codec="" to="" tensor="" encoded="torchaudio.functional.apply_codec(" sample_rate,="" format="gsm" )="" check="" out="" the="" revamped="" preprocessing="" tutorial,="" manipulation="" with="" torchaudio.="" [stable]="" switch="" cmake-based="" build="" in="" previous="" version="" of="" torchaudio,="" it="" was="" utilizing="" cmake="" third="" party="" dependencies.="" starting="" 0.8.0,="" torchaaudio="" uses="" its="" c++="" extension.="" this="" will="" open="" door="" integrate="" torchaudio="" non-python="" environments="" (such="" as="" applications="" and="" mobile).="" we="" continue="" working="" on="" adding="" example="" mobile="" integrations.="" [beta]="" improved="" new="" transforms="" have="" added="" two="" widely="" requested="" operators="" release:="" spectralcentroid="" transform="" kaldi="" pitch="" feature="" extraction="" (detailed="" “a="" algorithm="" tuned="" for="" automatic="" speech="" recognition”).="" we’ve="" also="" exposed="" a="" normalization="" method="" mel="" transforms,="" additional="" stft="" arguments="" spectrogram.="" would="" like="" ask="" our="" community="" raise="" requests="" core="" processing="" features="" these!="" contributions="" had="" more="" source="" release="" than="" ever="" before,="" including="" several="" completely="" features.="" extend="" sincere="" thanks="" community.="" please="" newly="" contributing.md="" ways="" contribute="" code,="" remember="" that="" reporting="" bugs="" requesting="" are="" just="" valuable.="" posting="" well-scoped="" work="" items="" issues="" labeled="" “help-wanted”="" “contributions-welcome”="" anyone="" who="" happy="" coach="" contributors="" through="" contribution="" process.="" find="" full="" notes="" here.="" torchtext="" 0.9.0="" dataset="" api="" updates="" release,="" updating="" torchtext’s="" be="" compatible="" pytorch="" data="" utilities,="" such="" dataloader,="" deprecating="" custom="" abstractions="" field.="" updated="" datasets="" simple="" string-by-string="" iterators="" over="" data.="" guidance="" about="" migrating="" legacy="" use="" modern="" refer="" migration="" guide.="" text="" listed="" below="" been="" part="" work.="" examples="" how="" these="" datasets,="" end-to-end="" classification="" tutorial.="" language="" modeling:="" wikitext2,="" wikitext103,="" penntreebank,="" enwik9="" classification:="" ag_news,="" sogounews,="" dbpedia,="" yelpreviewpolarity,="" yelpreviewfull,="" yahooanswers,="" amazonreviewpolarity,="" amazonreviewfull,="" imdb="" sequence="" tagging:="" udpos,="" conll2000chunking="" translation:="" iwslt2016,="" iwslt2017="" question="" answer:="" squad1,="" squad2="" torchcsprng="" 0.2.0="" released="" august="" 2020,="" cuda="" extension="" provides="" cryptographically="" secure="" pseudorandom="" number="" generators="" pytorch.="" today,="" releasing="" designating="" library="" stable.="" includes="" encrypt="" decrypt="" aes128="" ecb="" ctr="" well="" 11="" windows="" support.="" reading,="" if="" you="" excited="" want="" participate="" future="" pytorch,="" encourage="" join="" discussion="" forums="" github="" issues.="" cheers!="" team="" "="">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="New PyTorch library releases including TorchVision Mobile, TorchAudio I/O, and more">
+<meta name="twitter:description" content="Today, we are announcing updates to a number of PyTorch libraries, alongside the PyTorch 1.8 release. The updates include new releases for the domain libraries including TorchVision, TorchText and TorchAudio as well as new version of TorchCSPRNG. These releases include a number of new features and improvements and, along with the PyTorch 1.8 release, provide a broad set of updates for the PyTorch community to build on and leverage.
+
+Some highlights include:
+
+  TorchVision - Added support for PyTorch Mobile including Detectron2Go (D2Go), auto-augmentation of data during training, on the fly type conversion, and AMP autocasting.
+  TorchAudio - Major improvements to I/O, including defaulting to sox_io backend and file-like object support. Added Kaldi Pitch feature and support for CMake based build allowing TorchAudio to better support no-Python environments.
+  TorchText - Updated the dataset loading API to be compatible with standard PyTorch data loading utilities.
+  TorchCSPRNG - Support for cryptographically secure pseudorandom number generators for PyTorch is now stable with new APIs for AES128 ECB/CTR and CUDA support on Windows.
+
+
+Please note that, starting in PyTorch 1.6, features are classified as Stable, Beta, and Prototype. Prototype features are not included as part of the binary distribution and are instead available through either building from source, using nightlies or via compiler flag. You can see the detailed announcement here.
+
+TorchVision 0.9.0
+[Stable] TorchVision Mobile: Operators, Android Binaries, and Tutorial
+We are excited to announce the first on-device support and binaries for a PyTorch domain library. We have seen significant appetite in both research and industry for on-device vision support to allow low latency, privacy friendly, and resource efficient mobile vision experiences. You can follow this new tutorial to build your own Android object detection app using TorchVision operators, D2Go, or your own custom operators and model.
+
+
+  
+
+
+[Stable] New Mobile models for Classification, Object Detection and Semantic Segmentation
+We have added support for the MobileNetV3 architecture and provided pre-trained weights for Classification, Object Detection and Segmentation. It is easy to get up and running with these models, just import and load them as you would any torchvision model:
+import torch
+import torchvision
+
+# Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Quantized Classification
+x = torch.rand(1, 3, 224, 224)
+m_classifier = torchvision.models.quantization.mobilenet_v3_large(pretrained=True)
+m_classifier.eval()
+predictions = m_classifier(x)
+
+# Object Detection: Highly Accurate High Resolution Mobile Model
+x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
+m_detector = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_fpn(pretrained=True)
+m_detector.eval()
+predictions = m_detector(x)
+
+# Semantic Segmentation: Highly Accurate Mobile Model
+x = torch.rand(1, 3, 520, 520)
+m_segmenter = torchvision.models.segmentation.deeplabv3_mobilenet_v3_large(pretrained=True)
+m_segmenter.eval()
+predictions = m_segmenter(x)
+
+These models are highly competitive with TorchVision’s existing models on resource efficiency, speed, and accuracy. See our release notes for detailed performance metrics.
+
+[Stable] AutoAugment
+AutoAugment is a common Data Augmentation technique that can increase the accuracy of Scene Classification models. Though the data augmentation policies are directly linked to their trained dataset, empirical studies show that ImageNet policies provide significant improvements when applied to other datasets. We’ve implemented 3 policies learned on the following datasets: ImageNet, CIFA10 and SVHN. These can be used standalone or mixed-and-matched with existing transforms:
+from torchvision import transforms
+
+t = transforms.AutoAugment()
+transformed = t(image)
+
+
+transform=transforms.Compose([
+   transforms.Resize(256),
+   transforms.AutoAugment(),
+   transforms.ToTensor()])
+
+Other New Features for TorchVision
+
+  [Stable] All read and decode methods in the io.image package now support:
+    
+      Palette, Grayscale Alpha and RBG Alpha image types during PNG decoding
+      On-the-fly conversion of image from one type to the other during read
+    
+  
+  [Stable] WiderFace dataset
+  [Stable] Improved FasterRCNN speed and accuracy by introducing a score threshold on RPN
+  [Stable] Modulation input for DeformConv2D
+  [Stable] Option to write audio to a video file
+  [Stable] Utility to draw bounding boxes
+  [Beta] Autocast support in all Operators
+Find the full TorchVision release notes here.
+
+
+TorchAudio 0.8.0
+I/O Improvements
+We have continued our work from the previous release to improve TorchAudio’s I/O support, including:
+
+  [Stable] Changing the default backend to “sox_io” (for Linux/macOS), and updating the “soundfile” backend’s interface to align with that of “sox_io”. The legacy backend and interface are still accessible, though it is strongly discouraged to use them.
+  [Stable] File-like object support in both “sox_io” backend, “soundfile” backend and sox_effects.
+  [Stable] New options to change the format, encoding, and bits_per_sample when saving.
+  [Stable] Added GSM, HTK, AMB, AMR-NB and AMR-WB format support to the “sox_io” backend.
+  [Beta] A new functional.apply_codec function which can degrade audio data by applying audio codecs supported by “sox_io” backend in an in-memory fashion.
+Here are some examples of features landed in this release:
+
+
+# Load audio over HTTP
+with requests.get(URL, stream=True) as response:
+    waveform, sample_rate = torchaudio.load(response.raw)
+ 
+# Saving to Bytes buffer as 32-bit floating-point PCM
+buffer_ = io.BytesIO()
+torchaudio.save(
+    buffer_, waveform, sample_rate,
+    format=" wav",="" encoding="PCM_S" ,="" bits_per_sample="16)" #="" apply="" effects="" while="" loading="" audio="" from="" s3="" client="boto3.client('s3')" response="client.get_object(Bucket=S3_BUCKET," key="S3_KEY)" waveform,="" sample_rate="torchaudio.sox_effects.apply_effect_file(" response['body'],="" [["lowpass",="" "-1",="" "300"],="" ["rate",="" "8000"]])="" gsm="" codec="" to="" tensor="" encoded="torchaudio.functional.apply_codec(" sample_rate,="" format="gsm" )="" check="" out="" the="" revamped="" preprocessing="" tutorial,="" manipulation="" with="" torchaudio.="" [stable]="" switch="" cmake-based="" build="" in="" previous="" version="" of="" torchaudio,="" it="" was="" utilizing="" cmake="" third="" party="" dependencies.="" starting="" 0.8.0,="" torchaaudio="" uses="" its="" c++="" extension.="" this="" will="" open="" door="" integrate="" torchaudio="" non-python="" environments="" (such="" as="" applications="" and="" mobile).="" we="" continue="" working="" on="" adding="" example="" mobile="" integrations.="" [beta]="" improved="" new="" transforms="" have="" added="" two="" widely="" requested="" operators="" release:="" spectralcentroid="" transform="" kaldi="" pitch="" feature="" extraction="" (detailed="" “a="" algorithm="" tuned="" for="" automatic="" speech="" recognition”).="" we’ve="" also="" exposed="" a="" normalization="" method="" mel="" transforms,="" additional="" stft="" arguments="" spectrogram.="" would="" like="" ask="" our="" community="" raise="" requests="" core="" processing="" features="" these!="" contributions="" had="" more="" source="" release="" than="" ever="" before,="" including="" several="" completely="" features.="" extend="" sincere="" thanks="" community.="" please="" newly="" contributing.md="" ways="" contribute="" code,="" remember="" that="" reporting="" bugs="" requesting="" are="" just="" valuable.="" posting="" well-scoped="" work="" items="" issues="" labeled="" “help-wanted”="" “contributions-welcome”="" anyone="" who="" happy="" coach="" contributors="" through="" contribution="" process.="" find="" full="" notes="" here.="" torchtext="" 0.9.0="" dataset="" api="" updates="" release,="" updating="" torchtext’s="" be="" compatible="" pytorch="" data="" utilities,="" such="" dataloader,="" deprecating="" custom="" abstractions="" field.="" updated="" datasets="" simple="" string-by-string="" iterators="" over="" data.="" guidance="" about="" migrating="" legacy="" use="" modern="" refer="" migration="" guide.="" text="" listed="" below="" been="" part="" work.="" examples="" how="" these="" datasets,="" end-to-end="" classification="" tutorial.="" language="" modeling:="" wikitext2,="" wikitext103,="" penntreebank,="" enwik9="" classification:="" ag_news,="" sogounews,="" dbpedia,="" yelpreviewpolarity,="" yelpreviewfull,="" yahooanswers,="" amazonreviewpolarity,="" amazonreviewfull,="" imdb="" sequence="" tagging:="" udpos,="" conll2000chunking="" translation:="" iwslt2016,="" iwslt2017="" question="" answer:="" squad1,="" squad2="" torchcsprng="" 0.2.0="" released="" august="" 2020,="" cuda="" extension="" provides="" cryptographically="" secure="" pseudorandom="" number="" generators="" pytorch.="" today,="" releasing="" designating="" library="" stable.="" includes="" encrypt="" decrypt="" aes128="" ecb="" ctr="" well="" 11="" windows="" support.="" reading,="" if="" you="" excited="" want="" participate="" future="" pytorch,="" encourage="" join="" discussion="" forums="" github="" issues.="" cheers!="" team="" "="">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">
+          Edge 
+        </a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年3月4日</p>
+            <h1>
+                <a class="blog-title">新的 PyTorch 库发布，包括 TorchVision Mobile、TorchAudio I/O 等</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 PyTorch 团队</p>
+                    <p>今天，我们宣布了对多个 PyTorch 库的更新，同时发布了 <a href="https://pytorch.org/blog/pytorch-1.8-released">PyTorch 1.8 版本 </a>。这些更新包括领域库的新版本，如 TorchVision、TorchText 和 TorchAudio，以及 TorchCSPRNG 的新版本。这些发布包括许多新功能和改进，与 PyTorch 1.8 版本一起，为 PyTorch 社区提供了广泛的新功能，以便构建和利用。</p>
+
+<p>以下是一些亮点：</p>
+<ul>
+  <li><strong>TorchVision</strong> - 增加了 PyTorch Mobile 的支持，包括 <a href="https://ai.facebook.com/blog/d2go-brings-detectron2-to-mobile">Detectron2Go</a>（D2Go），训练期间的数据自动增强，即时类型转换，以及 <a href="https://pytorch.org/docs/stable/amp.html">AMP 自动转换 </a>。</li>
+  <li><strong>TorchAudio</strong> - 对 I/O 进行了重大改进，包括默认使用 sox_io 后端和文件对象支持。增加了 Kaldi 音高特征，并支持基于 CMake 的构建，使 TorchAudio 更好地支持无 Python 环境。</li>
+  <li><strong>TorchText</strong> - 更新了数据集加载 API，使其与标准的 PyTorch 数据加载工具兼容。</li>
+  <li><strong>torchCSPRNG</strong> - PyTorch 对加密安全伪随机数生成器的支持现已稳定，新增了 AES128 ECB/CTR API 以及 Windows 上的 CUDA 支持。</li>
+</ul>
+
+<p>请注意，从 PyTorch 1.6 版本开始，功能被分为稳定版、测试版和原型版。原型功能不包括在二进制发行版中，而是可以通过从源代码构建、使用夜间版本或通过编译器标志来获取。您可以在此<a href="https://pytorch.org/blog/pytorch-feature-classification-changes/">处</a>查看详细公告。</p>
+
+<h1 id="torchvision-090">TorchVision 0.9.0</h1>
+<h3 id="stable-torchvision-mobile-operators-android-binaries-and-tutorial">[稳定版] TorchVision 移动：算子、Android 二进制文件和教程</h3>
+<p>我们非常高兴地宣布，PyTorch 领域库的首个设备端支持和二进制文件。我们观察到，在研究和工业界都存在着对设备端视觉支持的强烈需求，以实现低延迟、隐私友好和资源高效的移动视觉体验。您可以参考这个<a href="https://github.com/pytorch/android-demo-app/tree/master/D2Go">新教程</a>来构建自己的 Android 目标检测应用，使用 TorchVision 操作符、D2Go 或您自己的自定义操作符和模型。</p>
+
+<div class="text-center">
+  <img src="http://localhost:4000/assets/images/tochvisionmobile.png" width="30%">
+</div>
+
+<h3 id="stable-new-mobile-models-for-classification-object-detection-and-semantic-segmentation">[稳定版] 新增分类、目标检测和语义分割的移动模型</h3>
+<p>我们已添加对 MobileNetV3 架构的支持，并提供了用于分类、目标检测和分割的预训练权重。使用这些模型非常简单，只需像导入和加载任何 <code class="language-plaintext highlighter-rouge">torchvision</code> 模型一样导入和加载它们即可：</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torchvision</span>
+
+<span class="c1"># Classification
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">)</span>
+<span class="n">m_classifier</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">mobilenet_v3_large</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_classifier</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_classifier</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="c1"># Quantized Classification
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">)</span>
+<span class="n">m_classifier</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">quantization</span><span class="p">.</span><span class="n">mobilenet_v3_large</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_classifier</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_classifier</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="c1"># Object Detection: Highly Accurate High Resolution Mobile Model
+</span><span class="n">x</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">300</span><span class="p">,</span> <span class="mi">400</span><span class="p">),</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">500</span><span class="p">,</span> <span class="mi">400</span><span class="p">)]</span>
+<span class="n">m_detector</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">detection</span><span class="p">.</span><span class="n">fasterrcnn_mobilenet_v3_large_fpn</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_detector</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_detector</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+<span class="c1"># Semantic Segmentation: Highly Accurate Mobile Model
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">520</span><span class="p">,</span> <span class="mi">520</span><span class="p">)</span>
+<span class="n">m_segmenter</span> <span class="o">=</span> <span class="n">torchvision</span><span class="p">.</span><span class="n">models</span><span class="p">.</span><span class="n">segmentation</span><span class="p">.</span><span class="n">deeplabv3_mobilenet_v3_large</span><span class="p">(</span><span class="n">pretrained</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+<span class="n">m_segmenter</span><span class="p">.</span><span class="nb">eval</span><span class="p">()</span>
+<span class="n">predictions</span> <span class="o">=</span> <span class="n">m_segmenter</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</code></pre></div></div>
+<p>这些模型在资源效率、速度和准确性方面与 TorchVision 现有模型具有高度竞争力。请参阅我们的<a href="https://github.com/pytorch/vision/releases">发布说明</a>以获取详细的性能指标。</p>
+
+<h3 id="stable-autoaugment">[稳定] 自动增强</h3>
+<p><a href="https://arxiv.org/pdf/1805.09501.pdf">自动增强 </a> 是一种常见的数据增强技术，可以提高场景分类模型的准确率。尽管数据增强策略与它们的训练数据集直接相关，但经验研究表明，将 ImageNet 策略应用于其他数据集时，可以带来显著的改进。我们实现了在以下数据集上学习的 3 种策略：ImageNet、CIFA10 和 SVHN。这些策略可以单独使用，也可以与现有的转换混合使用：</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torchvision</span> <span class="kn">import</span> <span class="n">transforms</span>
+
+<span class="n">t</span> <span class="o">=</span> <span class="n">transforms</span><span class="p">.</span><span class="n">AutoAugment</span><span class="p">()</span>
+<span class="n">transformed</span> <span class="o">=</span> <span class="n">t</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+
+
+<span class="n">transform</span><span class="o">=</span><span class="n">transforms</span><span class="p">.</span><span class="n">Compose</span><span class="p">([</span>
+   <span class="n">transforms</span><span class="p">.</span><span class="n">Resize</span><span class="p">(</span><span class="mi">256</span><span class="p">),</span>
+   <span class="n">transforms</span><span class="p">.</span><span class="n">AutoAugment</span><span class="p">(),</span>
+   <span class="n">transforms</span><span class="p">.</span><span class="n">ToTensor</span><span class="p">()])</span>
+</code></pre></div></div>
+<h3 id="other-new-features-for-torchvision">TorchVision 的新特性</h3>
+<ul>
+  <li>[稳定] io.image 包中的所有读取和解码方法现在都支持：<ul>
+      <li>PNG 解码过程中的调色板、灰度 Alpha 和 RGB Alpha 图像类型</li>
+      <li>读取过程中动态将图像从一种类型转换为另一种类型</li>
+    </ul>
+  </li>
+  <li>[稳定] WiderFace 数据集</li>
+  <li>[稳定] 通过在 RPN 上引入分数阈值来提高 FasterRCNN 的速度和准确性</li>
+  <li>[稳定] DeformConv2D 的调制输入</li>
+  <li>[稳定] 可将音频写入视频文件选项</li>
+  <li>[稳定] 绘制边界框的实用工具</li>
+  <li>[测试版] 所有操作符支持自动类型转换，请查看<a href="https://github.com/pytorch/vision/releases">完整的 TorchVision 发布说明 </a>。</li>
+</ul>
+
+<h1 id="torchaudio-080">TorchAudio 0.8.0</h1>
+<h3 id="io-improvements">I/O 优化</h3>
+<p>我们继续从上一个版本的工作中改进了 TorchAudio 的 I/O 支持，包括：</p>
+<ul>
+  <li>[稳定] 将默认后端更改为“sox_io”（适用于 Linux/macOS），并更新“soundfile”后端接口以与“sox_io”接口保持一致。虽然不建议使用，但仍然可以访问旧版后端和接口。</li>
+  <li>[稳定] 在“sox_io”后端、“soundfile”后端和 sox_effects 中支持文件-like 对象。</li>
+  <li>[稳定] 新增选项以更改保存时的格式、编码和 bits_per_sample。</li>
+  <li>[稳定] 在“sox_io”后端添加了对 GSM、HTK、AMB、AMR-NB 和 AMR-WB 格式的支持。</li>
+  <li>[测试版] 新增 <code class="language-plaintext highlighter-rouge">functional.apply_codec</code> 函数，该函数可以通过在内存中应用“sox_io”后端支持的音频编解码器来降低音频数据质量。以下是本版本中引入的一些新功能示例：</li>
+</ul>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Load audio over HTTP
+</span><span class="k">with</span> <span class="n">requests</span><span class="p">.</span><span class="n">get</span><span class="p">(</span><span class="n">URL</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">response</span><span class="p">:</span>
+    <span class="n">waveform</span><span class="p">,</span> <span class="n">sample_rate</span> <span class="o">=</span> <span class="n">torchaudio</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="n">raw</span><span class="p">)</span>
+ 
+<span class="c1"># Saving to Bytes buffer as 32-bit floating-point PCM
+</span><span class="n">buffer_</span> <span class="o">=</span> <span class="n">io</span><span class="p">.</span><span class="n">BytesIO</span><span class="p">()</span>
+<span class="n">torchaudio</span><span class="p">.</span><span class="n">save</span><span class="p">(</span>
+    <span class="n">buffer_</span><span class="p">,</span> <span class="n">waveform</span><span class="p">,</span> <span class="n">sample_rate</span><span class="p">,</span>
+    <span class="nb">format</span><span class="o">=</span><span class="s">"wav"</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s">"PCM_S"</span><span class="p">,</span> <span class="n">bits_per_sample</span><span class="o">=</span><span class="mi">16</span><span class="p">)</span>
+ 
+<span class="c1"># Apply effects while loading audio from S3
+</span><span class="n">client</span> <span class="o">=</span> <span class="n">boto3</span><span class="p">.</span><span class="n">client</span><span class="p">(</span><span class="s">'s3'</span><span class="p">)</span>
+<span class="n">response</span> <span class="o">=</span> <span class="n">client</span><span class="p">.</span><span class="n">get_object</span><span class="p">(</span><span class="n">Bucket</span><span class="o">=</span><span class="n">S3_BUCKET</span><span class="p">,</span> <span class="n">Key</span><span class="o">=</span><span class="n">S3_KEY</span><span class="p">)</span>
+<span class="n">waveform</span><span class="p">,</span> <span class="n">sample_rate</span> <span class="o">=</span> <span class="n">torchaudio</span><span class="p">.</span><span class="n">sox_effects</span><span class="p">.</span><span class="n">apply_effect_file</span><span class="p">(</span>
+    <span class="n">response</span><span class="p">[</span><span class="s">'Body'</span><span class="p">],</span>
+    <span class="p">[[</span><span class="s">"lowpass"</span><span class="p">,</span> <span class="s">"-1"</span><span class="p">,</span> <span class="s">"300"</span><span class="p">],</span> <span class="p">[</span><span class="s">"rate"</span><span class="p">,</span> <span class="s">"8000"</span><span class="p">]])</span>
+ 
+<span class="c1"># Apply GSM codec to Tensor
+</span><span class="n">encoded</span> <span class="o">=</span> <span class="n">torchaudio</span><span class="p">.</span><span class="n">functional</span><span class="p">.</span><span class="n">apply_codec</span><span class="p">(</span>
+    <span class="n">waveform</span><span class="p">,</span> <span class="n">sample_rate</span><span class="p">,</span> <span class="nb">format</span><span class="o">=</span><span class="s">"gsm"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>查看全新改版的音频预处理教程，<a href="https://maskerprc.github.io/tutorials/beginner/audio_preprocessing_tutorial.html"> 使用 TorchAudio 进行音频处理 </a>。</p>
+
+<h3 id="stable-switch-to-cmake-based-build">[稳定版] 切换到基于 CMake 的构建</h3>
+<p>在 TorchAudio 的上一版本中，它使用 CMake 构建第三方依赖项。从 0.8.0 版本开始，TorchAudio 使用 CMake 构建其 C++扩展。这将打开将 TorchAudio 集成到非 Python 环境（如 C++应用程序和移动设备）的大门。我们将继续努力添加示例应用程序和移动集成。</p>
+
+<h3 id="beta-improved-and-new-audio-transforms">[测试版] 改进和新音频转换</h3>
+<p>我们在本版本中添加了两个广受欢迎的操作符：频谱质心变换和 Kaldi 音高特征提取（详情请见 <a href="https://ieeexplore.ieee.org/document/6854049">“针对自动语音识别调优的音高提取算法”</a>）。我们还向梅尔变换公开了归一化方法，并向频谱图添加了额外的 STFT 参数。我们希望我们的社区继续<a href="https://github.com/pytorch/audio/issues/new?assignees=&amp;labels=&amp;template=feature-request.md">提出核心音频处理功能等特性请求 </a>！</p>
+
+<h3 id="community-contributions">社区贡献</h3>
+<p>在本版本中，我们比以往任何时候都收到了来自开源社区的更多贡献，包括几个全新的功能。我们衷心感谢社区。请查看新添加的 <a href="https://github.com/pytorch/audio/blob/master/CONTRIBUTING.md">CONTRIBUTING.md</a>，了解如何贡献代码，并记住报告错误和请求功能同样有价值。我们将继续发布范围明确的任务项作为标记为“help-wanted”和“contributions-welcome”的问题，供任何希望贡献代码的人使用，并乐于指导新贡献者通过贡献过程。</p>
+
+<p>在<a href="https://github.com/pytorch/audio/releases">这里</a>找到完整的 TorchAudio 发布说明。</p>
+
+<h1 id="torchtext-090">火炬文本 0.9.0</h1>
+<h3 id="beta-dataset-api-updates">[Beta] 数据集 API 更新</h3>
+<p>在本次版本中，我们更新了 TorchText 的数据集 API，使其与 PyTorch 数据工具（如 DataLoader）兼容，并弃用了 TorchText 的自定义数据抽象，如 <code class="language-plaintext highlighter-rouge">Field</code>。更新后的数据集是简单的字符串迭代器。有关从旧抽象迁移到使用现代 PyTorch 数据工具的指南，请参阅我们的<a href="https://github.com/pytorch/text/blob/master/examples/legacy_tutorial/migration_tutorial.ipynb">迁移指南 </a>。</p>
+
+<p>以下文本数据集作为本工作的部分进行了更新。有关如何使用这些数据集的示例，请参阅我们的<a href="https://maskerprc.github.io/tutorials/beginner/text_sentiment_ngrams_tutorial.html">端到端文本分类教程 </a>。</p>
+<ul>
+  <li><strong>语言建模：</strong> WikiText2, WikiText103, PennTreebank, EnWik9</li>
+  <li><strong>文本分类：</strong> AG_NEWS, SogouNews, DBpedia, YelpReviewPolarity, YelpReviewFull, YahooAnswers, AmazonReviewPolarity, AmazonReviewFull, IMDB</li>
+  <li><strong>序列标注：</strong> UDPOS, CoNLL2000Chunking</li>
+  <li><strong>翻译：</strong> IWSLT2016, IWSLT2017</li>
+  <li><strong>问答：</strong> SQuAD1, SQuAD2</li>
+</ul>
+
+<p>在<a href="https://github.com/pytorch/text/releases">这里</a>找到完整的 TorchText 发布说明。</p>
+
+<h1 id="stable-torchcsprng-020">[稳定版] TorchCSPRNG 0.2.0</h1>
+<p>我们于 2020 年 8 月<a href="https://pytorch.org/blog/torchcsprng-release-blog/">发布了 </a>TorchCSPRNG，这是一个 PyTorch 的 C++/CUDA 扩展，为 PyTorch 提供加密安全的伪随机数生成器。今天，我们发布了 0.2.0 版本，并将该库定为稳定版。此版本包括用于加密/解密的新 API，支持 AES128 ECB/CTR，以及 CUDA 11 和 Windows CUDA 支持。</p>
+
+<p>在这里找到完整的 TorchCSPRNG 发布说明 <a href="https://github.com/pytorch/csprng/releases/"> 这里 </a>.</p>
+
+<p>感谢阅读，如果您对这些更新感到兴奋并希望参与 PyTorch 的未来，我们鼓励您加入 <a href="https://discuss.pytorch.org/"> 讨论论坛 </a> 和 <a href="https://github.com/pytorch">GitHub 上的公开问题 </a>。</p>
+
+<p>干杯！</p>
+
+<p><strong><em>PyTorch 团队</em></strong></p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手入门 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>Edge</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客 &amp; 新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

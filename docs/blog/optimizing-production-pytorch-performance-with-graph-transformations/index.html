@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Optimizing Production PyTorch Models’ Performance with Graph Transformations | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="1. Introduction
+
+PyTorch supports two execution modes [1]: eager mode and graph mode. In eager mode, operators in a model are immediately executed as they are encountered. In contrast, in graph mode, operators are first synthesized into a graph, which will then be compiled and executed as a whole. Eager mode is easier to use, more suitable for ML researchers, and hence is the default mode of execution. On the other hand, graph mode typically delivers higher performance and hence is heavily used in production.
+
+Specifically, graph mode enables operator fusion [2], wherein one operator is merged with another to reduce/localize memory reads as well as total kernel launch overhead. Fusion can be horizontal—taking a single operation (e.g., BatchNorm) that is independently applied to many operands and merging those operands into an array; and vertical—merging a kernel with another kernel that consumes the output of the first kernel (e.g., Convolution followed by ReLU).
+
+Torch.FX [3, 4] (abbreviated as FX) is a publicly available toolkit as part of the PyTorch package that supports graph mode execution. In particular, it (1) captures the graph from a PyTorch program and (2) allows developers to write transformations on the captured graph. It is used inside Meta to optimize the training throughput of production models. By introducing a number of FX-based optimizations developed at Meta, we demonstrate the approach of using graph transformation to optimize PyTorch’s performance for production.
+
+2. Background
+
+Embedding tables are ubiquitous in recommendation systems. Section 3 will discuss three FX transformations that optimize accesses to embedding tables. In this section, we provide some background on FX (Section 2.1) and embedding tables (Section 2.2).
+
+2.1 FX
+
+Figure 1 is a simple example adopted from [3] which illustrates using FX to transform a PyTorch program. It contains three steps: (1) capturing the graph from a program, (2) modifying the graph (in this example, all uses of RELU are replaced by GELU), and (3) generating a new program from the modified graph.
+
+
+
+
+
+Figure 1: A FX example which replaces all uses of RELU by GELU in a PyTorch module.
+
+The FX API [4] provides many more functionalities for inspecting and transforming PyTorch program graphs.
+
+2.2 Embedding Tables
+
+
+
+
+
+Figure 2: Illustration of an embedding table for a sparse feature with batch size = 1
+
+In a recommendation system, sparse features (e.g., User ID, Story ID) are represented by embedding tables. An embedding table E is an HxD matrix, where H is the hash size, D is the embedding dimension. Each row of E is a vector of floats. Feature hashing [5] is used to map a sparse feature to a list of indices to E, say [S1,S2, …, Sk], where 0<=Si<H. Its output value is computed as f(E[S1], E[S2], …, E[Sk]), where E[Si] is the vector at row Si, and f is called the pooling function, which is typically one of the following functions: sum, average, maximum. See Figure 2 for an illustration.
+
+To fully utilize the GPU, sparse features are usually processed in a batch. Each entity in a batch has its own list of indices. If a batch has B entities, a naive representation has B lists of indices. A more compact representation is to combine the B lists of indices into a single list of indices and add a list of the lengths of indices (one length for each entity in the batch). For example, if a batch has 3 entities whose lists of indices are as follows:
+
+
+  Entity 1: indices = [10, 20]
+  Entity 2: indices = [5, 9, 77, 81]
+  Entity 3: indices = [15, 20, 45]
+
+
+Then the indices and lengths for the entire batch will be:
+
+
+  Indices = [10, 20, 5, 9, 77, 81, 15, 20, 45]
+  Lengths = [2, 4, 3]
+
+
+And the output of the embedding table lookup for the whole batch is a BxD matrix.
+
+3. Three FX Transformations
+
+We have developed three FX transformations that accelerate accesses to embedding tables. Section 3.1 discusses a transformation that combines multiple small input tensors into a single big tensor; Section 3.2 a transformation that fuses multiple, parallel compute chains into a single compute chain; and Section 3.3 a transformation that overlaps communication with computation.
+
+3.1 Combining Input Sparse Features
+
+Recall that an input sparse feature in a batch is represented by two lists: a list of indices and a list of B lengths, where B is the batch size. In PyTorch, these two lists are implemented as two tensors. When a PyTorch model is run on a GPU, embedding tables are commonly stored in the GPU memory (which is closer to the GPU and has much higher read/write bandwidth than the CPU memory). To use an input sparse feature, its two tensors need to be first copied from CPU to GPU. Nevertheless, per host-to-device memory copying requires a kernel launch, which is relatively expensive compared to the actual data transfer time. If a model uses many input sparse features, this copying could become a performance bottleneck (e.g., 1000 input sparse features would require copying 2000 tensors from host to device).
+
+An optimization that reduces the number of host-to-device memcpy is to combine multiple input sparse features before sending them to the device. For instance, given the following three input features:
+
+
+  Feature_A: indices = [106, 211, 7], lengths = [2, 1]
+  Feature_B: indices = [52, 498, 616, 870, 1013], lengths = [3, 2]
+  Feature_C: indices = [2011, 19, 351, 790], lengths = [1, 3]
+
+
+The combined form is:
+
+
+  Features_A_B_C: indices = [106, 211, 7, 52, 498, 616, 870, 1013, 2011, 19, 351, 790], lengths = [2, 1, 3, 2, 1, 3]
+
+
+So, instead of copying 3x2=6 tensors from host to device, we only need to copy 2 tensors.
+
+Figure 3(b) describes an implementation of this optimization, which has two components:
+
+
+  On the CPU side: The input pipeline is modified to combine all the indices of sparse features into a single tensor and similarly all the lengths into another tensor. Then the two tensors are copied to the GPU.
+  On the GPU side: Using FX, we insert a Permute_and_Split op into the model graph to recover the indices and lengths tensors of individual features from the combined tensors, and route them to the corresponding nodes downstream.
+
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 3: Combining input sparse features
+
+3.2 Horizontal fusion of computation chains started with accesses to embedding tables
+
+In a production model, it is fairly common to have 10s of embedding tables residing on each GPU. For performance reasons, lookups to these tables are grouped together so that their outputs are concatenated in a single big tensor (see the red part in Figure 4(a)). To apply computations to individual feature outputs, a Split op is used to divide the big tensors into N smaller tensors (where N is the number of features) and then the desired computations are applied to each tensor. This is shown in Figure 4(a), where the computation applied to each feature output O is Tanh(LayerNorm(O)). All the computation results are concatenated back to a big tensor, which is then passed to downstream ops (Op1 in Figure 4(a)).
+
+The main runtime cost here is the GPU kernel launch overhead. For instance, the number of GPU kernel launches in Figure 4(a) is 2*N + 3 (each oval in the figure is a GPU kernel). This could become a performance issue because execution times of LayerNorm and Tanh on the GPU are short compared to their kernel launch times. In addition, the Split op may create an extra copy of the embedding output tensor, consuming additional GPU memory.
+
+We use FX to implement an optimization called horizontal fusion which dramatically reduces the number of GPU kernel launches (in this example, the optimized number of GPU kernel launches is 5, see Figure 4(b)). Instead of doing an explicit Split, we use the Add_middle_dim op to reshape the 2D embedding tensor of shape (B, NxD) to a 3D tensor of shape (B, N, D). Then a single LayerNorm is applied to the last dimension of it. Then a single Tanh is applied to the result of the LayerNorm. At the end, we use the Remove_middle_dim op to reshape the Tanh’s result back to a 2D tensor. In addition, since Add_middle_dim and Remove_middle_dim only reshape the tensor without creating an extra copy, the amount of GPU memory consumption could be reduced as well.
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 4: Horizontal fusion
+
+3.3 Overlapping Computation with Communication
+
+Training of a production recommendation model is typically done on a distributed GPU system. Since the capacity of the device memory per GPU is not big enough to hold all the embedding tables in the model, they need to be distributed among the GPUs.
+
+Within a training step, a GPU needs to read/write feature values from/to the embedding tables on the other GPUs. This is known as all-to-all communication [6] and can be a major performance bottleneck.
+
+We use FX to implement a transformation that can overlap computation with all-to-all communication. Figure 5(a) shows the example of a model graph which has embedding table accesses (EmbeddingAllToAll) and other ops. Without any optimization, they are sequentially executed on a GPU stream, as shown in Figure 5(b). Using FX, we break EmbeddingAllToAll into EmbeddingAllToAll_Request and EmbeddingAllToAll_Wait, and schedule independent ops in between them.
+
+
+
+
+
+(a) Model graph
+
+
+
+
+
+(b) Original execution order
+
+
+
+
+
+(c)Optimized execution order
+
+Figure 5: Overlapping Computation with Communication
+
+3.4 Summary
+
+Table 1 summarizes the optimizations discussed in this section and the corresponding performance bottlenecks addressed.
+
+
+  
+   Optimization
+   
+   Performance Bottleneck Addressed
+   
+  
+  
+   Combining Input Sparse Features
+   
+   Host-to-device memory copy
+   
+  
+  
+   Horizontal fusion
+   
+   GPU kernel launch overhead
+   
+  
+  
+   Overlapping Computation with Communication
+   
+   Embedding all-to-all access time
+   
+  
+
+
+Table 1: Summary of the optimizations and the performance bottlenecks addressed
+
+We have also developed other FX transformations which are not discussed in this section due to space limitations.
+
+To discover which models would benefit from these transformations, we analyzed the performance data collected by MAIProf [7] from the models that run at Meta’s data centers. Altogether, these transformations provide up to 2-3x of speedups compared to eager mode on a set of production models.
+
+4. Concluding Remarks
+
+The graph mode in PyTorch is preferred over the eager mode for production use for performance reasons. FX is a powerful tool for capturing and optimizing the graph of a PyTorch program. We demonstrate three FX transformations that are used to optimize production recommendation models inside Meta. We hope that this blog can motivate other PyTorch model developers to use graph transformations to boost their models’ performance.
+
+References
+
+[1] End-to-end Machine Learning Framework
+
+[2] DNNFusion: Accelerating Deep Neural Networks Execution with Advanced Operator Fusion
+
+[3] Torch.FX: Practical Program Capture and Transformation for Deep Learning In Python, MLSys 2022.
+
+[4] Torch.fx—PyTorch 1.12 documentation
+
+[5] Feature Hashing for Large Scale Multitask Learning
+
+[6] NVIDIA Collective Communication Library Documentation
+
+[7] Performance Debugging of Production PyTorch Models at Meta
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Optimizing Production PyTorch Models’ Performance with Graph Transformations">
+<meta property="og:description" content="1. Introduction
+
+PyTorch supports two execution modes [1]: eager mode and graph mode. In eager mode, operators in a model are immediately executed as they are encountered. In contrast, in graph mode, operators are first synthesized into a graph, which will then be compiled and executed as a whole. Eager mode is easier to use, more suitable for ML researchers, and hence is the default mode of execution. On the other hand, graph mode typically delivers higher performance and hence is heavily used in production.
+
+Specifically, graph mode enables operator fusion [2], wherein one operator is merged with another to reduce/localize memory reads as well as total kernel launch overhead. Fusion can be horizontal—taking a single operation (e.g., BatchNorm) that is independently applied to many operands and merging those operands into an array; and vertical—merging a kernel with another kernel that consumes the output of the first kernel (e.g., Convolution followed by ReLU).
+
+Torch.FX [3, 4] (abbreviated as FX) is a publicly available toolkit as part of the PyTorch package that supports graph mode execution. In particular, it (1) captures the graph from a PyTorch program and (2) allows developers to write transformations on the captured graph. It is used inside Meta to optimize the training throughput of production models. By introducing a number of FX-based optimizations developed at Meta, we demonstrate the approach of using graph transformation to optimize PyTorch’s performance for production.
+
+2. Background
+
+Embedding tables are ubiquitous in recommendation systems. Section 3 will discuss three FX transformations that optimize accesses to embedding tables. In this section, we provide some background on FX (Section 2.1) and embedding tables (Section 2.2).
+
+2.1 FX
+
+Figure 1 is a simple example adopted from [3] which illustrates using FX to transform a PyTorch program. It contains three steps: (1) capturing the graph from a program, (2) modifying the graph (in this example, all uses of RELU are replaced by GELU), and (3) generating a new program from the modified graph.
+
+
+
+
+
+Figure 1: A FX example which replaces all uses of RELU by GELU in a PyTorch module.
+
+The FX API [4] provides many more functionalities for inspecting and transforming PyTorch program graphs.
+
+2.2 Embedding Tables
+
+
+
+
+
+Figure 2: Illustration of an embedding table for a sparse feature with batch size = 1
+
+In a recommendation system, sparse features (e.g., User ID, Story ID) are represented by embedding tables. An embedding table E is an HxD matrix, where H is the hash size, D is the embedding dimension. Each row of E is a vector of floats. Feature hashing [5] is used to map a sparse feature to a list of indices to E, say [S1,S2, …, Sk], where 0<=Si<H. Its output value is computed as f(E[S1], E[S2], …, E[Sk]), where E[Si] is the vector at row Si, and f is called the pooling function, which is typically one of the following functions: sum, average, maximum. See Figure 2 for an illustration.
+
+To fully utilize the GPU, sparse features are usually processed in a batch. Each entity in a batch has its own list of indices. If a batch has B entities, a naive representation has B lists of indices. A more compact representation is to combine the B lists of indices into a single list of indices and add a list of the lengths of indices (one length for each entity in the batch). For example, if a batch has 3 entities whose lists of indices are as follows:
+
+
+  Entity 1: indices = [10, 20]
+  Entity 2: indices = [5, 9, 77, 81]
+  Entity 3: indices = [15, 20, 45]
+
+
+Then the indices and lengths for the entire batch will be:
+
+
+  Indices = [10, 20, 5, 9, 77, 81, 15, 20, 45]
+  Lengths = [2, 4, 3]
+
+
+And the output of the embedding table lookup for the whole batch is a BxD matrix.
+
+3. Three FX Transformations
+
+We have developed three FX transformations that accelerate accesses to embedding tables. Section 3.1 discusses a transformation that combines multiple small input tensors into a single big tensor; Section 3.2 a transformation that fuses multiple, parallel compute chains into a single compute chain; and Section 3.3 a transformation that overlaps communication with computation.
+
+3.1 Combining Input Sparse Features
+
+Recall that an input sparse feature in a batch is represented by two lists: a list of indices and a list of B lengths, where B is the batch size. In PyTorch, these two lists are implemented as two tensors. When a PyTorch model is run on a GPU, embedding tables are commonly stored in the GPU memory (which is closer to the GPU and has much higher read/write bandwidth than the CPU memory). To use an input sparse feature, its two tensors need to be first copied from CPU to GPU. Nevertheless, per host-to-device memory copying requires a kernel launch, which is relatively expensive compared to the actual data transfer time. If a model uses many input sparse features, this copying could become a performance bottleneck (e.g., 1000 input sparse features would require copying 2000 tensors from host to device).
+
+An optimization that reduces the number of host-to-device memcpy is to combine multiple input sparse features before sending them to the device. For instance, given the following three input features:
+
+
+  Feature_A: indices = [106, 211, 7], lengths = [2, 1]
+  Feature_B: indices = [52, 498, 616, 870, 1013], lengths = [3, 2]
+  Feature_C: indices = [2011, 19, 351, 790], lengths = [1, 3]
+
+
+The combined form is:
+
+
+  Features_A_B_C: indices = [106, 211, 7, 52, 498, 616, 870, 1013, 2011, 19, 351, 790], lengths = [2, 1, 3, 2, 1, 3]
+
+
+So, instead of copying 3x2=6 tensors from host to device, we only need to copy 2 tensors.
+
+Figure 3(b) describes an implementation of this optimization, which has two components:
+
+
+  On the CPU side: The input pipeline is modified to combine all the indices of sparse features into a single tensor and similarly all the lengths into another tensor. Then the two tensors are copied to the GPU.
+  On the GPU side: Using FX, we insert a Permute_and_Split op into the model graph to recover the indices and lengths tensors of individual features from the combined tensors, and route them to the corresponding nodes downstream.
+
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 3: Combining input sparse features
+
+3.2 Horizontal fusion of computation chains started with accesses to embedding tables
+
+In a production model, it is fairly common to have 10s of embedding tables residing on each GPU. For performance reasons, lookups to these tables are grouped together so that their outputs are concatenated in a single big tensor (see the red part in Figure 4(a)). To apply computations to individual feature outputs, a Split op is used to divide the big tensors into N smaller tensors (where N is the number of features) and then the desired computations are applied to each tensor. This is shown in Figure 4(a), where the computation applied to each feature output O is Tanh(LayerNorm(O)). All the computation results are concatenated back to a big tensor, which is then passed to downstream ops (Op1 in Figure 4(a)).
+
+The main runtime cost here is the GPU kernel launch overhead. For instance, the number of GPU kernel launches in Figure 4(a) is 2*N + 3 (each oval in the figure is a GPU kernel). This could become a performance issue because execution times of LayerNorm and Tanh on the GPU are short compared to their kernel launch times. In addition, the Split op may create an extra copy of the embedding output tensor, consuming additional GPU memory.
+
+We use FX to implement an optimization called horizontal fusion which dramatically reduces the number of GPU kernel launches (in this example, the optimized number of GPU kernel launches is 5, see Figure 4(b)). Instead of doing an explicit Split, we use the Add_middle_dim op to reshape the 2D embedding tensor of shape (B, NxD) to a 3D tensor of shape (B, N, D). Then a single LayerNorm is applied to the last dimension of it. Then a single Tanh is applied to the result of the LayerNorm. At the end, we use the Remove_middle_dim op to reshape the Tanh’s result back to a 2D tensor. In addition, since Add_middle_dim and Remove_middle_dim only reshape the tensor without creating an extra copy, the amount of GPU memory consumption could be reduced as well.
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 4: Horizontal fusion
+
+3.3 Overlapping Computation with Communication
+
+Training of a production recommendation model is typically done on a distributed GPU system. Since the capacity of the device memory per GPU is not big enough to hold all the embedding tables in the model, they need to be distributed among the GPUs.
+
+Within a training step, a GPU needs to read/write feature values from/to the embedding tables on the other GPUs. This is known as all-to-all communication [6] and can be a major performance bottleneck.
+
+We use FX to implement a transformation that can overlap computation with all-to-all communication. Figure 5(a) shows the example of a model graph which has embedding table accesses (EmbeddingAllToAll) and other ops. Without any optimization, they are sequentially executed on a GPU stream, as shown in Figure 5(b). Using FX, we break EmbeddingAllToAll into EmbeddingAllToAll_Request and EmbeddingAllToAll_Wait, and schedule independent ops in between them.
+
+
+
+
+
+(a) Model graph
+
+
+
+
+
+(b) Original execution order
+
+
+
+
+
+(c)Optimized execution order
+
+Figure 5: Overlapping Computation with Communication
+
+3.4 Summary
+
+Table 1 summarizes the optimizations discussed in this section and the corresponding performance bottlenecks addressed.
+
+
+  
+   Optimization
+   
+   Performance Bottleneck Addressed
+   
+  
+  
+   Combining Input Sparse Features
+   
+   Host-to-device memory copy
+   
+  
+  
+   Horizontal fusion
+   
+   GPU kernel launch overhead
+   
+  
+  
+   Overlapping Computation with Communication
+   
+   Embedding all-to-all access time
+   
+  
+
+
+Table 1: Summary of the optimizations and the performance bottlenecks addressed
+
+We have also developed other FX transformations which are not discussed in this section due to space limitations.
+
+To discover which models would benefit from these transformations, we analyzed the performance data collected by MAIProf [7] from the models that run at Meta’s data centers. Altogether, these transformations provide up to 2-3x of speedups compared to eager mode on a set of production models.
+
+4. Concluding Remarks
+
+The graph mode in PyTorch is preferred over the eager mode for production use for performance reasons. FX is a powerful tool for capturing and optimizing the graph of a PyTorch program. We demonstrate three FX transformations that are used to optimize production recommendation models inside Meta. We hope that this blog can motivate other PyTorch model developers to use graph transformations to boost their models’ performance.
+
+References
+
+[1] End-to-end Machine Learning Framework
+
+[2] DNNFusion: Accelerating Deep Neural Networks Execution with Advanced Operator Fusion
+
+[3] Torch.FX: Practical Program Capture and Transformation for Deep Learning In Python, MLSys 2022.
+
+[4] Torch.fx—PyTorch 1.12 documentation
+
+[5] Feature Hashing for Large Scale Multitask Learning
+
+[6] NVIDIA Collective Communication Library Documentation
+
+[7] Performance Debugging of Production PyTorch Models at Meta
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Optimizing Production PyTorch Models’ Performance with Graph Transformations">
+<meta name="twitter:description" content="1. Introduction
+
+PyTorch supports two execution modes [1]: eager mode and graph mode. In eager mode, operators in a model are immediately executed as they are encountered. In contrast, in graph mode, operators are first synthesized into a graph, which will then be compiled and executed as a whole. Eager mode is easier to use, more suitable for ML researchers, and hence is the default mode of execution. On the other hand, graph mode typically delivers higher performance and hence is heavily used in production.
+
+Specifically, graph mode enables operator fusion [2], wherein one operator is merged with another to reduce/localize memory reads as well as total kernel launch overhead. Fusion can be horizontal—taking a single operation (e.g., BatchNorm) that is independently applied to many operands and merging those operands into an array; and vertical—merging a kernel with another kernel that consumes the output of the first kernel (e.g., Convolution followed by ReLU).
+
+Torch.FX [3, 4] (abbreviated as FX) is a publicly available toolkit as part of the PyTorch package that supports graph mode execution. In particular, it (1) captures the graph from a PyTorch program and (2) allows developers to write transformations on the captured graph. It is used inside Meta to optimize the training throughput of production models. By introducing a number of FX-based optimizations developed at Meta, we demonstrate the approach of using graph transformation to optimize PyTorch’s performance for production.
+
+2. Background
+
+Embedding tables are ubiquitous in recommendation systems. Section 3 will discuss three FX transformations that optimize accesses to embedding tables. In this section, we provide some background on FX (Section 2.1) and embedding tables (Section 2.2).
+
+2.1 FX
+
+Figure 1 is a simple example adopted from [3] which illustrates using FX to transform a PyTorch program. It contains three steps: (1) capturing the graph from a program, (2) modifying the graph (in this example, all uses of RELU are replaced by GELU), and (3) generating a new program from the modified graph.
+
+
+
+
+
+Figure 1: A FX example which replaces all uses of RELU by GELU in a PyTorch module.
+
+The FX API [4] provides many more functionalities for inspecting and transforming PyTorch program graphs.
+
+2.2 Embedding Tables
+
+
+
+
+
+Figure 2: Illustration of an embedding table for a sparse feature with batch size = 1
+
+In a recommendation system, sparse features (e.g., User ID, Story ID) are represented by embedding tables. An embedding table E is an HxD matrix, where H is the hash size, D is the embedding dimension. Each row of E is a vector of floats. Feature hashing [5] is used to map a sparse feature to a list of indices to E, say [S1,S2, …, Sk], where 0<=Si<H. Its output value is computed as f(E[S1], E[S2], …, E[Sk]), where E[Si] is the vector at row Si, and f is called the pooling function, which is typically one of the following functions: sum, average, maximum. See Figure 2 for an illustration.
+
+To fully utilize the GPU, sparse features are usually processed in a batch. Each entity in a batch has its own list of indices. If a batch has B entities, a naive representation has B lists of indices. A more compact representation is to combine the B lists of indices into a single list of indices and add a list of the lengths of indices (one length for each entity in the batch). For example, if a batch has 3 entities whose lists of indices are as follows:
+
+
+  Entity 1: indices = [10, 20]
+  Entity 2: indices = [5, 9, 77, 81]
+  Entity 3: indices = [15, 20, 45]
+
+
+Then the indices and lengths for the entire batch will be:
+
+
+  Indices = [10, 20, 5, 9, 77, 81, 15, 20, 45]
+  Lengths = [2, 4, 3]
+
+
+And the output of the embedding table lookup for the whole batch is a BxD matrix.
+
+3. Three FX Transformations
+
+We have developed three FX transformations that accelerate accesses to embedding tables. Section 3.1 discusses a transformation that combines multiple small input tensors into a single big tensor; Section 3.2 a transformation that fuses multiple, parallel compute chains into a single compute chain; and Section 3.3 a transformation that overlaps communication with computation.
+
+3.1 Combining Input Sparse Features
+
+Recall that an input sparse feature in a batch is represented by two lists: a list of indices and a list of B lengths, where B is the batch size. In PyTorch, these two lists are implemented as two tensors. When a PyTorch model is run on a GPU, embedding tables are commonly stored in the GPU memory (which is closer to the GPU and has much higher read/write bandwidth than the CPU memory). To use an input sparse feature, its two tensors need to be first copied from CPU to GPU. Nevertheless, per host-to-device memory copying requires a kernel launch, which is relatively expensive compared to the actual data transfer time. If a model uses many input sparse features, this copying could become a performance bottleneck (e.g., 1000 input sparse features would require copying 2000 tensors from host to device).
+
+An optimization that reduces the number of host-to-device memcpy is to combine multiple input sparse features before sending them to the device. For instance, given the following three input features:
+
+
+  Feature_A: indices = [106, 211, 7], lengths = [2, 1]
+  Feature_B: indices = [52, 498, 616, 870, 1013], lengths = [3, 2]
+  Feature_C: indices = [2011, 19, 351, 790], lengths = [1, 3]
+
+
+The combined form is:
+
+
+  Features_A_B_C: indices = [106, 211, 7, 52, 498, 616, 870, 1013, 2011, 19, 351, 790], lengths = [2, 1, 3, 2, 1, 3]
+
+
+So, instead of copying 3x2=6 tensors from host to device, we only need to copy 2 tensors.
+
+Figure 3(b) describes an implementation of this optimization, which has two components:
+
+
+  On the CPU side: The input pipeline is modified to combine all the indices of sparse features into a single tensor and similarly all the lengths into another tensor. Then the two tensors are copied to the GPU.
+  On the GPU side: Using FX, we insert a Permute_and_Split op into the model graph to recover the indices and lengths tensors of individual features from the combined tensors, and route them to the corresponding nodes downstream.
+
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 3: Combining input sparse features
+
+3.2 Horizontal fusion of computation chains started with accesses to embedding tables
+
+In a production model, it is fairly common to have 10s of embedding tables residing on each GPU. For performance reasons, lookups to these tables are grouped together so that their outputs are concatenated in a single big tensor (see the red part in Figure 4(a)). To apply computations to individual feature outputs, a Split op is used to divide the big tensors into N smaller tensors (where N is the number of features) and then the desired computations are applied to each tensor. This is shown in Figure 4(a), where the computation applied to each feature output O is Tanh(LayerNorm(O)). All the computation results are concatenated back to a big tensor, which is then passed to downstream ops (Op1 in Figure 4(a)).
+
+The main runtime cost here is the GPU kernel launch overhead. For instance, the number of GPU kernel launches in Figure 4(a) is 2*N + 3 (each oval in the figure is a GPU kernel). This could become a performance issue because execution times of LayerNorm and Tanh on the GPU are short compared to their kernel launch times. In addition, the Split op may create an extra copy of the embedding output tensor, consuming additional GPU memory.
+
+We use FX to implement an optimization called horizontal fusion which dramatically reduces the number of GPU kernel launches (in this example, the optimized number of GPU kernel launches is 5, see Figure 4(b)). Instead of doing an explicit Split, we use the Add_middle_dim op to reshape the 2D embedding tensor of shape (B, NxD) to a 3D tensor of shape (B, N, D). Then a single LayerNorm is applied to the last dimension of it. Then a single Tanh is applied to the result of the LayerNorm. At the end, we use the Remove_middle_dim op to reshape the Tanh’s result back to a 2D tensor. In addition, since Add_middle_dim and Remove_middle_dim only reshape the tensor without creating an extra copy, the amount of GPU memory consumption could be reduced as well.
+
+
+
+
+
+(a). Without the optimization
+
+
+
+
+
+(b). With the optimization
+
+Figure 4: Horizontal fusion
+
+3.3 Overlapping Computation with Communication
+
+Training of a production recommendation model is typically done on a distributed GPU system. Since the capacity of the device memory per GPU is not big enough to hold all the embedding tables in the model, they need to be distributed among the GPUs.
+
+Within a training step, a GPU needs to read/write feature values from/to the embedding tables on the other GPUs. This is known as all-to-all communication [6] and can be a major performance bottleneck.
+
+We use FX to implement a transformation that can overlap computation with all-to-all communication. Figure 5(a) shows the example of a model graph which has embedding table accesses (EmbeddingAllToAll) and other ops. Without any optimization, they are sequentially executed on a GPU stream, as shown in Figure 5(b). Using FX, we break EmbeddingAllToAll into EmbeddingAllToAll_Request and EmbeddingAllToAll_Wait, and schedule independent ops in between them.
+
+
+
+
+
+(a) Model graph
+
+
+
+
+
+(b) Original execution order
+
+
+
+
+
+(c)Optimized execution order
+
+Figure 5: Overlapping Computation with Communication
+
+3.4 Summary
+
+Table 1 summarizes the optimizations discussed in this section and the corresponding performance bottlenecks addressed.
+
+
+  
+   Optimization
+   
+   Performance Bottleneck Addressed
+   
+  
+  
+   Combining Input Sparse Features
+   
+   Host-to-device memory copy
+   
+  
+  
+   Horizontal fusion
+   
+   GPU kernel launch overhead
+   
+  
+  
+   Overlapping Computation with Communication
+   
+   Embedding all-to-all access time
+   
+  
+
+
+Table 1: Summary of the optimizations and the performance bottlenecks addressed
+
+We have also developed other FX transformations which are not discussed in this section due to space limitations.
+
+To discover which models would benefit from these transformations, we analyzed the performance data collected by MAIProf [7] from the models that run at Meta’s data centers. Altogether, these transformations provide up to 2-3x of speedups compared to eager mode on a set of production models.
+
+4. Concluding Remarks
+
+The graph mode in PyTorch is preferred over the eager mode for production use for performance reasons. FX is a powerful tool for capturing and optimizing the graph of a PyTorch program. We demonstrate three FX transformations that are used to optimize production recommendation models inside Meta. We hope that this blog can motivate other PyTorch model developers to use graph transformations to boost their models’ performance.
+
+References
+
+[1] End-to-end Machine Learning Framework
+
+[2] DNNFusion: Accelerating Deep Neural Networks Execution with Advanced Operator Fusion
+
+[3] Torch.FX: Practical Program Capture and Transformation for Deep Learning In Python, MLSys 2022.
+
+[4] Torch.fx—PyTorch 1.12 documentation
+
+[5] Feature Hashing for Large Scale Multitask Learning
+
+[6] NVIDIA Collective Communication Library Documentation
+
+[7] Performance Debugging of Production PyTorch Models at Meta
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2022年11月28日</p>
+            <h1>
+                <a class="blog-title">使用图转换优化生产 PyTorch 模型的性能</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Jade Nie、CK Luk、Xiaodong Wang、Jackie（Jiaqi）Xu 撰写</p>
+                    <h2 id="1-introduction">1. 引言</h2>
+
+<p>PyTorch 支持两种执行模式[1]：即时模式和图模式。在即时模式下，模型中的操作在遇到时立即执行。相比之下，在图模式下，操作首先被合成成图，然后整个图会被编译并执行。即时模式使用起来更简单，更适合机器学习研究人员，因此是默认的执行模式。另一方面，图模式通常能提供更高的性能，因此在生产环境中被广泛使用。</p>
+
+<p>具体来说，图模式支持操作融合[2]，即将一个操作与另一个操作合并，以减少/局部化内存读取以及总的内核启动开销。融合可以是横向的——将单个操作（例如 BatchNorm）独立应用于多个操作数，并将这些操作数合并成一个数组；也可以是纵向的——将一个内核与另一个内核合并，后者消耗前者的输出（例如卷积后跟 ReLU）。</p>
+
+<p>Torch.FX [3, 4]（简称 FX）是 PyTorch 软件包中公开可用的工具包，支持图模式执行。特别是，它（1）从 PyTorch 程序中捕获图，并且（2）允许开发者在捕获的图中编写转换。它被 Meta 内部用于优化生产模型的训练吞吐量。通过引入 Meta 开发的基于 FX 的多个优化，我们展示了使用图转换来优化 PyTorch 生产性能的方法。</p>
+
+<h2 id="2-background">2. 背景</h2>
+
+<p>嵌入表在推荐系统中无处不在。第 3 节将讨论三种优化嵌入表访问的 FX 转换。在本节中，我们提供一些关于 FX（第 2.1 节）和嵌入表（第 2.2 节）的背景信息。</p>
+
+<h3 id="21-fx">2.1 FX</h3>
+
+<p>图 1 是一个简单的例子，摘自[3]，它展示了如何使用 FX 来转换 PyTorch 程序。它包含三个步骤：（1）从程序中捕获图，（2）修改图（在这个例子中，所有使用 RELU 的地方都被 GELU 替换），以及（3）从修改后的图中生成新的程序。</p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-1.png" width="70%">
+</p>
+
+<p><strong>图 1：一个 FX 示例，在 PyTorch 模块中将所有 RELU 的使用替换为 GELU。</strong></p>
+
+<p>FX API [4]提供了许多用于检查和转换 PyTorch 程序图的更多功能。</p>
+
+<h3 id="22-embedding-tables">2.2 嵌入表</h3>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-2.png" width="90%">
+</p>
+
+<p><strong>图2：稀疏特征嵌入表的示例，批大小为1</strong></p>
+
+<p>在推荐系统中，稀疏特征（例如，用户 ID，故事 ID）通过嵌入表表示。嵌入表 E 是一个 HxD 矩阵，其中 H 是哈希大小，D 是嵌入维度。E 的每一行都是一个浮点向量。特征哈希[5]用于将稀疏特征映射到 E 中的索引列表，例如[S<sub>1</sub>,S<sub>2</sub>, …, S<sub>k</sub>]，其中 0&lt;=S1], E[S<sub>2</sub>], …, E[S<sub>k</sub>])，其中 E[S]是第 S 行的向量，f 称为池化函数，通常是以下函数之一：求和、平均、最大。见图 2 示例。</p>
+
+<p>为了充分利用 GPU，稀疏特征通常以批处理的方式处理。批处理中的每个实体都有自己的索引列表。如果一个批处理有 B 个实体，则朴素表示方法有 B 个索引列表。更紧凑的表示方法是将 B 个索引列表合并成一个索引列表，并添加一个索引长度列表（每个实体一个长度）。例如，如果一个批处理有 3 个实体，它们的索引列表如下：</p>
+
+<ul>
+  <li>实体1：索引 = [10, 20]</li>
+  <li>实体2：索引 = [5, 9, 77, 81]</li>
+  <li>实体3：索引 = [15, 20, 45]</li>
+</ul>
+
+<p>那么整个批次的索引和长度将是：</p>
+
+<ul>
+  <li>索引 = [10, 20, 5, 9, 77, 81, 15, 20, 45]</li>
+  <li>长度 = [2, 4, 3]</li>
+</ul>
+
+<p>并且整个批次的嵌入表查找输出是一个 BxD 矩阵。</p>
+
+<h2 id="3-three-fx-transformations">3. 三种 FX 变换</h2>
+
+<p>我们开发了三种 FX 变换，以加速对嵌入表的访问。第 3.1 节讨论了一种将多个小型输入张量合并成一个大型张量的变换；第 3.2 节讨论了一种将多个并行计算链融合成一个计算链的变换；第 3.3 节讨论了一种重叠通信与计算的变换。</p>
+
+<h3 id="31-combining-input-sparse-features">3.1 合并输入稀疏特征</h3>
+
+<p>回想一下，在批次中，一个稀疏输入特征由两个列表表示：一个索引列表和一个长度为 B 的列表，其中 B 是批次大小。在 PyTorch 中，这两个列表被实现为两个张量。当 PyTorch 模型在 GPU 上运行时，嵌入表通常存储在 GPU 内存中（比 CPU 内存更接近 GPU，读写带宽也更高）。要使用输入稀疏特征，其两个张量需要首先从 CPU 复制到 GPU。然而，每次主机到设备内存复制都需要一个内核启动，这相对于实际的数据传输时间来说相对昂贵。如果一个模型使用许多输入稀疏特征，这种复制可能会成为性能瓶颈（例如，1000 个输入稀疏特征将需要从主机复制 2000 个张量到设备）。</p>
+
+<p>减少主机到设备 memcpy 次数的一种优化方法是，在将它们发送到设备之前，将多个输入稀疏特征合并。例如，给定以下三个输入特征：</p>
+
+<ul>
+  <li>特征_A：indices = [106, 211, 7]，lengths = [2, 1]</li>
+  <li>特征_B：indices = [52, 498, 616, 870, 1013]，lengths = [3, 2]</li>
+  <li>Feature_C: 索引 = [2011, 19, 351, 790]，长度 = [1, 3]</li>
+</ul>
+
+<p>组合形式为：</p>
+
+<ul>
+  <li>Features_A_B_C: 索引 = [106, 211, 7, 52, 498, 616, 870, 1013, 2011, 19, 351, 790]，长度 = [2, 1, 3, 2, 1, 3]</li>
+</ul>
+
+<p>因此，我们不需要从主机复制 3x2=6 个张量到设备，只需要复制 2 个张量即可。</p>
+
+<p>图 3(b)描述了这种优化的一个实现，它包含两个部分：</p>
+
+<ul>
+  <li>在 CPU 端：修改输入流水线，将稀疏特征的所有索引合并成一个张量，同样所有长度合并成另一个张量。然后将这两个张量复制到 GPU 上。</li>
+  <li>在 GPU 端：使用 FX，我们在模型图中插入一个 Permute_and_Split 操作，从合并的张量中恢复单个特征的索引和长度张量，并将它们路由到相应的下游节点。</li>
+</ul>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-3a.png" width="90%">
+</p>
+
+<p>(a). <strong> 未进行优化</strong></p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-3b.png" width="90%">
+</p>
+
+<p>(b). <strong> 优化后</strong></p>
+
+<p><strong>图3：结合输入稀疏特征</strong></p>
+
+<h3 id="32-horizontal-fusion-of-computation-chains-started-with-accesses-to-embedding-tables">3.2 以嵌入表访问开始的计算链的水平融合</h3>
+
+<p>在生产模型中，每个 GPU 上通常有 10 多个嵌入表。出于性能考虑，对这些表的查找被分组在一起，以便它们的输出在一个大张量中连接（见图 4(a)中的红色部分）。为了对单个特征输出应用计算，使用 Split 操作将大张量分割成 N 个小张量（其中 N 是特征的数量），然后对每个张量应用所需的计算。这如图 4(a)所示，对每个特征输出 O 应用的计算是 Tanh(LayerNorm(O))。所有计算结果都连接回一个大张量，然后传递给下游操作（图 4(a)中的 Op1）。</p>
+
+<p>这里主要的运行时成本是 GPU 内核启动开销。例如，图 4(a)中的 GPU 内核启动次数为 2*N + 3（图中的每个椭圆形都是一个 GPU 内核）。这可能会成为性能问题，因为与内核启动时间相比，LayerNorm 和 Tanh 在 GPU 上的执行时间较短。此外，Split 操作可能会创建一个额外的嵌入输出张量副本，消耗额外的 GPU 内存。</p>
+
+<p>我们使用 FX 实现了一种称为水平融合的优化，这大大减少了 GPU 内核启动次数（在这个例子中，优化后的 GPU 内核启动次数为 5，见图 4(b)）。我们不是使用显式的 Split 操作，而是使用 Add_middle_dim 操作将形状为(B, NxD)的 2D 嵌入张量重塑为形状为(B, N, D)的 3D 张量。然后对它的最后一个维度应用单个 LayerNorm。然后对 LayerNorm 的结果应用单个 Tanh。最后，我们使用 Remove_middle_dim 操作将 Tanh 的结果重塑回 2D 张量。此外，由于 Add_middle_dim 和 Remove_middle_dim 操作仅重塑张量而不创建额外的副本，GPU 内存消耗量也可能减少。</p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-4a.png" width="90%">
+</p>
+
+<p>(a). <strong> 未进行优化</strong></p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-4b.png" width="90%">
+</p>
+
+<p>(b). <strong> 优化后</strong></p>
+
+<p><strong>图4：水平融合</strong></p>
+
+<h3 id="33-overlapping-computation-with-communication">3.3 与通信重叠的计算</h3>
+
+<p>生产推荐模型的训练通常在分布式 GPU 系统上进行。由于每个 GPU 的设备内存容量不足以容纳模型中的所有嵌入表，因此它们需要分布在多个 GPU 上。</p>
+
+<p>在训练步骤中，GPU 需要从其他 GPU 上的嵌入表中读取/写入特征值。这被称为全对全通信[6]，可能成为性能瓶颈。</p>
+
+<p>我们使用 FX 来实现一个可以与全对全通信重叠计算的转换。图 5(a)显示了具有嵌入表访问（EmbeddingAllToAll）和其他操作的模型图示例。在没有任何优化的情况下，它们在 GPU 流上按顺序执行，如图 5(b)所示。使用 FX，我们将 EmbeddingAllToAll 分解为 EmbeddingAllToAll_Request 和 EmbeddingAllToAll_Wait，并在它们之间安排独立的操作。</p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-5a.png" width="70%">
+</p>
+
+<p><strong>(a) 模型图</strong></p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-5b.png" width="70%">
+</p>
+
+<p><strong>(b) 原始执行顺序</strong></p>
+
+<p align="center">
+<img src="/assets/images/blog1-fig-5c.png" width="70%">
+</p>
+
+<p><strong>(c)优化后的执行顺序</strong></p>
+
+<p><strong>图5：计算与通信重叠</strong></p>
+
+<h3 id="34-summary">3.4 摘要</h3>
+
+<p>表1总结了本节讨论的优化以及相应的性能瓶颈。</p>
+
+<table>
+  <tbody><tr>
+   <td><strong>优化</strong>
+   </td>
+   <td><strong>解决的性能瓶颈</strong>
+   </td>
+  </tr>
+  <tr>
+   <td>结合输入稀疏特征</td>
+   <td>主机到设备内存复制</td>
+  </tr>
+  <tr>
+   <td>水平融合</td>
+   <td>GPU 内核启动开销</td>
+  </tr>
+  <tr>
+   <td>计算与通信的重叠</td>
+   <td>嵌入全连接访问时间</td>
+  </tr>
+</tbody></table>
+
+<p><strong>表1：优化总结及解决的性能瓶颈</strong></p>
+
+<p>我们已开发出其他未在本节中讨论的 FX 转换，由于篇幅限制。</p>
+
+<p>为了发现哪些模型将受益于这些转换，我们分析了 MAIProf [7]从运行在 Meta 数据中心上的模型收集的性能数据。总的来说，这些转换与生产模型上的急切模式相比，提供了高达 2-3 倍的加速。</p>
+
+<h2 id="4-concluding-remarks">4. 结论</h2>
+
+<p>PyTorch 的图模式在性能原因下比即时模式更适合生产使用。FX 是一个强大的工具，用于捕获和优化 PyTorch 程序的图。我们展示了三种 FX 转换，这些转换用于在 Meta 内部优化生产推荐模型。我们希望这篇博客能够激励其他 PyTorch 模型开发者使用图转换来提升他们模型的性能。</p>
+
+<p>参考文献列表</p>
+
+<p>[1] <a href="https://pytorch.org/features/"> 端到端机器学习框架</a></p>
+
+<p>[2] <a href="https://arxiv.org/abs/2108.13342">DNNFusion：通过高级算子融合加速深度神经网络执行</a></p>
+
+<p>[3] <a href="https://arxiv.org/pdf/2112.08429.pdf">Torch.FX：Python 深度学习中的实用程序捕获和转换，MLSys 2022。</a></p>
+
+<p>[4] <a href="https://pytorch.org/docs/stable/fx.html">PyTorch.fx—PyTorch 1.12 文档</a></p>
+
+<p>[5] <a href="https://alex.smola.org/papers/2009/Weinbergeretal09.pdf"> 大规模多任务学习的特征哈希</a></p>
+
+<p>[6] <a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/">NVIDIA 集成通信库文档</a></p>
+
+<p>[7] <a href="https://pytorch.org/blog/performance-debugging-of-production-pytorch-models-at-meta/">Meta 生产 PyTorch 模型的性能调试</a></p>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>

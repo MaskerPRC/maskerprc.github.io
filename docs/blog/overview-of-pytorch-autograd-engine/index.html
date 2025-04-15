@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="zh_CN">
+<head>
+  <!-- Google Tag Manager -->
+  <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+  new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+  j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+  'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+  })(window,document,'script','dataLayer','GTM-T8XT4PS');</script>
+  <!-- End Google Tag Manager -->
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?">
+  <title>
+    
+      Overview of PyTorch Autograd Engine | PyTorch
+    
+  </title>
+  <meta name="robots" content="index, follow">
+
+<meta name="description" content="This blog post is based on PyTorch version 1.8, although it should apply for older versions too, since most of the mechanics have remained constant.
+
+To help understand the concepts explained here, it is recommended that you read the awesome blog post by @ezyang: PyTorch internals if you are not familiar with PyTorch architecture components such as ATen or c10d.
+
+What is autograd?
+
+Background
+
+PyTorch computes the gradient of a function with respect to the inputs by using automatic differentiation. Automatic differentiation is a technique that, given a computational graph, calculates the gradients of the inputs. Automatic differentiation can be performed in two different ways; forward and reverse mode. Forward mode means that we calculate the gradients along with the result of the function, while reverse mode requires us to evaluate the function first, and then we calculate the gradients starting from the output. While both modes have their pros and cons, the reverse mode is the de-facto choice since the number of outputs is smaller than the number of inputs, which allows a much more efficient computation. Check [3] to learn more about this.
+
+Automatic differentiation relies on a classic calculus formula known as the chain-rule. The chain rule allows us to calculate very complex derivatives by splitting them and recombining them later.
+
+Formally speaking, given a composite function , we can calculate its derivative as . This result is what makes automatic differentiation work.
+By combining the derivatives of the simpler functions that compose a larger one, such as a neural network, it is possible to compute the exact value of the gradient at a given point rather than relying on the numerical approximation, which would require multiple perturbations in the input to obtain a value.
+
+To get the intuition of how the reverse mode works, let’s look at a simple function . Figure 1 shows its computational graph where the inputs x, y in the left, flow through a series of operations to generate the output z.
+
+
+  
+  Figure 1: Computational graph of f(x, y) = log(x*y)
+
+
+The automatic differentiation engine will normally execute this graph. It will also extend it to calculate the derivatives of w with respect to the inputs x, y, and the intermediate result v.
+
+The example function can be decomposed in f and g, where  and .  Every time the engine executes an operation in the graph, the derivative of that operation is added to the graph to be executed later in the backward pass. Note, that the engine knows the derivatives of the basic functions.
+
+In the example above, when multiplying x and y to obtain v, the engine will extend the graph to calculate the partial derivatives of the multiplication by using the multiplication derivative definition that it already knows.  and  . The resulting extended graph is shown in Figure 2, where the MultDerivative node also calculates the product of the resulting gradients by an input gradient to apply the chain rule; this will be explicitly seen in the following operations. Note that the backward graph (green nodes) will not be executed until all the forward steps are completed.
+
+
+  
+  Figure 2: Computational graph extended after executing the logarithm
+
+
+Continuing, the engine now calculates the  operation and extends the graph again with the log derivative that it knows to be . This is shown in figure 3. This operation generates the result  that when propagated backward and multiplied by the multiplication derivative as in the chain rule, generates the derivatives , .
+
+
+  
+  Figure 3: Computational graph extended after executing the logarithm
+
+
+The original computation graph is extended with a new dummy variable z that is the same w. The derivative of z with respect to w is 1 as they are the same variable, this trick allows us to apply the chain rule to calculate the derivatives of the inputs. After the forward pass is complete, we start the backward pass, by supplying the initial value of 1.0 for . This is shown in Figure 4.
+
+
+  
+  Figure 4: Computational graph extended for reverse auto differentiation
+
+
+Then following the green graph we execute the LogDerivative operation  that the auto differentiation engine introduced, and multiply its result by  to obtain the gradient  as per the chain rule states. Next, the multiplication derivative is executed in the same way, and the desired derivatives  are finally obtained.
+
+Formally, what we are doing here, and PyTorch autograd engine also does, is computing a Jacobian-vector product (Jvp) to calculate the gradients of the model parameters, since the model parameters and inputs are vectors.
+
+The Jacobian-vector product
+
+When we calculate the gradient of a vector-valued function  (a function whose inputs and outputs are vectors), we are essentially constructing a Jacobian matrix .
+
+Thanks to the chain rule, multiplying the Jacobian matrix of a function  by a vector  with the previously calculated gradients of a scalar function  results in the gradients  of the scalar output with respect to the vector-valued function inputs.
+
+As an example, let’s look at some functions in python notation to show how the chain rule applies.
+
+  
+
+  def f(x1, x2):
+      a = x1 * x2
+      y1 = log(a)
+      y2 = sin(x2)
+      return (y1, y2)
+  
+
+  
+
+  def g(y1, y2):
+      return y1 * y2
+  
+
+
+
+Now, if we derive this by hand using the chain rule and the definition of the derivatives, we obtain the following set of identities that we can directly plug into the Jacobian matrix of 
+
+
+  
+  
+  
+  
+
+
+Next, let’s consider the gradients for the scalar function 
+
+
+  
+  
+
+
+If we now calculate the transpose-Jacobian vector product obeying the chain rule, we obtain the following expression:
+
+  
+
+
+Evaluating the Jvp for  yields the result:
+
+We can execute the same expression in PyTorch and calculate the gradient of the input:
+
+  >>> import torch
+  >>> x = torch.tensor([0.5, 0.75], requires_grad=True)
+  >>> y = torch.log(x[0] * x[1]) * torch.sin(x[1])
+  >>> y.backward(1.0)
+  >>> x.grad
+  tensor([1.3633,
+          0.1912])
+
+
+The result is the same as our hand-calculated Jacobian-vector product!
+However, PyTorch never constructed the matrix as it could grow prohibitively large but instead, created a graph of operations that traversed backward while applying the Jacobian-vector products defined in tools/autograd/derivatives.yaml.
+
+Going through the graph
+
+Every time PyTorch executes an operation, the autograd engine constructs the graph to be traversed backward.
+The reverse mode auto differentiation starts by adding a scalar variable at the end  so that  as we saw in the introduction. This is the initial gradient value that is supplied to the Jvp engine calculation as we saw in the section above.
+
+In PyTorch, the initial gradient is explicitly set by the user when he calls the backward method.
+
+Then, the Jvp calculation starts but it never constructs the matrix. Instead, when PyTorch records the computational graph, the derivatives of the executed forward operations are added (Backward Nodes). Figure 5 shows a backward graph generated by the execution of the functions  and  seen before.
+
+
+  
+  Figure 5: Computational Graph extended with the backward pass
+
+
+Once the forward pass is done, the results are used in the backward pass where the derivatives in the computational graph are executed. The basic derivatives are stored in the tools/autograd/derivatives.yaml file and they are not regular derivatives but the Jvp versions of them [3]. They take their primitive function inputs and outputs as parameters along with the gradient of the function outputs with respect to the final outputs. By repeatedly multiplying the resulting gradients by the next Jvp derivatives in the graph, the gradients up to the inputs will be generated following the chain rule.
+
+
+  
+  Figure 6: How the chain rule is applied in backward differentiation
+
+
+Figure 6 represents the process by showing the chain rule. We started with a value of 1.0 as detailed before which is the already calculated gradient  highlighted in green. And we move to the next node in the graph. The backward function registered in derivatives.yaml will calculate the associated
+ value highlighted in red and multiply it by . By the chain rule this results in  which will be the already calculated gradient (green) when we process the next backward node in the graph.
+
+You may also have noticed that in Figure 5 there is a gradient generated from two different sources. When two different functions share an input, the gradients with respect to the output are aggregated for that input, and calculations using that gradient can’t proceed unless all the paths have been aggregated together.
+
+Let’s see an example of how the derivatives are stored in PyTorch.
+
+Suppose that we are currently processing the backward propagation of the  function, in the LogBackward node in Figure 2.  The derivative of  in derivatives.yaml is specified as grad.div(self.conj()). grad is the already calculated gradient  and self.conj() is the complex conjugate of the input vector. For complex numbers PyTorch calculates a special derivative called the conjugate Wirtinger derivative [6]. This derivative takes the complex number and its conjugate and by operating some magic that is described in [6], they are the direction of steepest descent when plugged into optimizers.
+
+This code translates to , the corresponding green, and red squares in Figure 3. Continuing, the autograd engine will execute the next operation; backward of the multiplication. As before, the inputs are the original function’s inputs and the gradient calculated from the  backward step. This step will keep repeating until we reach the gradient with respect to the inputs and the computation will be finished. The gradient of  is only completed once the multiplication and sin gradients are added together. As you can see, we computed the equivalent of the Jvp but without constructing the matrix.
+
+In the next post we will dive inside PyTorch code to see how this graph is constructed and where are the relevant pieces should you want to experiment with it!
+
+References
+
+
+  https://maskerprc.github.io/tutorials/beginner/blitz/autograd_tutorial.html
+  https://web.stanford.edu/class/cs224n/readings/gradient-notes.pdf
+  https://www.cs.toronto.edu/~rgrosse/courses/csc321_2018/slides/lec10.pdf
+  https://mustafaghali11.medium.com/how-pytorch-backward-function-works-55669b3b7c62
+  https://indico.cern.ch/event/708041/contributions/3308814/attachments/1813852/2963725/automatic_differentiation_and_deep_learning.pdf
+  https://pytorch.org/docs/stable/notes/autograd.html#complex-autograd-doc
+  Recommended: shows why the backprop is formally expressed with the Jacobian
+  https://cs.ubc.ca/~fwood/CS340/lectures/AD1.pdf
+
+">
+
+  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+
+<meta property="og:locale" content="en_US">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Overview of PyTorch Autograd Engine">
+<meta property="og:description" content="This blog post is based on PyTorch version 1.8, although it should apply for older versions too, since most of the mechanics have remained constant.
+
+To help understand the concepts explained here, it is recommended that you read the awesome blog post by @ezyang: PyTorch internals if you are not familiar with PyTorch architecture components such as ATen or c10d.
+
+What is autograd?
+
+Background
+
+PyTorch computes the gradient of a function with respect to the inputs by using automatic differentiation. Automatic differentiation is a technique that, given a computational graph, calculates the gradients of the inputs. Automatic differentiation can be performed in two different ways; forward and reverse mode. Forward mode means that we calculate the gradients along with the result of the function, while reverse mode requires us to evaluate the function first, and then we calculate the gradients starting from the output. While both modes have their pros and cons, the reverse mode is the de-facto choice since the number of outputs is smaller than the number of inputs, which allows a much more efficient computation. Check [3] to learn more about this.
+
+Automatic differentiation relies on a classic calculus formula known as the chain-rule. The chain rule allows us to calculate very complex derivatives by splitting them and recombining them later.
+
+Formally speaking, given a composite function , we can calculate its derivative as . This result is what makes automatic differentiation work.
+By combining the derivatives of the simpler functions that compose a larger one, such as a neural network, it is possible to compute the exact value of the gradient at a given point rather than relying on the numerical approximation, which would require multiple perturbations in the input to obtain a value.
+
+To get the intuition of how the reverse mode works, let’s look at a simple function . Figure 1 shows its computational graph where the inputs x, y in the left, flow through a series of operations to generate the output z.
+
+
+  
+  Figure 1: Computational graph of f(x, y) = log(x*y)
+
+
+The automatic differentiation engine will normally execute this graph. It will also extend it to calculate the derivatives of w with respect to the inputs x, y, and the intermediate result v.
+
+The example function can be decomposed in f and g, where  and .  Every time the engine executes an operation in the graph, the derivative of that operation is added to the graph to be executed later in the backward pass. Note, that the engine knows the derivatives of the basic functions.
+
+In the example above, when multiplying x and y to obtain v, the engine will extend the graph to calculate the partial derivatives of the multiplication by using the multiplication derivative definition that it already knows.  and  . The resulting extended graph is shown in Figure 2, where the MultDerivative node also calculates the product of the resulting gradients by an input gradient to apply the chain rule; this will be explicitly seen in the following operations. Note that the backward graph (green nodes) will not be executed until all the forward steps are completed.
+
+
+  
+  Figure 2: Computational graph extended after executing the logarithm
+
+
+Continuing, the engine now calculates the  operation and extends the graph again with the log derivative that it knows to be . This is shown in figure 3. This operation generates the result  that when propagated backward and multiplied by the multiplication derivative as in the chain rule, generates the derivatives , .
+
+
+  
+  Figure 3: Computational graph extended after executing the logarithm
+
+
+The original computation graph is extended with a new dummy variable z that is the same w. The derivative of z with respect to w is 1 as they are the same variable, this trick allows us to apply the chain rule to calculate the derivatives of the inputs. After the forward pass is complete, we start the backward pass, by supplying the initial value of 1.0 for . This is shown in Figure 4.
+
+
+  
+  Figure 4: Computational graph extended for reverse auto differentiation
+
+
+Then following the green graph we execute the LogDerivative operation  that the auto differentiation engine introduced, and multiply its result by  to obtain the gradient  as per the chain rule states. Next, the multiplication derivative is executed in the same way, and the desired derivatives  are finally obtained.
+
+Formally, what we are doing here, and PyTorch autograd engine also does, is computing a Jacobian-vector product (Jvp) to calculate the gradients of the model parameters, since the model parameters and inputs are vectors.
+
+The Jacobian-vector product
+
+When we calculate the gradient of a vector-valued function  (a function whose inputs and outputs are vectors), we are essentially constructing a Jacobian matrix .
+
+Thanks to the chain rule, multiplying the Jacobian matrix of a function  by a vector  with the previously calculated gradients of a scalar function  results in the gradients  of the scalar output with respect to the vector-valued function inputs.
+
+As an example, let’s look at some functions in python notation to show how the chain rule applies.
+
+  
+
+  def f(x1, x2):
+      a = x1 * x2
+      y1 = log(a)
+      y2 = sin(x2)
+      return (y1, y2)
+  
+
+  
+
+  def g(y1, y2):
+      return y1 * y2
+  
+
+
+
+Now, if we derive this by hand using the chain rule and the definition of the derivatives, we obtain the following set of identities that we can directly plug into the Jacobian matrix of 
+
+
+  
+  
+  
+  
+
+
+Next, let’s consider the gradients for the scalar function 
+
+
+  
+  
+
+
+If we now calculate the transpose-Jacobian vector product obeying the chain rule, we obtain the following expression:
+
+  
+
+
+Evaluating the Jvp for  yields the result:
+
+We can execute the same expression in PyTorch and calculate the gradient of the input:
+
+  >>> import torch
+  >>> x = torch.tensor([0.5, 0.75], requires_grad=True)
+  >>> y = torch.log(x[0] * x[1]) * torch.sin(x[1])
+  >>> y.backward(1.0)
+  >>> x.grad
+  tensor([1.3633,
+          0.1912])
+
+
+The result is the same as our hand-calculated Jacobian-vector product!
+However, PyTorch never constructed the matrix as it could grow prohibitively large but instead, created a graph of operations that traversed backward while applying the Jacobian-vector products defined in tools/autograd/derivatives.yaml.
+
+Going through the graph
+
+Every time PyTorch executes an operation, the autograd engine constructs the graph to be traversed backward.
+The reverse mode auto differentiation starts by adding a scalar variable at the end  so that  as we saw in the introduction. This is the initial gradient value that is supplied to the Jvp engine calculation as we saw in the section above.
+
+In PyTorch, the initial gradient is explicitly set by the user when he calls the backward method.
+
+Then, the Jvp calculation starts but it never constructs the matrix. Instead, when PyTorch records the computational graph, the derivatives of the executed forward operations are added (Backward Nodes). Figure 5 shows a backward graph generated by the execution of the functions  and  seen before.
+
+
+  
+  Figure 5: Computational Graph extended with the backward pass
+
+
+Once the forward pass is done, the results are used in the backward pass where the derivatives in the computational graph are executed. The basic derivatives are stored in the tools/autograd/derivatives.yaml file and they are not regular derivatives but the Jvp versions of them [3]. They take their primitive function inputs and outputs as parameters along with the gradient of the function outputs with respect to the final outputs. By repeatedly multiplying the resulting gradients by the next Jvp derivatives in the graph, the gradients up to the inputs will be generated following the chain rule.
+
+
+  
+  Figure 6: How the chain rule is applied in backward differentiation
+
+
+Figure 6 represents the process by showing the chain rule. We started with a value of 1.0 as detailed before which is the already calculated gradient  highlighted in green. And we move to the next node in the graph. The backward function registered in derivatives.yaml will calculate the associated
+ value highlighted in red and multiply it by . By the chain rule this results in  which will be the already calculated gradient (green) when we process the next backward node in the graph.
+
+You may also have noticed that in Figure 5 there is a gradient generated from two different sources. When two different functions share an input, the gradients with respect to the output are aggregated for that input, and calculations using that gradient can’t proceed unless all the paths have been aggregated together.
+
+Let’s see an example of how the derivatives are stored in PyTorch.
+
+Suppose that we are currently processing the backward propagation of the  function, in the LogBackward node in Figure 2.  The derivative of  in derivatives.yaml is specified as grad.div(self.conj()). grad is the already calculated gradient  and self.conj() is the complex conjugate of the input vector. For complex numbers PyTorch calculates a special derivative called the conjugate Wirtinger derivative [6]. This derivative takes the complex number and its conjugate and by operating some magic that is described in [6], they are the direction of steepest descent when plugged into optimizers.
+
+This code translates to , the corresponding green, and red squares in Figure 3. Continuing, the autograd engine will execute the next operation; backward of the multiplication. As before, the inputs are the original function’s inputs and the gradient calculated from the  backward step. This step will keep repeating until we reach the gradient with respect to the inputs and the computation will be finished. The gradient of  is only completed once the multiplication and sin gradients are added together. As you can see, we computed the equivalent of the Jvp but without constructing the matrix.
+
+In the next post we will dive inside PyTorch code to see how this graph is constructed and where are the relevant pieces should you want to experiment with it!
+
+References
+
+
+  https://maskerprc.github.io/tutorials/beginner/blitz/autograd_tutorial.html
+  https://web.stanford.edu/class/cs224n/readings/gradient-notes.pdf
+  https://www.cs.toronto.edu/~rgrosse/courses/csc321_2018/slides/lec10.pdf
+  https://mustafaghali11.medium.com/how-pytorch-backward-function-works-55669b3b7c62
+  https://indico.cern.ch/event/708041/contributions/3308814/attachments/1813852/2963725/automatic_differentiation_and_deep_learning.pdf
+  https://pytorch.org/docs/stable/notes/autograd.html#complex-autograd-doc
+  Recommended: shows why the backprop is formally expressed with the Jacobian
+  https://cs.ubc.ca/~fwood/CS340/lectures/AD1.pdf
+
+">
+<meta property="og:site_name" content="PyTorch">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Overview of PyTorch Autograd Engine">
+<meta name="twitter:description" content="This blog post is based on PyTorch version 1.8, although it should apply for older versions too, since most of the mechanics have remained constant.
+
+To help understand the concepts explained here, it is recommended that you read the awesome blog post by @ezyang: PyTorch internals if you are not familiar with PyTorch architecture components such as ATen or c10d.
+
+What is autograd?
+
+Background
+
+PyTorch computes the gradient of a function with respect to the inputs by using automatic differentiation. Automatic differentiation is a technique that, given a computational graph, calculates the gradients of the inputs. Automatic differentiation can be performed in two different ways; forward and reverse mode. Forward mode means that we calculate the gradients along with the result of the function, while reverse mode requires us to evaluate the function first, and then we calculate the gradients starting from the output. While both modes have their pros and cons, the reverse mode is the de-facto choice since the number of outputs is smaller than the number of inputs, which allows a much more efficient computation. Check [3] to learn more about this.
+
+Automatic differentiation relies on a classic calculus formula known as the chain-rule. The chain rule allows us to calculate very complex derivatives by splitting them and recombining them later.
+
+Formally speaking, given a composite function , we can calculate its derivative as . This result is what makes automatic differentiation work.
+By combining the derivatives of the simpler functions that compose a larger one, such as a neural network, it is possible to compute the exact value of the gradient at a given point rather than relying on the numerical approximation, which would require multiple perturbations in the input to obtain a value.
+
+To get the intuition of how the reverse mode works, let’s look at a simple function . Figure 1 shows its computational graph where the inputs x, y in the left, flow through a series of operations to generate the output z.
+
+
+  
+  Figure 1: Computational graph of f(x, y) = log(x*y)
+
+
+The automatic differentiation engine will normally execute this graph. It will also extend it to calculate the derivatives of w with respect to the inputs x, y, and the intermediate result v.
+
+The example function can be decomposed in f and g, where  and .  Every time the engine executes an operation in the graph, the derivative of that operation is added to the graph to be executed later in the backward pass. Note, that the engine knows the derivatives of the basic functions.
+
+In the example above, when multiplying x and y to obtain v, the engine will extend the graph to calculate the partial derivatives of the multiplication by using the multiplication derivative definition that it already knows.  and  . The resulting extended graph is shown in Figure 2, where the MultDerivative node also calculates the product of the resulting gradients by an input gradient to apply the chain rule; this will be explicitly seen in the following operations. Note that the backward graph (green nodes) will not be executed until all the forward steps are completed.
+
+
+  
+  Figure 2: Computational graph extended after executing the logarithm
+
+
+Continuing, the engine now calculates the  operation and extends the graph again with the log derivative that it knows to be . This is shown in figure 3. This operation generates the result  that when propagated backward and multiplied by the multiplication derivative as in the chain rule, generates the derivatives , .
+
+
+  
+  Figure 3: Computational graph extended after executing the logarithm
+
+
+The original computation graph is extended with a new dummy variable z that is the same w. The derivative of z with respect to w is 1 as they are the same variable, this trick allows us to apply the chain rule to calculate the derivatives of the inputs. After the forward pass is complete, we start the backward pass, by supplying the initial value of 1.0 for . This is shown in Figure 4.
+
+
+  
+  Figure 4: Computational graph extended for reverse auto differentiation
+
+
+Then following the green graph we execute the LogDerivative operation  that the auto differentiation engine introduced, and multiply its result by  to obtain the gradient  as per the chain rule states. Next, the multiplication derivative is executed in the same way, and the desired derivatives  are finally obtained.
+
+Formally, what we are doing here, and PyTorch autograd engine also does, is computing a Jacobian-vector product (Jvp) to calculate the gradients of the model parameters, since the model parameters and inputs are vectors.
+
+The Jacobian-vector product
+
+When we calculate the gradient of a vector-valued function  (a function whose inputs and outputs are vectors), we are essentially constructing a Jacobian matrix .
+
+Thanks to the chain rule, multiplying the Jacobian matrix of a function  by a vector  with the previously calculated gradients of a scalar function  results in the gradients  of the scalar output with respect to the vector-valued function inputs.
+
+As an example, let’s look at some functions in python notation to show how the chain rule applies.
+
+  
+
+  def f(x1, x2):
+      a = x1 * x2
+      y1 = log(a)
+      y2 = sin(x2)
+      return (y1, y2)
+  
+
+  
+
+  def g(y1, y2):
+      return y1 * y2
+  
+
+
+
+Now, if we derive this by hand using the chain rule and the definition of the derivatives, we obtain the following set of identities that we can directly plug into the Jacobian matrix of 
+
+
+  
+  
+  
+  
+
+
+Next, let’s consider the gradients for the scalar function 
+
+
+  
+  
+
+
+If we now calculate the transpose-Jacobian vector product obeying the chain rule, we obtain the following expression:
+
+  
+
+
+Evaluating the Jvp for  yields the result:
+
+We can execute the same expression in PyTorch and calculate the gradient of the input:
+
+  >>> import torch
+  >>> x = torch.tensor([0.5, 0.75], requires_grad=True)
+  >>> y = torch.log(x[0] * x[1]) * torch.sin(x[1])
+  >>> y.backward(1.0)
+  >>> x.grad
+  tensor([1.3633,
+          0.1912])
+
+
+The result is the same as our hand-calculated Jacobian-vector product!
+However, PyTorch never constructed the matrix as it could grow prohibitively large but instead, created a graph of operations that traversed backward while applying the Jacobian-vector products defined in tools/autograd/derivatives.yaml.
+
+Going through the graph
+
+Every time PyTorch executes an operation, the autograd engine constructs the graph to be traversed backward.
+The reverse mode auto differentiation starts by adding a scalar variable at the end  so that  as we saw in the introduction. This is the initial gradient value that is supplied to the Jvp engine calculation as we saw in the section above.
+
+In PyTorch, the initial gradient is explicitly set by the user when he calls the backward method.
+
+Then, the Jvp calculation starts but it never constructs the matrix. Instead, when PyTorch records the computational graph, the derivatives of the executed forward operations are added (Backward Nodes). Figure 5 shows a backward graph generated by the execution of the functions  and  seen before.
+
+
+  
+  Figure 5: Computational Graph extended with the backward pass
+
+
+Once the forward pass is done, the results are used in the backward pass where the derivatives in the computational graph are executed. The basic derivatives are stored in the tools/autograd/derivatives.yaml file and they are not regular derivatives but the Jvp versions of them [3]. They take their primitive function inputs and outputs as parameters along with the gradient of the function outputs with respect to the final outputs. By repeatedly multiplying the resulting gradients by the next Jvp derivatives in the graph, the gradients up to the inputs will be generated following the chain rule.
+
+
+  
+  Figure 6: How the chain rule is applied in backward differentiation
+
+
+Figure 6 represents the process by showing the chain rule. We started with a value of 1.0 as detailed before which is the already calculated gradient  highlighted in green. And we move to the next node in the graph. The backward function registered in derivatives.yaml will calculate the associated
+ value highlighted in red and multiply it by . By the chain rule this results in  which will be the already calculated gradient (green) when we process the next backward node in the graph.
+
+You may also have noticed that in Figure 5 there is a gradient generated from two different sources. When two different functions share an input, the gradients with respect to the output are aggregated for that input, and calculations using that gradient can’t proceed unless all the paths have been aggregated together.
+
+Let’s see an example of how the derivatives are stored in PyTorch.
+
+Suppose that we are currently processing the backward propagation of the  function, in the LogBackward node in Figure 2.  The derivative of  in derivatives.yaml is specified as grad.div(self.conj()). grad is the already calculated gradient  and self.conj() is the complex conjugate of the input vector. For complex numbers PyTorch calculates a special derivative called the conjugate Wirtinger derivative [6]. This derivative takes the complex number and its conjugate and by operating some magic that is described in [6], they are the direction of steepest descent when plugged into optimizers.
+
+This code translates to , the corresponding green, and red squares in Figure 3. Continuing, the autograd engine will execute the next operation; backward of the multiplication. As before, the inputs are the original function’s inputs and the gradient calculated from the  backward step. This step will keep repeating until we reach the gradient with respect to the inputs and the computation will be finished. The gradient of  is only completed once the multiplication and sin gradients are added together. As you can see, we computed the equivalent of the Jvp but without constructing the matrix.
+
+In the next post we will dive inside PyTorch code to see how this graph is constructed and where are the relevant pieces should you want to experiment with it!
+
+References
+
+
+  https://maskerprc.github.io/tutorials/beginner/blitz/autograd_tutorial.html
+  https://web.stanford.edu/class/cs224n/readings/gradient-notes.pdf
+  https://www.cs.toronto.edu/~rgrosse/courses/csc321_2018/slides/lec10.pdf
+  https://mustafaghali11.medium.com/how-pytorch-backward-function-works-55669b3b7c62
+  https://indico.cern.ch/event/708041/contributions/3308814/attachments/1813852/2963725/automatic_differentiation_and_deep_learning.pdf
+  https://pytorch.org/docs/stable/notes/autograd.html#complex-autograd-doc
+  Recommended: shows why the backprop is formally expressed with the Jacobian
+  https://cs.ubc.ca/~fwood/CS340/lectures/AD1.pdf
+
+">
+
+  <link rel="stylesheet" href="/assets/main.css">
+  <script src="/assets/vendor/jquery.min.js"></script>
+  <script src="/assets/vendor/popper.min.js"></script>
+  <script src="/assets/vendor/bootstrap.min.js"></script>
+  <script src="/assets/vendor/anchor.min.js"></script>
+  <script type="text/x-mathjax-config">
+    MathJax.Hub.Config({
+      tex2jax: {
+        skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+        inlineMath: [['$','$']]
+      }
+    });
+  </script>
+  <script src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.js"></script>
+  
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsearch.js@2/dist/cdn/docsearch.min.css">
+  <link href="/feed.xml" type="application/atom+xml" rel="alternate" title="Pythorch Blog Posts">
+</head><body class="blog">
+    <!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-T8XT4PS" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+    <div class="main-background blog-background blog-detail-background"></div>
+    <div class="hello-bar">
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+      </div>
+      
+    <div class="container-fluid header-holder blog-detail-header">
+        <div class="container">
+            
+
+<div class="header-container">
+  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+
+  <div class="main-menu">
+  <ul>
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">学习</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/get-started">
+            <span class="dropdown-title">开始使用</span>
+            <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
+            <span class="dropdown-title">教程</span>
+            <p>PyTorch 教程中的新内容</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span>
+            <p>熟悉 PyTorch 的概念和模块</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span>
+            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          </a>
+          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
+            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          </a>
+          <a class="nav-dropdown-item" href="/new">
+            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">生态系统</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
+            <span class="dropdown-title">工具</span>
+            <p>了解 PyTorch 生态系统中的工具和框架</p>
+          </a>
+          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
+            <span class="dropdown-title">论坛</span>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
+          </a>
+          <a class="nav-dropdown-item" href="/resources">
+            <span class="dropdown-title">开发者资源</span>
+            <p>查找资源并解答问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
+            <span class="dropdown-title">2024年贡献者奖项</span>
+            <p>本年 PyTorch 会议获奖者揭晓</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">边缘</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/edge">
+            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+          </a>
+          <a class="nav-dropdown-item" href="/executorch-overview">
+            <span class="dropdown-title">执行火炬</span>
+            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+          </a>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch 文档</span>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="docsDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">文档</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="https://pytorch.org/docs">
+            <span class="dropdown-title">PyTorch</span>
+            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/pytorch-domains">
+            <span class="dropdown-title">PyTorch 领域</span>
+            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">博客与新闻</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/blog">
+            <span class="dropdown-title">PyTorch 博客</span>
+            <p>获取最新的技术新闻和动态。</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-blog">
+            <span class="dropdown-title">社区博客</span>
+            <p>PyTorch 生态系统中的故事</p>
+          </a>
+          <a class="nav-dropdown-item" href="/videos">
+            <span class="dropdown-title">视频</span>
+            <p>了解最新的 PyTorch 教程、新内容等</p>
+          </a>
+          <a class="nav-dropdown-item" href="/community-stories">
+            <span class="dropdown-title">社区故事</span>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
+          </a>
+          <a class="nav-dropdown-item" href="/events">
+            <span class="dropdown-title">活动</span>
+            <p>查找活动、网络研讨会和播客</p>
+          </a>
+          <a class="nav-dropdown-item" href="/newsletter">
+            <span class="dropdown-title">通讯</span>
+            <p>保持最新更新</p>
+          </a>
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <div id="resourcesDropdownButton" data-toggle="resources-dropdown" class="resources-dropdown">
+        <a class="with-down-arrow">关于</a>
+        <div class="resources-dropdown-menu">
+          <a class="nav-dropdown-item" href="/foundation">
+            <span class="dropdown-title">PyTorch 基金会</span>
+            <p>了解更多关于 PyTorch 基金会的信息。</p>
+          </a>
+          管理委员会云信用计划技术顾问委员会员工联系我们
+        </div>
+      </div>
+    </li>
+
+    <li class="main-menu-item">
+      <a href="/join" data-cta="join">成为会员</a>
+    </li>
+
+    <li class="main-menu-item" id="github-main-menu-link">
+      <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub">
+        <div id="topnav-gh-icon"></div>
+      </a>
+    </li>
+
+    <li class="navSearchWrapper reactNavSearchWrapper" key="search">
+      <div class="search-border">
+        <div id="search-icon"></div>
+        <input id="search-input" type="text" title="Search">
+        <div id="close-search">X</div>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<script src="/assets/main-menu-dropdown.js"></script>
+
+
+  <a class="main-menu-open-button" href="#" data-behavior="open-mobile-menu"></a>
+</div>
+
+        </div>
+    </div>
+
+    <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
+        <div class="container blog-detail-container">
+            <p class="featured-post">2021年6月8日</p>
+            <h1>
+                <a class="blog-title">PyTorch 自动微分引擎概述</a>
+            </h1>
+        </div>
+    </div>
+
+    <div class="main-content-wrapper blog-detail-wrapper">
+        <div class="main-content blog-detail-content">
+            <div class="container">
+                <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
+                <article class="pytorch-article">
+                    <p class="author">由 Preferred Networks，Inc.提供</p>
+                    <p>本博客文章基于 PyTorch 版本 1.8 编写，尽管它也适用于较旧版本，因为大部分机制都保持不变。</p>
+
+<p>为了帮助理解这里解释的概念，建议您阅读由 <a href="https://twitter.com/ezyang">@ezyang</a> 撰写的精彩博客文章：<a href="http://blog.ezyang.com/2019/05/pytorch-internals/">PyTorch 内部机制 </a>，如果您不熟悉 PyTorch 架构组件，如 ATen 或 c10d。</p>
+
+<h3 id="what-is-autograd">什么是 autograd？</h3>
+
+<p><strong>背景</strong></p>
+
+<p>PyTorch 通过自动微分计算函数相对于输入的梯度。自动微分是一种技术，给定一个计算图，可以计算输入的梯度。自动微分可以有两种不同的方式；正向模式和反向模式。正向模式意味着我们在计算函数结果的同时计算梯度，而反向模式则需要我们首先评估函数，然后从输出开始计算梯度。虽然两种模式都有其优缺点，但由于输出的数量少于输入的数量，反向模式成为了事实上的选择，这允许更高效的计算。请参阅[3]了解更多信息。</p>
+
+<p>自动微分依赖于经典的微积分公式，即链式法则。链式法则允许我们通过拆分和重新组合来计算非常复杂的导数。</p>
+
+<p>从严格意义上讲，给定一个复合函数 <a href="https://www.codecogs.com/eqnedit.php?latex=f(g(x))" target="_blank"> <img height="19" width="57" title="f(g(x))" src="https://latex.codecogs.com/gif.latex?f(g(x))"> </a>，我们可以计算其导数作为 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial}{\partial&amp;space;x}&amp;space;f(g(x))&amp;space;=&amp;space;f'(g(x))g'(x)" target="_blank"> <img height="39" width="203" title="\frac{\partial}{\partial x} f(g(x)) = f'(g(x))g'(x)" src="https://latex.codecogs.com/gif.latex?\frac{\partial}{\partial&amp;space;x}&amp;space;f(g(x))&amp;space;=&amp;space;f'(g(x))g'(x)"> </a>。这个结果使得自动微分得以工作。通过结合组成较大函数（如神经网络）的简单函数的导数，可以计算给定点的梯度确切值，而不是依赖于数值近似，这需要多次扰动输入来获得值。</p>
+
+<p>为了理解逆模式的工作原理，让我们来看一个简单的函数 <a href="https://www.codecogs.com/eqnedit.php?latex=f(x,&amp;space;y)&amp;space;=&amp;space;log(x*y)" target="_blank"> <img height="19" width="150" title="f(x, y) = log(x*y)" src="https://latex.codecogs.com/gif.latex?f(x,&amp;space;y)&amp;space;=&amp;space;log(x*y)"> </a>。图 1 显示了其计算图，其中左边的输入 x、y 流经一系列操作以生成输出 z。</p>
+
+<div class="text-center">
+  <img src="/assets/images/f_x_y_graph.png" width="100%">
+  <p>图 1：函数 f(x, y) = log(x*y)的计算图</p>
+</div>
+
+<p>自动微分引擎通常会执行这个图。它还会扩展它来计算 w 相对于输入 x、y 和中间结果 v 的导数。</p>
+
+<p>示例函数可以被分解为 f 和 g，其中 <a href="https://www.codecogs.com/eqnedit.php?latex=f(x,&amp;space;y)&amp;space;=&amp;space;log(g(x,&amp;space;y))" target="_blank"> <img height="19" width="164" title="f(x, y) = log(g(x, y))" src="https://latex.codecogs.com/gif.latex?f(x,&amp;space;y)&amp;space;=&amp;space;log(g(x,&amp;space;y))"> </a> 和 <a href="https://www.codecogs.com/eqnedit.php?latex=g(x,&amp;space;y)&amp;space;=&amp;space;xy" target="_blank"> <img height="19" width="94" title="g(x, y) = xy" src="https://latex.codecogs.com/gif.latex?g(x,&amp;space;y)&amp;space;=&amp;space;xy"> </a>。每次引擎在图中执行一个操作时，都会将该操作的导数添加到图中，以便在后续的反向传播中执行。请注意，引擎知道基本函数的导数。</p>
+
+<p>在上述示例中，当将 x 和 y 相乘得到 v 时，引擎将扩展图以使用它已知的乘法导数定义来计算乘法的偏导数。 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial}{\partial&amp;space;x}&amp;space;g(x,&amp;space;y)&amp;space;=&amp;space;y" target="_blank"> <img height="39" width="106" title="\frac{\partial}{\partial x} g(x, y) = y" src="https://latex.codecogs.com/gif.latex?\frac{\partial}{\partial&amp;space;x}&amp;space;g(x,&amp;space;y)&amp;space;=&amp;space;y"> </a> 和 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial}{\partial&amp;space;y}&amp;space;g(x,&amp;space;y)&amp;space;=&amp;space;x" target="_blank"> <img height="43" width="106" title="\frac{\partial}{\partial y} g(x, y) = x" src="https://latex.codecogs.com/gif.latex?\frac{\partial}{\partial&amp;space;y}&amp;space;g(x,&amp;space;y)&amp;space;=&amp;space;x"> </a> 。扩展后的图如图 2 所示，其中 <em>MultDerivative</em> 节点还计算输入梯度与结果的乘积，以应用链式法则；这将在后续操作中明确看到。请注意，反向图（绿色节点）将在所有正向步骤完成后才执行。</p>
+
+<div class="text-center">
+  <img src="/assets/images/multi_derivative_graph.png" width="100%">
+  <p>图 2：执行对数运算后扩展的计算图</p>
+</div>
+
+<p>继续进行，引擎现在计算了 <a href="https://www.codecogs.com/eqnedit.php?latex=log(v)" target="_blank"> <img height="19" width="46" title="log(v)" src="https://latex.codecogs.com/gif.latex?log(v)"> </a> 操作，并再次使用它所知道的对数导数扩展了图。这如图 3 所示。这个操作生成了结果 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;w}{\partial&amp;space;v}" target="_blank"> <img height="39" width="24" title="\frac{\partial w}{\partial v}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;w}{\partial&amp;space;v}"> </a>，当它向后传播并与链式法则中的乘法导数相乘时，生成了导数 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;w}{\partial&amp;space;x}" target="_blank"> <img height="39" width="24" title="\frac{\partial w}{\partial x}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;w}{\partial&amp;space;x}"> </a>、<a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;w}{\partial&amp;space;y}" target="_blank"> <img height="43" width="24" title="\frac{\partial w}{\partial y}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;w}{\partial&amp;space;y}"> </a>。</p>
+
+<div class="text-center">
+  <img src="/assets/images/extended_computational_graph.png" width="100%">
+  <p>图3：执行对数后的计算图扩展</p>
+</div>
+
+<p>原始计算图通过添加一个与 w 相同的新的虚拟变量 z 进行了扩展。z 相对于 w 的导数是 1，因为它们是相同的变量，这个技巧允许我们应用链式法则来计算输入的导数。正向传播完成后，我们开始反向传播，为 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;w}" target="_blank"> <img height="39" width="24" title="\frac{\partial z}{\partial w}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;w}"> </a> 提供初始值 1.0。这如图 4 所示。</p>
+
+<div class="text-center">
+  <img src="/assets/images/computational_graph_reverse_auto_differentiation.png" width="100%">
+  <p>图4：反向自动微分扩展的计算图</p>
+</div>
+
+<p>然后，在绿色图表之后，我们执行自动微分引擎引入的 LogDerivative 操作 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{1}{v}" target="_blank"> <img height="37" width="10" title="\frac{1}{v}" src="https://latex.codecogs.com/gif.latex?\frac{1}{v}"> </a>，并将其结果乘以 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;w}" target="_blank"> <img height="39" width="24" title="\frac{\partial z}{\partial w}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;w}"> </a>，根据链式法则获得梯度 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;v}" target="_blank"> <img height="39" width="20" title="\frac{\partial z}{\partial v}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;v}"> </a>。接下来，以同样的方式执行乘积的导数，最终获得所需的导数 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;x}&amp;space;\frac{\partial&amp;space;z}{\partial&amp;space;y}" target="_blank"> <img height="43" width="44" title="\frac{\partial z}{\partial x} \frac{\partial z}{\partial y}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;x}&amp;space;\frac{\partial&amp;space;z}{\partial&amp;space;y}"> </a>。</p>
+
+<p>形式上，我们在这里所做的是，PyTorch 自动微分引擎也这样做，就是计算雅可比-向量积（Jvp），以计算模型参数的梯度，因为模型参数和输入都是向量。</p>
+
+<p><strong>雅可比-向量积</strong></p>
+
+<p>当我们计算一个向量值函数 <a href="https://www.codecogs.com/eqnedit.php?latex=f(\overline{x})&amp;space;=&amp;space;\overline{y}" target="_blank"> <img height="19" width="69" title="f(\overline{x}) = \overline{y}" src="https://latex.codecogs.com/gif.latex?f(\overline{x})&amp;space;=&amp;space;\overline{y}"> </a>（输入和输出都是向量的函数）的梯度时，我们实际上是在构造一个雅可比矩阵。</p>
+
+<p>多亏了链式法则，将函数 <a href="https://www.codecogs.com/eqnedit.php?latex=f(\overline{x})&amp;space;=&amp;space;\overline{y}" target="_blank"> <img height="19" width="69" title="f(\overline{x}) = \overline{y}" src="https://latex.codecogs.com/gif.latex?f(\overline{x})&amp;space;=&amp;space;\overline{y}"> </a> 的雅可比矩阵与标量函数 <a href="https://www.codecogs.com/eqnedit.php?latex=z&amp;space;=&amp;space;g(\overline{y})" target="_blank"> <img height="19" width="65" title="z = g(\overline{y})" src="https://latex.codecogs.com/gif.latex?z&amp;space;=&amp;space;g(\overline{y})"> </a> 的先前计算梯度向量 <a href="https://www.codecogs.com/eqnedit.php?latex=v" target="_blank"> <img height="8" width="9" title="v" src="https://latex.codecogs.com/gif.latex?v"> </a> 相乘，可以得到标量输出相对于向量值函数输入的梯度 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;x_1}&amp;space;\cdots&amp;space;\frac{\partial&amp;space;z}{\partial&amp;space;x_n}" target="_blank"> <img height="41" width="89" title="\frac{\partial z}{\partial x_1} \cdots \frac{\partial z}{\partial x_n}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;x_1}&amp;space;\cdots&amp;space;\frac{\partial&amp;space;z}{\partial&amp;space;x_n}"> </a>。</p>
+
+<p>以下以 Python 语法为例，说明链式法则的应用。</p>
+<div class="outlined-code-block">
+  <a href="https://www.codecogs.com/eqnedit.php?latex=f(x_1,&amp;space;x_2)&amp;space;=&amp;space;(log(x_1&amp;space;x_2),&amp;space;sin(x_2))" target="_blank"><img src="https://latex.codecogs.com/gif.latex?f(x_1,&amp;space;x_2)&amp;space;=&amp;space;(log(x_1&amp;space;x_2),&amp;space;sin(x_2))" title="f(x_1, x_2) = (log(x_1 x_2), sin(x_2))" width="241" height="19"></a>
+
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">def f(x1, x2):
+a = x1 * x2
+y1 = log(a)
+y2 = sin(x2)
+return (y1, y2)</font></font></font></pre>
+
+  <a href="https://www.codecogs.com/eqnedit.php?latex=g(y_1,&amp;space;y_2)&amp;space;=&amp;space;y_1&amp;space;y_2" target="_blank"><img src="https://latex.codecogs.com/gif.latex?g(y_1,&amp;space;y_2)&amp;space;=&amp;space;y_1&amp;space;y_2" title="g(y_1, y_2) = y_1 y_2" width="118" height="19"></a>
+
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">def g(y1, y2):
+return y1 * y2</font></font></font></pre>
+
+</div>
+
+<p>现在，如果我们手动通过链式法则和导数的定义来推导，我们得到以下一组可以直接代入到 <a href="https://www.codecogs.com/eqnedit.php?latex=f(x_1,&amp;space;x_2)" target="_blank"> <img height="19" width="67" title="f(x_1, x_2)" src="https://latex.codecogs.com/gif.latex?f(x_1,&amp;space;x_2)"> </a> 雅可比矩阵中的恒等式</p>
+
+<div class="outlined-code-block">
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y_1}{\partial&amp;space;x_1}&amp;space;=&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;a}\frac{\partial&amp;space;a}{\partial&amp;space;x_1}&amp;space;=&amp;space;\frac{1}{x_1}" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y_1}{\partial&amp;space;x_1}&amp;space;=&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;a}\frac{\partial&amp;space;a}{\partial&amp;space;x_1}&amp;space;=&amp;space;\frac{1}{x_1}" title="\frac{\partial y_1}{\partial x_1} = \frac{\partial y_1}{\partial a}\frac{\partial a}{\partial x_1} = \frac{1}{x_1}" width="159" height="41"></a></p>
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y_1}{\partial&amp;space;x_2}&amp;space;=&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;a}\frac{\partial&amp;space;a}{\partial&amp;space;x_2}&amp;space;=&amp;space;\frac{1}{x_2}" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y_1}{\partial&amp;space;x_2}&amp;space;=&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;a}\frac{\partial&amp;space;a}{\partial&amp;space;x_2}&amp;space;=&amp;space;\frac{1}{x_2}" title="\frac{\partial y_1}{\partial x_2} = \frac{\partial y_1}{\partial a}\frac{\partial a}{\partial x_2} = \frac{1}{x_2}" width="159" height="41"></a></p>
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y_2}{\partial&amp;space;x_1}&amp;space;=&amp;space;0" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y_2}{\partial&amp;space;x_1}&amp;space;=&amp;space;0" title="\frac{\partial y_2}{\partial x_1} = 0" width="62" height="41"></a></p>
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y_2}{\partial&amp;space;x_2}&amp;space;=&amp;space;cos(x_2)" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y_2}{\partial&amp;space;x_2}&amp;space;=&amp;space;cos(x_2)" title="\frac{\partial y_2}{\partial x_2} = cos(x_2)" width="109" height="41"></a></p>
+</div>
+
+<p>接下来，让我们考虑标量函数 <a href="https://www.codecogs.com/eqnedit.php?latex=z&amp;space;=&amp;space;g(y_1,&amp;space;y_2)" target="_blank"> <img height="19" width="95" title="z = g(y_1, y_2)" src="https://latex.codecogs.com/gif.latex?z&amp;space;=&amp;space;g(y_1,&amp;space;y_2)"> </a> 的梯度</p>
+
+<div class="outlined-code-block">
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{y_1}&amp;space;=&amp;space;y_2" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{y_1}&amp;space;=&amp;space;y_2" title="\frac{\partial z}{y_1} = y_2" width="61" height="43"></a></p>
+  <p><a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{y_2}&amp;space;=&amp;space;y_1" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{y_2}&amp;space;=&amp;space;y_1" title="\frac{\partial z}{y_2} = y_1" width="61" height="43"></a></p>
+</div>
+
+<p>如果我们现在计算遵循链式法则的转置-雅可比向量积，我们得到以下表达式</p>
+<div style="overflow:scroll">
+  <a href="https://www.codecogs.com/eqnedit.php?latex=\begin{pmatrix}\frac{\partial&amp;space;y_1}{\partial&amp;space;x_1}&amp;space;&amp;&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;x_2}&amp;space;\\\\&amp;space;\frac{\partial&amp;space;y_2}{\partial&amp;space;x_1}&amp;space;&amp;&amp;space;\frac{\partial&amp;space;y_2}{\partial&amp;space;x_2}&amp;space;\end{pmatrix}^{t}&amp;space;\begin{pmatrix}&amp;space;y_2\\y_1&amp;space;\end{pmatrix}&amp;space;=&amp;space;\begin{pmatrix}\frac{1}{x_1}&amp;space;&amp;&amp;space;\frac{1}{x_2}&amp;space;\\\\&amp;space;0&amp;space;&amp;&amp;space;cos(x_2))&amp;space;\end{pmatrix}^{t}&amp;space;\begin{pmatrix}&amp;space;y_2\\y_1&amp;space;\end{pmatrix}&amp;space;=&amp;space;\begin{pmatrix}&amp;space;\frac{1}{x_1}y_2\\\frac{1}{x_2}y_2+cos(x_2)y_1&amp;space;\end{pmatrix}" target="_blank"><img src="https://latex.codecogs.com/gif.latex?\begin{pmatrix}\frac{\partial&amp;space;y_1}{\partial&amp;space;x_1}&amp;space;&amp;&amp;space;\frac{\partial&amp;space;y_1}{\partial&amp;space;x_2}&amp;space;\\\\&amp;space;\frac{\partial&amp;space;y_2}{\partial&amp;space;x_1}&amp;space;&amp;&amp;space;\frac{\partial&amp;space;y_2}{\partial&amp;space;x_2}&amp;space;\end{pmatrix}^{t}&amp;space;\begin{pmatrix}&amp;space;y_2\\y_1&amp;space;\end{pmatrix}&amp;space;=&amp;space;\begin{pmatrix}\frac{1}{x_1}&amp;space;&amp;&amp;space;\frac{1}{x_2}&amp;space;\\\\&amp;space;0&amp;space;&amp;&amp;space;cos(x_2))&amp;space;\end{pmatrix}^{t}&amp;space;\begin{pmatrix}&amp;space;y_2\\y_1&amp;space;\end{pmatrix}&amp;space;=&amp;space;\begin{pmatrix}&amp;space;\frac{1}{x_1}y_2\\\frac{1}{x_2}y_2+cos(x_2)y_1&amp;space;\end{pmatrix}" title="\begin{pmatrix}\frac{\partial y_1}{\partial x_1} &amp; \frac{\partial y_1}{\partial x_2} \\\\ \frac{\partial y_2}{\partial x_1} &amp; \frac{\partial y_2}{\partial x_2} \end{pmatrix}^{t} \begin{pmatrix} y_2\\y_1 \end{pmatrix} = \begin{pmatrix}\frac{1}{x_1} &amp; \frac{1}{x_2} \\\\ 0 &amp; cos(x_2)) \end{pmatrix}^{t} \begin{pmatrix} y_2\\y_1 \end{pmatrix} = \begin{pmatrix} \frac{1}{x_1}y_2\\\frac{1}{x_2}y_2+cos(x_2)y_1 \end{pmatrix}"></a>
+</div>
+
+<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">评估 Jvp 的结果为：<a href="https://www.codecogs.com/eqnedit.php?latex=(x_1,&amp;space;x_2)&amp;space;=&amp;space;(0.5,&amp;space;0.75)" target="_blank"> <img height="19" width="156" title="(x_1, x_2) = (0.5, 0.75)" src="https://latex.codecogs.com/gif.latex?(x_1,&amp;space;x_2)&amp;space;=&amp;space;(0.5,&amp;space;0.75)"> </a>
+我们可以在 PyTorch 中执行相同的表达式并计算输入的梯度：</font></font></font></p>
+<div class="outlined-code-block">
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">&gt;&gt;&gt;&gt;&gt;&gt; 导入 torch</font></font></font></pre>
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">&gt;&gt;&gt;&gt;&gt;&gt; x = torch.tensor([0.5, 0.75], requires_grad=True)</font></font></font></pre>
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">&gt;&gt;&gt; y = torch.log(x[0] * x[1]) * torch.sin(x[1])</font></font></font></pre>
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">&gt;&gt;&gt; y.backward(1.0)</font></font></font></pre>
+  <pre><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  ">&gt;&gt;&gt; x.grad</font></font></font></pre><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">tensor([1.3633,
+0.1912])</font></font></font></div>
+
+<p>结果与我们的手算雅可比-向量积相同！然而，PyTorch 从未构建矩阵，因为矩阵可能会变得过大，而是创建了一个操作图，在反向遍历的同时应用了定义在 <a href="https://github.com/pytorch/pytorch/blob/master/tools/autograd/derivatives.yaml">tools/autograd/derivatives.yaml</a> 中的雅可比-向量积。</p>
+
+<p><strong>遍历图</strong></p>
+
+<p>每当 PyTorch 执行一个操作时，自动微分引擎都会构建一个反向遍历的图。反向模式自动微分首先在末尾添加一个标量变量 <a href="https://www.codecogs.com/eqnedit.php?latex=z&amp;space;=&amp;space;w" target="_blank"> <img height="8" width="46" title="z = w" src="https://latex.codecogs.com/gif.latex?z&amp;space;=&amp;space;w"> </a>，以便 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;w}&amp;space;=&amp;space;1" target="_blank"> <img height="39" width="57" title="\frac{\partial z}{\partial w} = 1" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;w}&amp;space;=&amp;space;1"> </a>，正如我们在引言中看到的。这就是我们上面看到的 Jvp 引擎计算中提供的初始梯度值。</p>
+
+<p>在 PyTorch 中，用户在调用反向方法时，会显式地设置初始梯度。</p>
+
+<p>然后，开始计算 Jvp，但从不构建矩阵。相反，当 PyTorch 记录计算图时，会添加执行的前向操作的导数（反向节点）。图 5 显示了之前看到的函数 <a href="https://www.codecogs.com/eqnedit.php?latex=f(x_1,&amp;space;x_2)" target="_blank"> <img height="19" width="67" title="f(x_1, x_2)" src="https://latex.codecogs.com/gif.latex?f(x_1,&amp;space;x_2)"> </a> 和 <a href="https://www.codecogs.com/eqnedit.php?latex=g(y_1,&amp;space;y_2)" target="_blank"> <img height="19" width="62" title="g(y_1, y_2)" src="https://latex.codecogs.com/gif.latex?g(y_1,&amp;space;y_2)"> </a> 执行产生的反向图。</p>
+
+<div class="text-center">
+  <img src="/assets/images/computational_graph_backward_pass.png" width="100%">
+  <p>图5：反向传递扩展的计算图</p>
+</div>
+
+<p>前向传递完成后，结果被用于反向传递，其中计算图中的导数被执行。基本导数存储在 <a href="https://github.com/pytorch/pytorch/blob/master/tools/autograd/derivatives.yaml">tools/autograd/derivatives.yaml</a> 文件中，它们不是常规导数，而是它们的 Jvp 版本[3]。它们将原始函数的输入和输出作为参数，以及函数输出相对于最终输出的梯度。通过反复将得到的梯度与图中下一个 Jvp 导数相乘，根据链式法则生成直到输入的梯度。</p>
+
+<div class="text-center">
+  <img src="/assets/images/chain_rule_backward_differentiation.png" width="100%">
+  <p>图6：反向微分中链式法则的应用</p>
+</div>
+
+<p>图 6 通过展示链式法则来表示这个过程。我们从一个值为 1.0 的值开始，如前所述，这是已经计算出的梯度 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y}{\partial&amp;space;u}" target="_blank"> <img height="39" width="21" title="\frac{\partial y}{\partial u}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y}{\partial&amp;space;u}"> </a>，用绿色突出显示。然后我们移动到图中的下一个节点。在 <a href="https://github.com/pytorch/pytorch/blob/a0a7a2d648f05b0192e6943c9684406cdf404fbf/tools/autograd/derivatives.yaml#L635-L636">derivatives.yaml</a> 中注册的<em>反向</em>函数将计算相关的 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;u}{\partial&amp;space;v}" target="_blank"> <img height="39" width="21" title="\frac{\partial u}{\partial v}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;u}{\partial&amp;space;v}"> </a> 值，用红色突出显示，并将其乘以 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y}{\partial&amp;space;u}" target="_blank"> <img height="39" width="21" title="\frac{\partial y}{\partial u}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y}{\partial&amp;space;u}"> </a>。根据链式法则，这导致 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;y}{\partial&amp;space;v}" target="_blank"> <img height="39" width="20" title="\frac{\partial y}{\partial v}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;y}{\partial&amp;space;v}"> </a>，这将是当我们处理图中的下一个反向节点时已经计算出的梯度（绿色）。</p>
+
+<p>你可能也注意到了，在图5中，有一个来自两个不同来源的梯度。当两个不同的函数共享一个输入时，对于该输出的梯度会聚合到那个输入上，并且使用该梯度进行的计算不能继续，除非所有路径都已聚合在一起。</p>
+
+<p>让我们看看在 PyTorch 中如何存储导数的一个例子。</p>
+
+<p>假设我们目前正在处理 <a href="https://www.codecogs.com/eqnedit.php?latex=log" target="_blank"> <img height="17" width="24" title="log" src="https://latex.codecogs.com/gif.latex?log"> </a> 函数的逆向传播，在图 2 中的 <em>LogBackward</em> 节点。在 <a href="https://github.com/pytorch/pytorch/blob/a0a7a2d648f05b0192e6943c9684406cdf404fbf/tools/autograd/derivatives.yaml#L635-L636"><code class="language-plaintext highlighter-rouge">derivatives.yaml</code></a> 中指定了 <a href="https://www.codecogs.com/eqnedit.php?latex=log" target="_blank"> <img height="17" width="24" title="log" src="https://latex.codecogs.com/gif.latex?log"> </a> 的导数，为 <code class="language-plaintext highlighter-rouge">grad.div(self.conj())</code>。<code class="language-plaintext highlighter-rouge">grad</code> 是已计算的梯度 <a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{\partial&amp;space;y1}" target="_blank"> <img height="43" width="29" title="\frac{\partial z}{\partial y1}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{\partial&amp;space;y1}"> </a>，而 <code class="language-plaintext highlighter-rouge">self.conj()</code> 是输入向量的复共轭。对于复数，PyTorch 计算一个特殊的导数，称为共轭 Wirtinger 导数[6]。这个导数将复数及其共轭通过[6]中描述的一些魔法操作，当插入到优化器中时，它们是下降最快的方向。</p>
+
+<p>这段代码翻译为 <a href="https://www.codecogs.com/eqnedit.php?latex=(\frac{\partial&amp;space;z}{\partial&amp;space;y1}&amp;space;\frac{1}{v})" target="_blank"> <img height="43" width="57" title="(\frac{\partial z}{\partial y1} \frac{1}{v})" src="https://latex.codecogs.com/gif.latex?(\frac{\partial&amp;space;z}{\partial&amp;space;y1}&amp;space;\frac{1}{v})"> </a>，对应图 3 中的绿色和红色方块。继续，自动微分引擎将执行下一个操作；乘法的反向操作。和之前一样，输入是原始函数的输入以及从 <a href="https://www.codecogs.com/eqnedit.php?latex=log" target="_blank"> <img height="17" width="24" title="log" src="https://latex.codecogs.com/gif.latex?log"> </a> 反向步骤计算出的梯度。这一步将不断重复，直到我们得到关于输入的梯度，计算才会完成。只有当乘法和正弦梯度相加后，<a href="https://www.codecogs.com/eqnedit.php?latex=\frac{\partial&amp;space;z}{x2}" target="_blank"> <img height="39" width="20" title="\frac{\partial z}{x2}" src="https://latex.codecogs.com/gif.latex?\frac{\partial&amp;space;z}{x2}"> </a> 的梯度才算完成。正如你所见，我们计算了 Jvp 的等价物，但没有构建矩阵。</p>
+
+<p>在下一篇文章中，我们将深入 PyTorch 代码，看看这个图是如何构建的，以及如果你想实验的话，应该关注哪些相关部分！</p>
+
+<h3 id="references">参考文献列表</h3>
+
+<ol class="reference-list">
+  <li><a href="https://maskerprc.github.io/tutorials/beginner/blitz/autograd_tutorial.html">https://maskerprc.github.io/tutorials/beginner/blitz/autograd_tutorial.html</a></li>
+  <li><a href="https://web.stanford.edu/class/cs224n/readings/gradient-notes.pdf">https://web.stanford.edu/class/cs224n/readings/gradient-notes.pdf</a></li>
+  <li><a href="https://www.cs.toronto.edu/~rgrosse/courses/csc321_2018/slides/lec10.pdf">https://www.cs.toronto.edu/~rgrosse/courses/csc321_2018/slides/lec10.pdf</a></li>
+  <li><a href="https://mustafaghali11.medium.com/how-pytorch-backward-function-works-55669b3b7c62">https://mustafaghali11.medium.com/how-pytorch-backward-function-works-55669b3b7c62</a></li>
+  <li><a href="https://indico.cern.ch/event/708041/contributions/3308814/attachments/1813852/2963725/automatic_differentiation_and_deep_learning.pdf">https://indico.cern.ch/event/708041/contributions/3308814/attachments/1813852/2963725/automatic_differentiation_and_deep_learning.pdf</a></li>
+  <li><a href="https://pytorch.org/docs/stable/notes/autograd.html#complex-autograd-doc">https://pytorch.org/docs/stable/notes/autograd.html#complex-autograd-doc</a></li>
+  <p>推荐：解释了为什么反向传播正式表达为雅可比矩阵</p>
+  <li><a href="https://www.cs.ubc.ca/~fwood/CS340/lectures/AD1.pdf">https://cs.ubc.ca/~fwood/CS340/lectures/AD1.pdf</a></li>
+</ol>
+
+                </article>
+            </div>
+        </div>
+    </div>
+
+<!--    
+
+
+ -->
+    <div class="container-fluid docs-tutorials-resources">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-4 text-center">
+        <h2>文档</h2>
+        <p>查看 PyTorch 的全面开发者文档</p>
+        <a class="with-right-arrow" href="/docs">查看文档</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>教程</h2>
+        <p>获取初学者和高级开发者的深入教程</p>
+        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+      </div>
+
+      <div class="col-md-4 text-center">
+        <h2>资源</h2>
+        <p>查找开发资源并获得您的疑问解答</p>
+        <a class="with-right-arrow" href="/resources">查看资源</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer class="site-footer">
+  <div class="container footer-container">
+
+    <div class="newsletter" id="newsletter">
+
+      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+    
+    
+        <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
+        <script>
+          hbspt.forms.create({
+            region: "na1",
+            portalId: "8112310",
+            formId: "2fb2231c-000b-4ec5-88a0-1ab242549c9e"
+          });
+        </script>
+        
+    
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+        
+    </div>
+    
+
+
+    <div class="lf-grid">
+      <div class="footer-logo-wrapper">
+        <a href="http://localhost:4000" class="footer-logo">
+          <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
+        </a>
+      </div>
+
+      <ul class="social-links">
+        <li><a href="https://www.facebook.com/pytorch" target="_blank" title="PyTorch on Facebook">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.51 -0.26 26.45 26.45" aria-label="Facebook"><path fill="currentColor" d="M25.497 13.075c0-2.45-.698-4.848-2.011-6.911a12.765 12.765 0 0 0-5.398-4.73A12.671 12.671 0 0 0 11.008.38a12.705 12.705 0 0 0-6.529 2.95A12.827 12.827 0 0 0 .563 9.358a12.896 12.896 0 0 0-.07 7.201 12.831 12.831 0 0 0 3.801 6.103 12.709 12.709 0 0 0 6.471 3.078v-8.957H7.53v-3.708h3.235v-2.824c0-3.213 1.903-4.988 4.813-4.988.956.014 1.909.097 2.852.25V8.67h-1.607a1.83 1.83 0 0 0-1.518.497 1.854 1.854 0 0 0-.561 1.505v2.404h3.535l-.563 3.708h-2.97v8.957a12.725 12.725 0 0 0 7.697-4.337 12.87 12.87 0 0 0 3.054-8.328z"></path></svg>	
+        </a></li>
+        <li><a href="https://twitter.com/pytorch" target="_blank" title="PyTorch on X">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" aria-label="X"><path fill="currentColor" d="M178.57 127.15 290.27 0h-26.46l-97.03 110.38L89.34 0H0l117.13 166.93L0 300.25h26.46l102.4-116.59 81.8 116.59h89.34M36.01 19.54H76.66l187.13 262.13h-40.66"></path></svg>
+        </a></li>
+        <li><a href="https://www.youtube.com/pytorch" target="_blank" title="PyTorch on YouTube">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.21 0.27 34.45 25.07" aria-label="YouTube"><path fill="currentColor" d="M33.729 6.084s-.327-2.33-1.317-3.356a4.691 4.691 0 0 0-3.32-1.432c-4.634-.34-11.589-.34-11.589-.34h-.014s-6.954 0-11.59.342a4.692 4.692 0 0 0-3.32 1.432c-.993 1.025-1.315 3.354-1.315 3.354a52.189 52.189 0 0 0-.331 5.473v2.566c.014 1.829.125 3.656.331 5.472 0 0 .322 2.33 1.316 3.36 1.26 1.345 2.916 1.3 3.653 1.445 2.65.26 11.263.34 11.263.34s6.96-.01 11.597-.353a4.691 4.691 0 0 0 3.32-1.432c.993-1.026 1.316-3.356 1.316-3.356.206-1.817.316-3.644.33-5.473v-2.57a52.26 52.26 0 0 0-.33-5.472zM14.076 17.232V7.729l8.951 4.768-8.95 4.735z"></path></svg>	
+        </a></li>
+        <li><a href="https://www.linkedin.com/company/pytorch" target="_blank" title="PyTorch on LinkedIn">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.23 -10.23 531.96 531.96" aria-label="LinkedIn"><rect width="512" height="512" rx="0" fill="currentColor"></rect><circle fill="#000" cx="142" cy="138" r="37"></circle><path stroke="#000" stroke-width="66" d="M244 194v198M142 194v198"></path><path fill="#000" d="M276 282c0-20 13-40 36-40 24 0 33 18 33 45v105h66V279c0-61-32-89-76-89-34 0-51 19-59 32"></path></svg>
+        </a></li>
+        <li><a href="https://join.slack.com/t/pytorch/shared_invite/zt-2j2la612p-miUinTTaxXczKOJw48poHA" target="_blank" title="PyTorch Slack">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.16 -0.03 21.19 21.19" aria-label="Slack"><path fill="currentColor" d="M4.896 13.27a2.147 2.147 0 0 1-2.141 2.142A2.147 2.147 0 0 1 .613 13.27c0-1.178.963-2.141 2.142-2.141h2.141v2.141zm1.08 0c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.363a2.147 2.147 0 0 1-2.142 2.141 2.147 2.147 0 0 1-2.141-2.142V13.27zm2.141-8.6a2.147 2.147 0 0 1-2.141-2.14c0-1.18.962-2.142 2.141-2.142s2.142.963 2.142 2.141v2.142H8.117zm0 1.08c1.179 0 2.141.962 2.141 2.141a2.147 2.147 0 0 1-2.141 2.142H2.755A2.147 2.147 0 0 1 .613 7.89c0-1.179.963-2.141 2.142-2.141h5.362zm8.599 2.141c0-1.179.963-2.141 2.141-2.141 1.179 0 2.143.962 2.143 2.14a2.147 2.147 0 0 1-2.142 2.142h-2.141V7.89zm-1.08 0a2.147 2.147 0 0 1-2.141 2.142 2.147 2.147 0 0 1-2.141-2.142V2.53c0-1.178.962-2.141 2.141-2.141s2.142.963 2.142 2.141v5.362zm-2.141 8.6c1.179 0 2.142.962 2.142 2.14a2.147 2.147 0 0 1-2.142 2.142 2.147 2.147 0 0 1-2.141-2.141V16.49h2.141zm0-1.08a2.147 2.147 0 0 1-2.141-2.141c0-1.179.962-2.142 2.141-2.142h5.362c1.179 0 2.142.963 2.142 2.142a2.147 2.147 0 0 1-2.142 2.142h-5.362z"></path></svg>
+        </a></li>
+        <li><a href="/wechat" title="PyTorch on WeChat">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0.14 -0.17 38.02 33.02" aria-label="WeChat"><path fill="currentColor" d="M26.289 10.976a12.972 12.972 0 0 0-8.742 3.53 10.386 10.386 0 0 0-3.224 8.795c-1.326-.164-2.535-.345-3.75-.448a2.332 2.332 0 0 0-1.273.216c-1.18.666-2.311 1.418-3.652 2.255.246-1.112.405-2.087.687-3.024a1.15 1.15 0 0 0-.523-1.52C1.737 17.902.02 13.601 1.307 9.165c1.189-4.1 4.11-6.587 8.077-7.884A13.54 13.54 0 0 1 24.18 5.617a10.135 10.135 0 0 1 2.109 5.359zM10.668 9.594a1.564 1.564 0 0 0-2.095-1.472 1.52 1.52 0 0 0-.895 1.964 1.502 1.502 0 0 0 1.391.966 1.545 1.545 0 0 0 1.598-1.46v.002zm8.15-1.566a1.567 1.567 0 0 0-1.528 1.543 1.528 1.528 0 0 0 1.571 1.492 1.52 1.52 0 0 0 1.375-2.117 1.518 1.518 0 0 0-1.415-.919l-.003.001z"></path><path fill="currentColor" d="M33.914 32.137c-1.075-.478-2.062-1.196-3.11-1.306-1.049-.11-2.145.494-3.24.605a10.821 10.821 0 0 1-8.781-2.864c-4.682-4.33-4.013-10.97 1.403-14.518 4.811-3.154 11.874-2.102 15.268 2.273a8.671 8.671 0 0 1-1.002 12.095c-1.046.929-1.422 1.693-.751 2.917.102.257.174.525.213.798zM21.68 20.292a1.264 1.264 0 1 0 .01-2.528 1.264 1.264 0 0 0-.01 2.528zm7.887-2.526a1.266 1.266 0 0 0-1.256 1.21 1.247 1.247 0 1 0 1.256-1.21z"></path></svg>
+        </a></li>
+      </ul>
+    </div>
+
+    <div class="privacy-policy">
+      <div class="copyright">
+        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
+关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
+<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="mobile-main-menu">
+  <div class="container-fluid">
+    <div class="container">
+      <div class="mobile-main-menu-header-container">
+        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="mobile-main-menu-links-container">
+
+    <div class="main-menu">
+      <ul>
+        <li class="navSearchWrapper reactNavSearchWrapper tabletSearchWrapper" key="search">
+          <div class="mobile-search-border">
+            <input id="mobile-search-input" type="text" title="Search">
+            <div id="mobile-search-icon"></div>
+          </div>
+        </li>
+
+        <li class="resources-mobile-menu-title">
+          <a>学习</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/get-started">开始使用</a> 
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials">教程</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+          </li>
+          <li>
+            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+          </li>
+          <li>
+            <a href="/new">新手指南 PyTorch 基金会</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>生态系统</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://landscape.pytorch.org/">工具</a>
+          </li>
+          <li>
+            <a href="https://github.com/pytorch-fdn/ecosystem">加入生态系统</a>
+          </li>
+          <li>
+            <a href="/#community-module">社区</a>
+          </li>
+          <li>
+            <a href="https://discuss.pytorch.org">论坛</a>
+          </li>
+          <li>
+            <a href="/resources">开发者资源</a>
+          </li>
+          <li>
+            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>边缘</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/edge">关于 PyTorch Edge</a>
+          </li>
+          <li>
+            <a href="/executorch-overview">执行火炬</a>
+          </li>
+          <li>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>文档</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="https://pytorch.org/docs">PyTorch</a>
+          </li>
+          <li>
+            <a href="/pytorch-domains">PyTorch 领域</a>
+          </li>
+        </ul>
+
+        <li class="resources-mobile-menu-title">
+          <a>博客与新闻</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/blog">PyTorch 博客</a>
+          </li>
+          <li>
+            <a href="/community-blog">社区博客</a>
+          </li>
+          <li>
+            <a href="/videos">视频</a>
+          </li>
+          <li>
+            <a href="/community-stories">社区故事</a>
+          </li>
+          <li>
+            <a href="/events">活动</a>
+          </li>
+          <li>
+            <a href="/newsletter">通讯</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a>关于</a>
+        </li>
+        <ul class="resources-mobile-menu-items">
+          <li>
+            <a href="/foundation">PyTorch 基金会</a>
+          </li>
+          <li>
+            <a href="/governing-board">管理委员会</a>
+          </li>
+          <li>
+            <a href="/credits">云信用计划</a>
+          </li>
+          <li>          
+            <a href="/tac">技术顾问委员会</a>
+          </li>
+          <li>
+            <a href="/staff">员工</a>
+          </li>
+          <li>
+            <a href="/contact-us">联系我们</a>
+          </li>
+        </ul>
+        <li class="resources-mobile-menu-title">
+          <a href="/join">成为会员</a>
+        </li>
+        <li class="resources-mobile-menu-title">
+          <a href="https://github.com/pytorch/pytorch" title="Go to PyTorch GitHub"><div id="topnav-gh-icon"></div></a>
+        </li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+
+<script src="/assets/mobile-menu.js"></script>
+<script src="/assets/scroll-to-anchor.js"></script>
+<script src="/assets/external-links-new-tab.js"></script>
+
+  <script src="/assets/search-bar.js"></script>
+
+<script src="/assets/cookie-banner.js"></script>
+
+<script type="text/javascript">
+  mobileMenu.bind();
+  anchors.add('.pytorch-article h2, .pytorch-article h3, .pytorch-article h4, .pytorch-article h5');
+
+  // Add class to links that have code blocks, since we cannot create links in code blocks
+  $("a code.highlighter-rouge").each(function(e) {
+    $(this).closest("a").addClass("has-code");
+  });
+
+  scrollToAnchor.bind();
+
+  var hasStaticHeader = $(".blog-header, .blog-detail-header, .resources-header, .get-started-header, .features-header, .ecosystem-header, .hub-header, .mobile-header, .announcement-header, .comm-stories-header").length > 0;
+
+  if (!hasStaticHeader) {
+    $(window).on("scroll", function() {
+      var top = $(this).scrollTop();
+      var fullPosition = $(".main-background").height() - $(".header-holder").height();
+
+      if (top <= 40) {
+        $(".header-holder").css({"backgroundColor": "rgba(0, 0, 0, 0.165)"});
+      } else if (top >= fullPosition) {
+        $(".header-holder").css({"backgroundColor": "#000000"});
+      } else {
+        var bgColor = "rgba(0, 0, 0, " + top / fullPosition + ")";
+        $(".header-holder").css({"backgroundColor": bgColor});
+      }
+    });
+  }
+</script>
+
+
+
+
+<div class="cookie-banner-wrapper">
+  <div class="container">
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
+  </div>
+</div>
+
+
+
+
+
+</body></html>
