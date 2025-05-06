@@ -1131,7 +1131,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
             <span class="dropdown-title">ExecuTorch</span>
             <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
             <span class="dropdown-title">ExecuTorch 文档</span>
           </a>
         </div>
@@ -1278,7 +1278,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
 
 <p><strong>3.0 模型推理</strong></p>
 
-<p>典型的模型架构代码与 Python 模型.py 文件共享，该文件由 PyTorch 启动。在默认的 PyTorch<a href="https://pytorch.org/blog/optimizing-production-pytorch-performance-with-graph-transformations/"> 急切执行</a>模式下，这些内核都使用 CUDA 执行。为了实现 100%的 Triton 端到端 Llama3-8B 和 Granite-8B 推理，我们需要编写和集成手写的 Triton 内核，并利用 torch.compile（以生成 Triton 操作）。首先，我们将较小的操作替换为编译器生成的 Triton 内核，其次，我们将更昂贵和复杂的计算（例如矩阵乘法和闪存注意力）替换为手写的 Triton 内核。</p>
+<p>典型的模型架构代码与 Python 模型.py 文件共享，该文件由 PyTorch 启动。在默认的 PyTorch<a href="https://maskerprc.github.io/blog/optimizing-production-pytorch-performance-with-graph-transformations/"> 急切执行</a>模式下，这些内核都使用 CUDA 执行。为了实现 100%的 Triton 端到端 Llama3-8B 和 Granite-8B 推理，我们需要编写和集成手写的 Triton 内核，并利用 torch.compile（以生成 Triton 操作）。首先，我们将较小的操作替换为编译器生成的 Triton 内核，其次，我们将更昂贵和复杂的计算（例如矩阵乘法和闪存注意力）替换为手写的 Triton 内核。</p>
 
 <p>Torch.compile 自动为 RMSNorm、RoPE、SiLU 和逐元素乘法生成 Triton 内核。使用像 <a href="https://developer.nvidia.com/nsight-systems">Nsight Systems</a> 这样的工具，我们可以观察这些生成的内核；它们在矩阵乘法和注意力之间以微小的深绿色内核形式出现。</p>
 
@@ -1289,7 +1289,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
 
 <p><strong>4.0 Triton SplitK GEMM 内核</strong></p>
 
-<p>对于线性层中的矩阵乘法，我们编写了一个定制的 FP16 Triton GEMM（通用矩阵-矩阵乘法）内核，该内核利用了 <a href="https://pytorch.org/blog/accelerating-moe-model/\#30-work-decomposition---splitk">SplitK 工作分解 </a>。我们之前在其他博客中讨论了这种并行化方法，作为加速LLM推理解码部分的一种方式。</p>
+<p>对于线性层中的矩阵乘法，我们编写了一个定制的 FP16 Triton GEMM（通用矩阵-矩阵乘法）内核，该内核利用了 <a href="https://maskerprc.github.io/blog/accelerating-moe-model/\#30-work-decomposition---splitk">SplitK 工作分解 </a>。我们之前在其他博客中讨论了这种并行化方法，作为加速LLM推理解码部分的一种方式。</p>
 
 <p><strong>5.0 GEMM 内核调优</strong></p>
 
@@ -1557,7 +1557,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
   </li>
 </ol>
 
-<p>这些结果突出了进一步改进核心原语如 GEMM 和 Flash Attention 内核性能的必要性。我们将此作为未来研究课题，因为近期的工作（例如 <a href="https://pytorch.org/blog/flashattention-3/">FlashAttention-3</a>，<a href="https://pytorch.org/blog/flexattention/">FlexAttention</a>）提供了更好地利用底层硬件以及 Triton 路径的方法，我们希望在此基础上实现更大的速度提升。为了说明这一点，我们比较了 FlexAttention 与 SDPA 以及 AMD 的 Triton Flash 内核。</p>
+<p>这些结果突出了进一步改进核心原语如 GEMM 和 Flash Attention 内核性能的必要性。我们将此作为未来研究课题，因为近期的工作（例如 <a href="https://maskerprc.github.io/blog/flashattention-3/">FlashAttention-3</a>，<a href="https://maskerprc.github.io/blog/flexattention/">FlexAttention</a>）提供了更好地利用底层硬件以及 Triton 路径的方法，我们希望在此基础上实现更大的速度提升。为了说明这一点，我们比较了 FlexAttention 与 SDPA 以及 AMD 的 Triton Flash 内核。</p>
 
 <p>我们正在努力验证 FlexAttention 的端到端性能。目前，Flex 的初始微基准测试显示出对于更长的上下文长度和解码问题形状的潜力，其中查询向量较小：</p>
 
@@ -1568,7 +1568,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
 
 <p><strong>9.0 未来工作</strong></p>
 
-<p>对于未来的工作，我们计划探索进一步优化我们的 matmuls 的方法，使其更好地利用硬件，例如我们发布的关于<a href="https://pytorch.org/blog/hopper-tma-unit/">利用 TMA 进行 H100</a> 的博客，以及不同的工作分解（如 StreamK 等持久内核技术）以获得对基于 Triton 的方法的更大加速。对于闪存注意力，我们计划探索 FlexAttention 和 FlashAttention-3 作为这些内核中使用的技巧可以进一步缩小 Triton 和 CUDA 之间的差距。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">我们还注意到，我们之前的工作已经显示出 FP8 Triton GEMM 内核性能相对于 cuBLAS FP8 GEMM 的 FP8 LLM推理具有很有希望的结果，因此在未来的一篇文章中，我们将探讨 E2E FP8 推理。</p>
+<p>对于未来的工作，我们计划探索进一步优化我们的 matmuls 的方法，使其更好地利用硬件，例如我们发布的关于<a href="https://maskerprc.github.io/blog/hopper-tma-unit/">利用 TMA 进行 H100</a> 的博客，以及不同的工作分解（如 StreamK 等持久内核技术）以获得对基于 Triton 的方法的更大加速。对于闪存注意力，我们计划探索 FlexAttention 和 FlashAttention-3 作为这些内核中使用的技巧可以进一步缩小 Triton 和 CUDA 之间的差距。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">我们还注意到，我们之前的工作已经显示出 FP8 Triton GEMM 内核性能相对于 cuBLAS FP8 GEMM 的 FP8 LLM推理具有很有希望的结果，因此在未来的一篇文章中，我们将探讨 E2E FP8 推理。</p>
 
                 </article>
             </div>
@@ -1744,7 +1744,7 @@ We also note that our prior work has shown promising results for FP8 Triton GEMM
             <a href="/executorch-overview">ExecuTorch</a>
           </li>
           <li>
-            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">

@@ -441,7 +441,7 @@ We want to thank Daniel Han, Raghu Ganti, Mudhakar Srivatsa, Bert Maher, Gregory
             <span class="dropdown-title">ExecuTorch</span>
             <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
             <span class="dropdown-title">ExecuTorch 文档</span>
           </a>
         </div>
@@ -569,7 +569,7 @@ We want to thank Daniel Han, Raghu Ganti, Mudhakar Srivatsa, Bert Maher, Gregory
 
 <h2 id="20-background">2.0 背景</h2>
 
-<p>OpenAI 的 Triton 是一个与硬件无关的语言和编译器，正如我们之前的<a href="https://pytorch.org/blog/accelerating-triton/">博客文章</a>所展示的，它可以用来加速量化工作流程。我们还展示了在内核开发方面，许多来自 CUDA 的学习和性能分析工具可以用来提供类似的见解，了解 Triton 内核在底层的工作方式以及随后如何加速这些内核以减少延迟敏感环境中的延迟。随着 Triton 在生产环境中的日益普及，了解开发高性能内核的常见技巧以及这些方法对不同架构和工作流程的通用性变得非常重要。因此，本文将探讨我们如何使用经典技术优化了由 <a href="https://github.com/vllm-project/vllm">vLLM</a> 开发的 Triton 内核，用于流行的专家混合（MoE）Mixtral 模型，以及这些技术如何在 Triton 中实现性能提升。</p>
+<p>OpenAI 的 Triton 是一个与硬件无关的语言和编译器，正如我们之前的<a href="https://maskerprc.github.io/blog/accelerating-triton/">博客文章</a>所展示的，它可以用来加速量化工作流程。我们还展示了在内核开发方面，许多来自 CUDA 的学习和性能分析工具可以用来提供类似的见解，了解 Triton 内核在底层的工作方式以及随后如何加速这些内核以减少延迟敏感环境中的延迟。随着 Triton 在生产环境中的日益普及，了解开发高性能内核的常见技巧以及这些方法对不同架构和工作流程的通用性变得非常重要。因此，本文将探讨我们如何使用经典技术优化了由 <a href="https://github.com/vllm-project/vllm">vLLM</a> 开发的 Triton 内核，用于流行的专家混合（MoE）Mixtral 模型，以及这些技术如何在 Triton 中实现性能提升。</p>
 
 <p><a href="https://arxiv.org/abs/2401.04088">Mixtral 8x7B</a> 是一种稀疏混合专家语言模型。与经典的密集型 Transformer 架构不同，每个 Transformer 块包含 8 个 MLP 层，其中每个 MLP 都是一个“专家”。当标记流经时，路由网络会选择 8 个专家中的哪两个来处理该标记，然后将结果合并。对于同一标记，所选的专家在每个层中都会变化。因此，虽然 Mixtral 8x7B 总共有 47B 个参数，但在推理过程中只有 13B 个参数处于活动状态。</p>
 
@@ -599,7 +599,7 @@ We want to thank Daniel Han, Raghu Ganti, Mudhakar Srivatsa, Bert Maher, Gregory
 
 <p>为了在 SplitK 的基础上进一步提高约 20%的速度，我们专注于研究控制 Triton 内核中 GEMM 硬件调度的逻辑。我们对 vLLM MoE 内核的剖析显示 L2 缓存命中率较低，因此我们调查了三种调度选项——列主序、行主序和分组发射。由于 MoE 模型的一些固有属性，例如大型专家矩阵，以及内核运行期间需要动态加载 TopK（Mixtral 为 2）矩阵，缓存重用/命中率成为瓶颈，这是本次优化要针对的目标。</p>
 
-<p>关于背景，在我们之前的<a href="https://pytorch.org/blog/accelerating-triton/">博客</a>中，我们提到了“瓦片交换”的概念，这是一种提高 L2 缓存命中率的技巧。这个概念与软件如何将 GEMM 调度到 GPU 的 SM 上有关。在 Triton 中，这个调度由 pid_m 和 pid_n 计算决定。我们的关键洞察是，对于瘦矩阵乘法，列主序排序可以确保权重矩阵 B 的列的最佳重用。为了说明这一点，让我们看看 pid_m 和 pid_n 的列主序计算的片段：</p>
+<p>关于背景，在我们之前的<a href="https://maskerprc.github.io/blog/accelerating-triton/">博客</a>中，我们提到了“瓦片交换”的概念，这是一种提高 L2 缓存命中率的技巧。这个概念与软件如何将 GEMM 调度到 GPU 的 SM 上有关。在 Triton 中，这个调度由 pid_m 和 pid_n 计算决定。我们的关键洞察是，对于瘦矩阵乘法，列主序排序可以确保权重矩阵 B 的列的最佳重用。为了说明这一点，让我们看看 pid_m 和 pid_n 的列主序计算的片段：</p>
 
 <p><img src="/assets/images/accelerating-moe-model/fig-6.png" alt="Figure 4. Column Major ordering in PyTorch" style="width:100%;display: block; max-width: 500px; margin-right: auto; margin-left: auto"></p>
 
@@ -829,7 +829,7 @@ We want to thank Daniel Han, Raghu Ganti, Mudhakar Srivatsa, Bert Maher, Gregory
             <a href="/executorch-overview">ExecuTorch</a>
           </li>
           <li>
-            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
