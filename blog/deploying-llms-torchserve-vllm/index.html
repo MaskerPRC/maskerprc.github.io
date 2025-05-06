@@ -45,8 +45,8 @@ You can test the endpoint locally with this curl command:
 
 curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prompt":"hello,="" my="" is",="" "max_tokens":="" 200}'="" --header="" "content-type:="" application="" json"="" "http:="" localhost:8080="" predictions="" model="" 1.0="" v1="" completions"="" the="" docker="" stores="" weights="" in="" local="" folder="" “data”="" which="" gets="" mounted="" as="" data="" inside="" container.="" to="" serve="" your="" custom="" simply="" copy="" them="" into="" and="" point="" model_id="" &lt;your="" weights&gt;.="" internally,="" container="" uses="" our="" new="" ts.llm_launcher="" script="" launch="" torchserve="" deploy="" model.="" launcher="" simplifies="" deployment="" of="" an="" llm="" with="" a="" single="" command="" line="" can="" also="" be="" used="" outside="" efficient="" tool="" for="" experimentation="" testing.="" use="" docker,="" follow="" installation="" steps="" then="" execute="" following="" spin="" up="" 8b="" llama="" model:="" #="" after="" installing="" vllm="" run="" python="" -m="" --model_id="" meta-llama="" meta-llama-3.1-8b-instruct="" --disable_token_auth="" if="" multiple="" gpus="" are="" available="" will="" automatically="" claim="" all="" visible="" devices="" apply="" tensor="" parallelism="" (see="" cuda_visible_devices="" specify="" use).="" while="" this="" is="" very="" convenient,="" it’s="" important="" note="" that="" it="" does="" not="" encompass="" functionalities="" provided="" by="" torchserve.="" those="" looking="" leverage="" more="" advanced="" features,="" archive="" needs="" created.="" process="" bit="" involved="" than="" issuing="" command,="" bears="" advantage="" handlers="" versioning.="" former="" allows="" implement="" rag="" preprocessing="" step,="" latter="" lets="" you="" test="" different="" versions="" handler="" before="" deploying="" on="" larger="" scale.="" we="" provide="" detailed="" create="" archive,="" let’s="" dive="" details="" engine="" integration.="" torchserve’s="" integration="" state-of-the-art="" serving="" framework,="" offers="" plethora="" including="" pagedattention,="" continuous="" batching,="" rapid="" execution="" through="" cuda="" graphs,="" support="" various="" quantization="" methods="" such="" gptq,="" awq,="" int4,="" int8,="" fp8.="" provides="" parameter-efficient="" adapter="" like="" lora="" access="" wide="" range="" architectures="" mistral.="" maintained="" team="" thriving="" open-source="" community.="" facilitate="" quick="" deployment,="" mode="" based="" fastapi="" llms="" over="" http.="" tighter,="" flexible="" project="" vllm.llmengine="" interfaces="" requests="" basis.="" leveraged="" asynchronous="" variant="" easy-to-use,="" solution="" pytorch="" models="" production.="" production-tested="" solution,="" numerous="" benefits="" features="" beneficial="" at="" combining="" inference="" performance="" these="" now="" maximize="" hardware="" utilization="" generally="" good="" practice="" batch="" from="" users="" together.="" historically,="" only="" offered="" synchronized="" collect="" users.="" mode,="" waits="" predefined="" amount="" time="" (e.g.,="" batch_delay="200ms)" or="" until="" enough="" batch_size="8)" have="" arrived.="" when="" one="" events="" triggered,="" batched="" forwarded="" backend="" where="" applied="" batch,="" output="" returned="" frontend.="" works="" especially="" well="" traditional="" vision="" outputs="" each="" request="" usually="" finish="" same="" time.="" generative="" cases,="" particularly="" text="" generation,="" assumption="" ready="" simultaneously="" no="" longer="" valid,="" responses="" varying="" lengths.="" although="" supports="" batching="" (the="" ability="" add="" remove="" dynamically),="" accommodates="" static="" maximum="" size.="" introduction="" even="" size="" becomes="" flexible,="" combine="" lengths="" highly="" adaptable="" manner="" optimize="" memory="" utilization.="" achieve="" optimal="" utilization,="" i.e.,="" fill="" unused="" gaps="" (think="" tetris),="" requires="" complete="" control="" decision="" any="" given="" flexibility,="" had="" reevaluate="" how="" handles="" user="" requests.="" instead="" previous="" synchronous="" processing="" introduced="" diagram="" below)="" incoming="" directly="" backend,="" making="" vllm.="" feeds="" vllm.asyncengine,="" select="" streaming="" enabled="" first="" token="" available,="" send="" out="" result="" immediately="" continue="" sending="" tokens="" final="" generated.="" implementation="" vllmhandler="" enables="" quickly="" compatible="" using="" configuration="" file,="" still="" offering="" level="" flexibility="" customizability="" handler.="" free="" e.g.="" post-processing="" inheriting="" overriding="" respective="" class="" methods.="" single-node,="" multi-gpu="" distributed="" inference,="" configure="" parallel="" sharding="" either="" increase="" capacity="" smaller="" enable="" do="" fit="" gpu,="" 70b="" variants.="" previously,="" supported="" torchrun,="" worker="" processes="" were="" spun="" shard="" manages="" creation="" so="" “custom”="" paralleltype="" launches="" list="" assigned="" gpus.="" its="" own="" subprocesses="" necessary.="" +="" docker-based="" deployments,="" separate="" dockerfile="" gpu="" image,="" added="" dependency.="" chose="" keep="" two="" avoid="" increasing="" image="" non-llm="" deployments.="" next,="" demonstrate="" required="" 3.1="" machine="" four="" step-by-step="" guide="" assume="" has="" finished="" successfully.="" currently,="" hard-dependency="" install="" package="" pip:="" $="" pip="" -u="" steps,="" (optionally)="" download="" weights,="" explain="" configuration,="" it:="" 1.="" (optional)="" step="" optional,="" handle="" downloading="" server="" started.="" however,="" pre-downloading="" sharing="" cached="" files="" between="" instances="" terms="" storage="" usage="" startup="" worker.="" choose="" huggingface-cli="" execute:="" make="" sure="" logged="" huggingface="" login="" approved="" meta-llama-3.1-70b-instruct="" --exclude="" original="" *="" under="" $hf_home,="" alter="" variable="" want="" place="" elsewhere.="" please="" ensure="" update="" wherever="" folder.="" 2.="" yaml="" file="" contains="" necessary="" parameters="" deployment.="" part="" config="" specifies="" frontend="" should="" worker,="" ultimately="" second="" includes="" handler,="" load,="" followed="" itself.="" information="" possible="" configurations="" engine,="" refer="" link.="" echo="" '="" minworkers:="" 1="" maxworkers:="" set="" number="" instance="" startuptimeout:="" 1200="" (in="" seconds)="" give="" load="" devicetype:="" "gpu"="" asynccommunication:="" true="" ensures="" cummunicate="" asynchronously="" paralleltype:="" "custom"="" ts="" prosses="" assigning="" 4="" parallellevel:="" handler:="" model_path="" identifier="" hugging="" face="" hub="" path="" model_path:="" "meta-llama="" meta-llama-3.1-70b-instruct"="" vllm_engine_config:="" fed="" asyncvllmengine="" max_num_seqs:="" 16="" max_model_len:="" 512="" tensor_parallel_size:="" served_model_name:="" -="" "llama3"="" '&gt;="" model_config.yaml="" 3.="" creating="" (model_config.yaml),="" additional="" metadata,="" versioning="" information.="" since="" large,="" include="" archive.="" instead,="" specified="" configuration.="" example,="" chosen="" “no-archive”="" format,="" creates="" containing="" files.="" us="" easily="" modify="" without="" friction.="" later,="" mar="" tgz="" format="" transportable="" artifact.="" mkdir="" model_store="" torch-model-archiver="" --model-name="" --version="" --handler="" vllm_handler="" --config-file="" --archive-format="" no-archive="" --export-path="" 4.="" next="" start="" disabled="" authentication="" testing="" purposes.="" recommended="" some="" form="" publicly="" model,="" command:="" --start="" --ncs="" --model-store="" --models="" --disable-token-auth="" monitor="" progress="" loading="" log="" statements.="" once="" loading,="" proceed="" 5.="" openai="" api="" specialized="" purpose="" curl.="" json="" here="" prompt="" text.="" other="" options="" their="" default="" values="" found="" vllmengine="" docs.="" '{="" "model":="" "llama3",="" "prompt":="" "a="" robot="" may="" injure="" human="" being",="" "stream":="" 0="" }'="" |="" curl="" --request="" post="" --data-binary="" @-="" http:="" completions="" looks="" this:="" {="" "id":="" "cmpl-cd29f1d8aa0b48aebcbff4b559a0c783",="" "object":="" "text_completion",="" "created":="" 1727211972,="" "choices":="" [="" "index":="" 0,="" "text":="" "="" or,="" inaction,="" allow="" being="" come="" harm.\na",="" "logprobs":="" null,="" "finish_reason":="" "length",="" "stop_reason":="" "prompt_logprobs":="" null="" }="" ],="" "usage":="" "prompt_tokens":="" 10,="" "total_tokens":="" 26,="" "completion_tokens":="" false="" full="" answer="" go="" last="" was="" flip="" stream="" parameter="" receive="" piecewise="" message.="" conclusion="" blog="" post,="" explored="" new,="" native="" demonstrated="" locally="" instance.="" additionally,="" discussed="" build="" kubernetes="" eks.="" future="" works,="" plan="" multi-node="" torchserve,="" offer="" pre-built="" simplify="" process.="" would="" express="" gratitude="" mark="" saroufim="" invaluable="" lead-up="" post.="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -130,7 +130,7 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -138,7 +138,7 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -147,27 +147,27 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -178,21 +178,27 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -200,18 +206,20 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -222,12 +230,12 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -238,28 +246,28 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -273,7 +281,7 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -309,7 +317,7 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2024年10月31日</p>
+            <p class="featured-post">2024 年 10 月 31 日</p>
             <h1>
                 <a class="blog-title">使用 TorchServe 和 vLLM 部署LLMs</a>
             </h1>
@@ -321,23 +329,23 @@ curl -X POST -d '{" model":"meta-llama="" meta-llama-3.1-70b-instruct",="" "prom
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">由 Matthias Reso、Ankith Gunapal、Simon Mo、Li Ning、Hamid Shojanazeri 著</p>
-                    <p>vLLM 引擎目前是执行大型语言模型（LLM）的一种顶级性能方式。它提供了 <a href="https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html">vllm serve</a> 命令，作为在单机上部署模型的一个简单选项。虽然这样做很方便，但在生产环境和大规模部署这些LLMs时，一些高级功能是必要的。</p>
+                    <p class="author">由马蒂亚斯·雷索、安基特·古纳帕尔、西蒙·莫、李宁、哈米德·肖贾纳泽里</p>
+                    <p>vLLM 引擎目前是执行大型语言模型（LLM）的最高性能方式之一。它提供了 vllm serve 命令，作为在单机上部署模型的一个简单选项。虽然这很方便，但在生产环境和规模化的情况下，一些高级功能是必要的。</p>
 
 <p><img src="/assets/images/deploying-llms-torchserve-vllm/fg1.png" alt="flow diagram" style="width:100%"></p>
 
-<p>TorchServe 提供了这些必要的生产功能（如自定义指标和模型版本控制），并通过其灵活的自定义处理程序设计，使得集成检索增强生成（RAG）或类似 <a href="https://ai.meta.com/research/publications/llama-guard-llm-based-input-output-safeguard-for-human-ai-conversations/">Llama Guard</a> 这样的安全措施变得非常容易。因此，将 vLLM 引擎与 TorchServe 搭配使用，以创建一个完整的生产级LLM服务解决方案是自然而然的。</p>
+<p>TorchServe 提供了这些必要的生产功能（如自定义指标和模型版本控制），并通过其灵活的自定义处理程序设计，使得集成检索增强生成（RAG）或像 Llama Guard 这样的保护措施变得非常容易。因此，将 vLLM 引擎与 TorchServe 配对，以创建一个完整的生产级 LLM 服务解决方案是自然而然的。</p>
 
-<p>在深入集成细节之前，我们将演示使用 TorchServe 的 vLLM docker 镜像部署 Llama-3.1-70B-Instruct 模型。</p>
+<p>在深入集成细节之前，我们将演示使用 TorchServe 的 vLLM docker 图像部署 Llama-3.1-70B-Instruct 模型。</p>
 
 <h2 id="quickly-getting-started-with-llama-31-on-torchserve--vllm">快速开始使用 Llama 3.1 在 TorchServe + vLLM 上</h2>
 
-<p>要开始，我们需要构建新的 TS LLM Docker 容器镜像，通过检出<a href="https://github.com/pytorch/serve/blob/master/docker/Dockerfile.llm">新的 TS LLM Docker 容器镜像</a>和从主目录执行以下命令：</p>
+<p>要开始，我们需要构建新的 TS LLM Docker 容器镜像，通过检出 TorchServe 仓库，并在主目录下执行以下命令：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>docker build --pull . -f docker/Dockerfile.vllm -t ts/vllm
 </code></pre></div></div>
 
-<p>容器使用我们的新LLM 启动脚本 <code class="language-plaintext highlighter-rouge">ts.llm_launcher</code>，该脚本接受 Hugging Face 模型 URI 或本地文件夹，并启动一个本地 TorchServe 实例，后端运行 vLLM 引擎。要本地提供模型，可以使用以下命令创建容器实例：</p>
+<p>容器使用我们新的LLM 启动脚本 <code class="language-plaintext highlighter-rouge">ts.llm_launcher</code> ，它接受一个 Hugging Face 模型 URI 或本地文件夹，并启动一个带有 vLLM 引擎在后台运行的本地 TorchServe 实例。要本地提供模型，可以使用以下命令创建容器实例：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#export token=&lt;HUGGINGFACE_HUB_TOKEN&gt;
 docker run --rm -ti --shm-size 10g --gpus all -e HUGGING_FACE_HUB_TOKEN=$token -p 
@@ -349,54 +357,54 @@ docker run --rm -ti --shm-size 10g --gpus all -e HUGGING_FACE_HUB_TOKEN=$token -
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>curl -X POST -d '{"model":"meta-llama/Meta-Llama-3.1-70B-Instruct", "prompt":"Hello, my name is", "max_tokens": 200}' --header "Content-Type: application/json" "http://localhost:8080/predictions/model/1.0/v1/completions"
 </code></pre></div></div>
 
-<p>Docker 将模型权重存储在本地文件夹“data”中，该文件夹在容器内挂载为/data。要使用您自定义的本地权重，只需将它们复制到 data 文件夹中，并将 model_id 指向/data/&lt;your weights&gt;。</p>
+<p>Docker 将模型权重存储在本地文件夹“data”中，该文件夹在容器内挂载为/data。要使用您自定义的本地权重，只需将它们复制到 data 文件夹中，并将 model_id 指向/data/您的权重。</p>
 
-<p>容器内部使用我们新的 <code class="language-plaintext highlighter-rouge">ts.llm_launcher</code> 脚本来启动 TorchServe 并部署模型。启动器简化了将LLM与 TorchServe 部署到单个命令行，并且也可以作为容器外高效的工具用于实验和测试。要在 Docker 外使用启动器，请遵循 <a href="https://github.com/pytorch/serve?tab=readme-ov-file#-quick-start-with-torchserve">TorchServe 安装步骤 </a>，然后执行以下命令以启动一个 8B Llama 模型：</p>
+<p>容器内部使用我们新的 <code class="language-plaintext highlighter-rouge">ts.llm_launcher</code> 脚本来启动 TorchServe 并部署模型。启动器将 TorchServe 部署LLM简化为单条命令行，并且也可以作为容器外高效的实验和测试工具使用。要在 Docker 外使用启动器，请按照 TorchServe 安装步骤进行操作，然后执行以下命令以启动一个 8B Llama 模型：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># after installing TorchServe and vLLM run
 python -m ts.llm_launcher --model_id meta-llama/Meta-Llama-3.1-8B-Instruct  --disable_token_auth
 </code></pre></div></div>
 
-<p>如果有多个 GPU 可用，启动器将自动声明所有可见设备并应用张量并行（请参阅 <a href="https://developer.nvidia.com/blog/cuda-pro-tip-control-gpu-visibility-cuda_visible_devices/">CUDA_VISIBLE_DEVICES</a> 以指定要使用的 GPU）。</p>
+<p>如果有多个 GPU 可用，启动器将自动声明所有可见设备并应用张量并行（请参阅 CUDA_VISIBLE_DEVICES 以指定要使用的 GPU）。</p>
 
-<p>虽然这非常方便，但需要注意的是，它并不包含 TorchServe 提供的所有功能。对于那些想要利用更高级功能的人来说，需要创建一个模型存档。虽然这个过程比执行单个命令要复杂一些，但它具有自定义处理程序和版本控制的优势。前者允许在预处理步骤中实现 RAG，后者则允许在更大规模部署之前测试不同版本的处理程序和模型。</p>
+<p>虽然这非常方便，但需要注意的是，它并不包含 TorchServe 提供的所有功能。对于那些想要利用更高级功能的人来说，需要创建一个模型存档。虽然这个过程比执行单个命令要复杂一些，但它具有自定义处理程序和版本管理的优势。前者允许在预处理步骤中实现 RAG，后者则让你在更大规模部署之前测试不同版本的处理程序和模型。</p>
 
 <p>在我们提供创建和部署模型存档的详细步骤之前，让我们深入了解 vLLM 引擎的集成细节。</p>
 
 <h2 id="torchserves-vllm-engine-integration">TorchServe 的 vLLM 引擎集成</h2>
 
-<p>作为一款最先进的托管框架，vLLM 提供了众多高级功能，包括分页注意力、连续批处理、通过 CUDA 图快速执行模型以及支持各种量化方法，如 GPTQ、AWQ、INT4、INT8 和 FP8。它还提供了对重要参数高效适配器方法如 LoRA 的集成，以及访问包括 Llama 和 Mistral 在内的广泛模型架构。vLLM 由 vLLM 团队维护，并拥有一个充满活力的开源社区。</p>
+<p>作为一款最先进的托管框架，vLLM 提供了丰富的先进功能，包括 PagedAttention、连续批处理、通过 CUDA 图快速执行模型以及支持各种量化方法，如 GPTQ、AWQ、INT4、INT8 和 FP8。它还提供了对 LoRA 等重要参数高效适配方法的集成，以及访问包括 Llama 和 Mistral 在内的广泛模型架构。vLLM 由 vLLM 团队和蓬勃发展的开源社区维护。</p>
 
-<p>为了方便快速部署，它提供了一种基于 FastAPI 的服务模式，通过 HTTP 提供LLMs。为了实现更紧密、更灵活的集成，该项目还提供了 <a href="https://docs.vllm.ai/en/latest/dev/engine/llm_engine.html">vllm.LLMEngine</a>，该引擎提供了持续处理请求的接口。我们利用<a href="https://docs.vllm.ai/en/latest/dev/engine/async_llm_engine.html">异步变体</a>将其集成到 TorchServe 中。</p>
+<p>为了方便快速部署，它提供了一种基于 FastAPI 的托管模式，通过 HTTP 提供 LLMs 服务。为了更紧密、更灵活的集成，该项目还提供了 vllm.LLMEngine，该引擎提供了连续处理请求的接口。我们利用了异步变体将其集成到 TorchServe 中。</p>
 
-<p><a href="https://maskerprc.github.io/serve/">TorchServe</a> 是一个易于使用的开源解决方案，用于在生产环境中部署 PyTorch 模型。作为一个经过生产测试的服务解决方案，TorchServe 提供了许多对大规模部署 PyTorch 模型有益的特性和功能。通过结合 vLLM 引擎的推理性能，这些优势现在也可以用于大规模部署LLMs。</p>
+<p>TorchServe 是一个易于使用的开源解决方案，用于在生产环境中托管 PyTorch 模型。作为一个经过生产测试的托管解决方案，TorchServe 提供了众多有益于大规模部署 PyTorch 模型的功能和优势。通过结合 vLLM 引擎的推理性能，这些优势现在也可以用于大规模部署 LLMs。</p>
 
 <p><img src="/assets/images/deploying-llms-torchserve-vllm/fg2.png" alt="Torchserve highlights and integrations" style="width:100%"></p>
 
-<p>为了最大化硬件利用率，通常将来自多个用户的请求一起批量处理是一个好习惯。历史上，TorchServe 仅提供同步模式来收集来自不同用户的请求。在这种模式下，TorchServe 会等待预定义的时间（例如，batch_delay=200ms）或直到足够多的请求（例如，batch_size=8）到达。当触发这些事件之一时，批量数据被转发到后端，模型对批量数据进行应用，并通过前端将模型输出返回给用户。这对于传统视觉模型特别有效，因为每个请求的输出通常同时完成。</p>
+<p>为了最大化硬件利用率，通常将来自多个用户的请求一起批量处理是一个好习惯。历史上，TorchServe 仅提供同步模式来收集来自不同用户的请求。在这种模式下，TorchServe 会等待预定义的时间（例如，batch_delay=200ms）或直到足够多的请求（例如，batch_size=8）到达。当触发这些事件之一时，批量数据被转发到后端，模型在批量上应用，并通过前端将模型输出返回给用户。这对于传统视觉模型特别有效，因为每个请求的输出通常同时完成。</p>
 
 <p>对于生成用例，尤其是文本生成，假设请求同时准备就绪不再成立，因为响应长度会有所不同。尽管 TorchServe 支持连续批处理（动态添加和删除请求的能力），但这种模式仅能容纳静态的最大批处理大小。随着分页注意力（PagedAttention）的引入，甚至最大批处理大小的这一假设也变得更加灵活，因为 vLLM 可以以高度适应的方式组合不同长度的请求，以优化内存利用率。</p>
 
-<p>要实现最佳内存利用率，即填充内存中的空闲空间（想想俄罗斯方块），vLLM 需要完全控制在任何给定时间处理哪些请求的决定。为了提供这种灵活性，我们必须重新评估 TorchServe 处理用户请求的方式。我们不再使用之前的同步处理模式，而是引入了<a href="https://github.com/pytorch/serve/blob/ba8c268fe09cb9396749a9ae5d480ba252764d71/examples/large_models/vllm/llama3/model-config.yaml#L7">异步模式 </a>（见下文图示），其中传入的请求将直接转发到后端，使其对 vLLM 可用。后端将数据喂给 vllm.AsyncEngine，现在可以从所有可用的请求中进行选择。如果启用了流模式，并且请求的第一个标记可用，后端将立即发送结果，并继续发送标记，直到生成最终标记。</p>
+<p>要实现最优内存利用率，即填充内存中的空闲空间（想想俄罗斯方块），vLLM 需要完全控制在任何给定时间处理哪些请求的决定。为了提供这种灵活性，我们必须重新评估 TorchServe 处理用户请求的方式。我们不再使用之前的同步处理模式，而是引入了异步模式（见下方的图示），其中传入的请求将直接转发到后端，使其对 vLLM 可用。后端将数据喂给 vllm.AsyncEngine，现在可以从所有可用的请求中进行选择。如果启用了流模式，并且请求的第一个标记可用，后端将立即发送结果，并继续发送标记，直到生成最后一个标记。</p>
 
 <p><img src="/assets/images/deploying-llms-torchserve-vllm/fg3.png" alt="flow diagram" style="width:100%"></p>
 
-<p><a href="https://github.com/pytorch/serve/blob/master/ts/torch_handler/vllm_handler.py">我们对 VLLMHandler 的实现</a>允许用户通过配置文件快速部署任何与 vLLM 兼容的模型，同时仍然通过自定义处理程序提供相同级别的灵活性和可定制性。用户可以自由添加，例如，通过从 VLLMHandler 继承并重写相应的类方法来自定义<a href="https://github.com/pytorch/serve/blob/ba8c268fe09cb9396749a9ae5d480ba252764d71/ts/torch_handler/vllm_handler.py#L108">预处理</a>或<a href="https://github.com/pytorch/serve/blob/ba8c268fe09cb9396749a9ae5d480ba252764d71/ts/torch_handler/vllm_handler.py#L160">后处理</a>步骤。</p>
+<p>我们实现的 VLLMHandler 允许用户通过配置文件快速部署任何与 vLLM 兼容的模型，同时仍然通过自定义处理程序提供相同级别的灵活性和可定制性。用户可以自由添加例如自定义预处理或后处理步骤，通过继承 VLLMHandler 并重写相应的类方法。</p>
 
-<p>我们也支持单节点、多 GPU <a href="https://github.com/pytorch/serve/blob/master/examples/large_models/vllm/Readme.md#distributed-inference"> 分布式推理 </a>，其中我们配置 vLLM 使用模型的张量并行划分来增加较小模型的容量或启用无法适应单个 GPU 的较大模型，例如 70B 的 Llama 变体。之前，TorchServe 仅支持使用 torchrun 进行分布式推理，此时会启动多个后端工作进程来划分模型。vLLM 内部管理这些进程的创建，因此我们<a href="https://github.com/pytorch/serve/blob/master/examples/large_models/vllm/Readme.md#distributed-inference">在 TorchServe 中引入了新的“自定义”parallelType</a>，该类型启动单个后端工作进程并提供分配的 GPU 列表。后端进程可以在此基础上启动自己的子进程。</p>
+<p>我们还支持单节点、多 GPU 分布式推理，其中我们配置 vLLM 使用模型张量并行划分以增加较小模型的容量或启用无法适应单个 GPU 的较大模型，例如 70B 的 Llama 变体。之前，TorchServe 仅支持使用 torchrun 进行分布式推理，其中会启动多个后端工作进程来划分模型。vLLM 内部管理这些进程的创建，因此我们在 TorchServe 中引入了新的“自定义”parallelType，它启动单个后端工作进程并提供分配的 GPU 列表。后端进程可以在此基础上启动自己的子进程。</p>
 
-<p>为方便将 TorchServe + vLLM 集成到基于 Docker 的部署中，我们提供了一个基于 <a href="https://hub.docker.com/r/pytorch/torchserve">TorchServe 的 GPU Docker 镜像</a>的单独 <a href="https://github.com/pytorch/serve?tab=readme-ov-file#-quick-start-llm-deployment-with-docker">Dockerfile</a>，并将 vLLM 作为依赖项添加。我们选择将其分开以避免增加非LLM部署的 Docker 镜像大小。</p>
+<p>为方便将 TorchServe + vLLM 集成到基于 Docker 的部署中，我们提供了一个基于 TorchServe GPU Docker 镜像的单独 Dockerfile，并将 vLLM 作为依赖项添加。我们选择将其保持独立，以避免增加非LLM部署的 Docker 镜像大小。</p>
 
 <p>接下来，我们将演示在具有四个 GPU 的机器上使用 TorchServe + vLLM 部署 Llama 3.1 70B 模型的步骤。</p>
 
 <h2 id="step-by-step-guide">步骤指南</h2>
 
-<p>对于本篇逐步指南，我们假设<a href="https://github.com/pytorch/serve/tree/master?tab=readme-ov-file#-quick-start-with-torchserve">安装 TorchServe</a> 已成功完成。目前，vLLM 不是 TorchServe 的硬依赖，因此我们可以使用 pip 来安装该软件包：</p>
+<p>对于本篇逐步指南，我们假设 TorchServe 的安装已成功完成。目前，vLLM 不是 TorchServe 的硬依赖，因此让我们使用 pip 安装该软件包：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>$ pip install -U vllm==0.6.1.post2
 </code></pre></div></div>
 
-<p>在以下步骤中，我们将（可选）下载模型权重、解释配置、创建模型存档、部署并测试它：</p>
+<p>在以下步骤中，我们将（可选）下载模型权重，解释配置，创建模型存档，部署并测试它：</p>
 
 <h3 id="1-optional-download-model-weights">1. （可选）下载模型权重</h3>
 
@@ -408,11 +416,11 @@ python -m ts.llm_launcher --model_id meta-llama/Meta-Llama-3.1-8B-Instruct  --di
 huggingface-cli download meta-llama/Meta-Llama-3.1-70B-Instruct --exclude original/*
 </code></pre></div></div>
 
-<p>这将下载 $HF_HOME 下的文件，如果您想将文件放在其他位置，可以更改此变量。请确保在运行 TorchServe 的任何地方都更新此变量，并确保它有权访问该文件夹。</p>
+<p>这将下载$HF_HOME 下的文件，如果您想将文件放在其他位置，可以更改该变量。请确保在运行 TorchServe 时更新该变量，并确保它有访问该文件夹的权限。</p>
 
 <h3 id="2-configure-the-model">2. 配置模型</h3>
 
-<p>接下来，我们创建一个包含模型部署所需所有参数的 YAML 配置文件。配置文件的第一部分指定了前端如何启动后端工作进程，该工作进程最终将在处理器中运行模型。配置文件的第二部分包括后端处理器的参数，例如要加载的模型，然后是 vLLM 的各种参数。有关 vLLM 引擎的可能配置信息，请参阅此<a href="https://docs.vllm.ai/en/latest/models/engine_args.html#engine-args">链接 </a>。</p>
+<p>接下来，我们创建一个包含模型部署所需所有参数的 YAML 配置文件。配置文件的第一部分指定了前端如何启动后端工作进程，该工作进程最终将在处理器中运行模型。配置文件的第二部分包括后端处理器的参数，例如要加载的模型，然后是 vLLM 的各种参数。有关 vLLM 引擎的可能配置信息，请参阅此链接。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>echo '
 # TorchServe frontend parameters
@@ -440,7 +448,7 @@ handler:
 
 <h3 id="3-create-the-model-folder">3. 创建模型文件夹</h3>
 
-<p>创建模型配置文件（model_config.yaml）之后，我们现在将创建一个包含配置和附加元数据（如版本信息）的模型存档。由于模型权重较大，我们不会将其包含在存档中。相反，处理程序将通过在模型配置中指定的 model_path 访问权重。请注意，在这个例子中，我们选择了“no-archive”格式，它创建一个包含所有必要文件的模型文件夹。这使得我们能够轻松地修改配置文件进行实验，而没有任何摩擦。稍后，我们还可以选择 mar 或 tgz 格式来创建更易于传输的工件。</p>
+<p>创建模型配置文件（model_config.yaml）后，我们现在将创建一个包含配置和附加元数据（如版本信息）的模型存档。由于模型权重较大，我们不会将其包含在存档中。相反，处理程序将通过在模型配置中指定的 model_path 访问权重。请注意，在这个例子中，我们选择了“no-archive”格式，它创建一个包含所有必要文件的模型文件夹。这使得我们能够轻松地修改配置文件进行实验，而没有任何摩擦。稍后，我们还可以选择 mar 或 tgz 格式来创建更易于传输的工件。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mkdir model_store
 torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --config-file model_config.yaml --archive-format no-archive --export-path model_store/
@@ -448,18 +456,18 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
 
 <h3 id="4-deploy-the-model">4. 部署模型</h3>
 
-<p>下一步是启动 TorchServe 实例并加载模型。请注意，为了本地测试目的，我们已经禁用了令牌认证。强烈建议在公开部署任何模型时实施某种形式的认证。</p>
+<p>下一步是启动 TorchServe 实例并加载模型。请注意，为了本地测试目的，我们已经禁用了令牌身份验证。强烈建议在公开部署任何模型时实施某种形式的身份验证。</p>
 
 <p>要启动 TorchServe 实例并加载模型，请运行以下命令：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torchserve --start --ncs  --model-store model_store --models vllm --disable-token-auth
 </code></pre></div></div>
 
-<p>您可以通过日志语句监控模型加载的进度。一旦模型加载完成，您就可以进行部署测试。</p>
+<p>您可以通过日志语句监控模型加载的进度。一旦模型加载完成，您可以继续测试部署。</p>
 
 <h3 id="5-test-the-deployment">5. 测试部署</h3>
 
-<p>vLLM 集成使用与 OpenAI API 兼容的格式，因此我们可以使用专用工具或 curl 来完成此目的。我们在这里使用的 JSON 数据包括模型标识符以及提示文本。其他选项及其默认值可以在 <a href="https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html"> vLLMEngine</a> 文档中找到。</p>
+<p>vLLM 集成使用与 OpenAI API 兼容的格式，因此我们可以使用专用工具或 curl 来完成此目的。我们在这里使用的 JSON 数据包括模型标识符以及提示文本。其他选项及其默认值可以在 vLLMEngine 文档中找到。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>echo '{
   "model": "llama3",
@@ -492,13 +500,13 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
   }
 </code></pre></div></div>
 
-<p>当流为 False 时，TorchServe 将收集完整答案，在创建最后一个标记后一次性发送。如果我们翻转流参数，我们将接收到包含每个消息中单个标记的分段数据。</p>
+<p>当流设置为 False 时，TorchServe 将收集完整的答案，在创建最后一个标记后一次性发送。如果我们翻转流参数，我们将接收到包含每个消息中单个标记的分段数据。</p>
 
 <h2 id="conclusion">结论</h2>
 
-<p>在本文中，我们探讨了 vLLM 推理引擎在 TorchServe 中的原生集成。我们展示了如何使用 ts.llm_launcher 脚本来本地部署 Llama 3.1 70B 模型，以及如何创建模型存档以便在任何 TorchServe 实例上部署。此外，我们还讨论了如何在 Docker 容器中构建和运行解决方案，以便在 Kubernetes 或 EKS 上部署。在未来的工作中，我们计划启用 vLLM 和 TorchServe 的多节点推理，并提供预构建的 Docker 镜像以简化部署过程。</p>
+<p>在这篇博客文章中，我们探讨了 vLLM 推理引擎与 TorchServe 的全新原生集成。我们展示了如何使用 ts.llm_launcher 脚本来本地部署 Llama 3.1 70B 模型，以及如何创建模型存档以便在任何 TorchServe 实例上部署。此外，我们还讨论了如何在 Docker 容器中构建和运行解决方案，以便在 Kubernetes 或 EKS 上部署。在未来的工作中，我们计划启用 vLLM 和 TorchServe 的多节点推理，并提供预构建的 Docker 镜像以简化部署过程。</p>
 
-<p>我们想对 Mark Saroufim 和 vLLM 团队在撰写本文前的宝贵支持表示衷心的感谢。</p>
+<p>我们想对 Mark Saroufim 和 vLLM 团队在撰写本博客文章前的宝贵支持表示衷心的感谢。</p>
 
                 </article>
             </div>
@@ -514,14 +522,14 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -538,7 +546,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -551,7 +559,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -559,7 +567,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -588,9 +596,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -600,7 +606,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -622,22 +628,22 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -664,17 +670,17 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -709,7 +715,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -723,7 +729,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -791,7 +797,7 @@ torch-model-archiver --model-name vllm --version 1.0 --handler vllm_handler --co
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

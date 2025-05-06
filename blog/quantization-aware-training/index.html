@@ -112,8 +112,8 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
 # Insert " fake="" quantize"="" operations="" into="" linear="" layers.="" #="" these="" simulate="" quantization="" numerics="" during="" training="" without="" performing="" any="" dtype="" casting="" model="qat_quantizer.prepare(model)" standard="" loop="" optimizer="torch.optim.SGD(model.parameters()," lr="0.001," momentum="0.9," weight_decay="1e-5)" loss_fn="torch.nn.CrossEntropyLoss()" for="" i="" in="" range(10):="" example="torch.randint(0," 4096,="" (2,="" 16)).cuda()="" target="torch.randn((2," 16,="" 4096)).cuda()="" output="model(example)" loss="loss_fn(output," target)="" loss.backward()="" optimizer.step()="" optimizer.zero_grad()="" convert="" quantize="" to="" actual="" the="" quantized="" has="" exact="" same="" structure="" as="" produced="" corresponding="" ptq="" flow="" through="" `int8dynactint4weightquantizer`="" inference="" or="" generate="" fine-tuning="" with="" torchtune="" we="" also="" integrated="" this="" qat="" and="" provided="" recipes="" run="" a="" distributed="" setting,="" similar="" existing="" full="" fine-tune="" recipe.="" users="" can="" additionally="" apply="" llm="" by="" running="" following="" command.="" see="" readme="" more="" details.="" tune="" --nproc_per_node="" 8="" qat_distributed="" --config="" llama3="" 8b_qat_full="" what="" is="" quantization-aware="" training?="" (qat)="" common="" technique="" mitigating="" accuracy="" perplexity="" degradation="" that="" arises="" from="" quantization.="" achieved="" simulating="" while="" keeping="" weights="" activations="" original="" data="" type,="" typically="" float,="" effectively="" “fake="" quantizing”="" values="" instead="" of="" actually="" them="" lower="" bit-widths:="" ptq:="" x_q="" cast="" int8="" scale="" zero="" point="" (zp)="" refer="" parameters="" used="" x_float="" qmin="" qmax="" range="" +="" zp).round().clamp(qmin,="" qmax).cast(int8)="" qat:="" x_fq="" still="" float="" simulates="" dequantize="" qmax)="" -="" zp)="" *="" since="" involves="" non-differentiable="" like="" rounding,="" backward="" pass="" uses="" straight-through="" estimators="" (ste),="" mechanism="" estimate="" gradients="" flowing="" non-smooth="" functions,="" ensure="" passed="" are="" meaningful.="" manner,="" computed="" knowledge="" will="" ultimately="" be="" after="" training,="" allowing="" adjust="" noise="" process.="" note="" an="" alternative="" which="" casts="" bit="" dtypes="" but="" prior="" efforts="" have="" only="" seen="" success="" up="" 8-bits,="" whereas="" effective="" even="" at="" bit-widths.="" pytorch="" added="" initial="" torchao="" under="" prototype="" here.="" currently="" support="" dynamic="" per-token="" int4="" grouped="" per-channel="" (abbreviated="" 8da4w)="" settings="" motivated="" combination="" kernel="" availability="" on="" edge="" backends="" research="" quantization,="" found="" activation="" per-group="" weight="" achieves="" best="" quality="" llms="" compared="" other="" schemes.="" figure="" 2:="" flow.="" two="" steps:="" (1)="" prepare,="" inserts="" ops="" model’s="" layers,="" (2)="" convert,="" converts="" training.="" produces="" using="" (through="" int8dynactint4weightquantizer),="" achieve="" superior="" accuracies="" perplexities.="" thus,="" use="" converted="" drop-in="" replacement="" reuse="" all="" backend="" delegation="" logic="" underlying="" kernels.="" experimental="" results="" experiments="" blog="" post="" performed="" integration="" described="" above.="" 6-8="" a100="" gpus="" 80="" gbs="" each="" llama2-7b="" llama3-8b="" c4="" dataset="" (en="" subset)="" 5000="" steps.="" experiments,="" batch="" size="2," learning="" rate="2e-5," max="" sequence="" length="4096" llama2="" 8192="" llama3,="" fully="" sharded="" parallel="" (fsdp)="" our="" distribution="" strategy,="" checkpointing="" reduce="" memory="" footprint.="" 8da4w="" group="" 256="" weights.="" pre-training="" not="" easily="" accessible,="" perform="" empirically,="" disabling="" first="" n="" steps="" led="" better="" results,="" presumably="" because="" doing="" so="" allows="" stabilize="" before="" start="" introducing="" disable="" 1000="" experiments.="" evaluate="" models="" lm-evaluation-harness="" torchtune.="" report="" evaluation="" variety="" tasks="" commonly="" llms,="" including="" hellaswag,="" commonsense="" sentence="" completion="" task,="" wikitext,="" next="" token="" byte="" prediction="" few="" question-answering="" such="" arc,="" openbookqa,="" piqa.="" refers="" inverse="" how="" well="" predict="" word="" (lower="" better),="" bits_per_byte="" many="" bits="" needed="" here).="" tasks,="" acc_norm="" normalized="" byte-length="" string.="" (8da4w)="" starting="" saw="" was="" able="" recover="" 62%="" hellaswag="" ptq,="" 58%="" 57%="" (respectively)="" wikitext.="" improvements="" most="" tasks.="" 3a:="" 3b:="" qat,="" evaluated="" wikitext="" better)="" pronounced="" qat.="" were="" 96%="" minimal="" overall="" (&lt;1%)="" non-quantized="" accuracy.="" recovered="" 68%="" 65%="" (respectively).="" arc_challenge,="" difficult="" 51%="" degradation.="" 4a:="" 4b:="" further="" extended="" 2-bit="" 3-bit="" repeated="" llama3-8b.="" severe="" bit-widths,="" 32="" finer-grained="" however,="" enough="" 2-bits="" explode.="" mitigate="" problem,="" leverage="" sensitivity="" analysis="" 3="" last="" 2="" layers="" sensitive,="" skip="" quantizing="" exchange="" moderate="" increase="" (1.78="" gb="" 1.65="" 3-bits).="" brought="" down="" 603336="" 6766,="" significant="" far="" acceptable.="" improve="" model,="" turn="" 5a:="" better).="" bars="" “skip”="" skipping="" sensitive="" log="" scale.="" observe="" applying="" much="" reasonable="" value="" 30="" (from="" 6766).="" generally,="" 53%="" 99%="" 89%="" less="" quality.="" 5b:="" though="" both="" case,="" 63%="" 72%="" 6a:="" 6b:="" overhead="" throughout="" adding="" considerable="" speed="" usage.="" example,="" (32="" 7)="" 1="225" least="" potentially="" input="" activations.="" footprint="" significant,="" cannot="" mutate="" in-place="" need="" clone="" mostly="" mitigated="" enabling="" checkpointing.="" microbenchmarks,="" ~34%="" slower="" than="" regular="" fine-tuning.="" checkpointing,="" per="" gpu="" around="" 2.35="" gb.="" overheads="" fundamental="" works,="" may="" computation="" torch.compile="" future.="" statistics="" median="" tokens="" second="" 546.314="" tok="" s="" 359.637="" peak="" 67.501="" 69.850="" table="" channel="" 6="" (each="" 80gb="" memory).="" looking="" ahead="" blog,="" presented="" torchao,="" apis="" torchtune,="" demonstrated="" its="" potential="" match="" performance="" certain="" there="" directions="" future="" explorations:="" hyperparameter="" tuning.="" it="" likely="" extensive="" tuning="" finetuning="" addition="" general="" hyperparameters="" rate,="" size,="" number="" steps,="" should="" qat-specific="" ones,="" when="" stop="" quantize,="" regularization="" values.="" outlier="" reduction="" techniques.="" susceptible="" outliers.="" simple="" clamping="" fine-tuning,="" explore="" techniques="" allow="" network="" learn="" control="" outliers="" (e.g.="" learned="" ranges,="" clipped="" softmax,="" gated="" attention),="" possibly="" borrow="" suppression="" post-training="" spinquant,="" smoothquant)="" sparingly="" mixed-precision="" complex="" dtypes.="" especially="" regime,="" did="" altogether,="" them,="" just="" bit-widths?="" interesting="" context="" newer="" mx4="" another="" promising="" direction,="" given="" upcoming="" blackwell="" no="" longer="" tensor="" cores.="" composability="" lora="" qlora.="" supports="" workflow.="" wish="" their="" low-ranked="" adaptors="" substantially="" composing="" qlora="" enable="" reap="" benefits="" approaches="" producing="" torch.compile.="" way="" significantly="" computations="" reducing="" compatible="" strategy="" (with="" qat),="" near="" work,="" explored="" long="" lengths,="" kv="" cache="" often="" becomes="" throughput="" bottleneck="" reach="" tens="" gbs,="" hence="" llm-qat="" alongside="" work="" had="" embedding="" layer="" transformer-based="" models.="" end-to-end="" performant="" cuda="" natural="" extension="" provide="" kernels,="" lowered="" xnnpack="" kernels="" executorch.="" efficient="" mm="" bitpacking="" ongoing="" add="" kernel:="" https:="" github.com="" ao="" pull="" 383.="" mixed="" 4-bit="" 8-bit="" gemm="" being="" cutlass.="" build="" kernel.="" code="" please="" tutorial="" get="" started.="" if="" you="" questions,="" feel="" free="" open="" issue="" github="" out="" andrewor@meta.com.="" welcome="" your="" feedback="" contributions!="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -331,7 +331,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -339,7 +339,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -351,24 +351,24 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容是什么</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -379,21 +379,27 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -406,15 +412,15 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -425,12 +431,12 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -441,28 +447,28 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -476,7 +482,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -512,7 +518,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2024年7月30日</p>
+            <p class="featured-post">2024 年 7 月 30 日</p>
             <h1>
                 <a class="blog-title">使用 PyTorch 进行大型语言模型的量化感知训练</a>
             </h1>
@@ -524,18 +530,18 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">由安德鲁·奥、杰瑞·张、伊万·斯莫瑟、卡蒂卡伊·汗德尔瓦尔、苏普里娅·拉奥所著</p>
-                    <p>在本文中，我们介绍了 PyTorch 中针对大型语言模型的端到端量化感知训练（QAT）流程。我们展示了 PyTorch 中的 QAT 如何能够恢复高达 96%的 hellaswag 上的精度下降，以及相对于训练后量化（PTQ），在 Llama3 上 68%的困惑度下降。我们在 torchao 中展示了 QAT API，并展示了用户如何利用它们在 torchtune 中进行微调。</p>
+                    <p class="author">由安德鲁·奥、杰瑞·张、伊万·斯莫瑟、卡蒂卡伊·汗德尔瓦尔、苏普里娅·拉奥</p>
+                    <p>在本文中，我们介绍了 PyTorch 中针对大型语言模型的端到端量化感知训练（QAT）流程。我们展示了 PyTorch 中的 QAT 如何能够在 hellaswag 上恢复高达 96%的精度下降，在 wikitext 上恢复高达 68%的困惑度下降，与训练后量化（PTQ）相比。我们介绍了 torchao 中的 QAT API，并展示了用户如何利用它们在 torchtune 中进行微调。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg1.jpg" alt="Llama3-8B fine-tuned on the C4 dataset (en subset) with and without QAT using int8 per token dynamic activations + int4 grouped per channel weights, evaluated on hellaswag and wikitext on a A100 GPU. Note the log scale for wikitext (lower is better)." style="width:100%"></p>
 
-<p><strong>图 1：</strong> 在 C4 数据集（en 子集）上微调的 Llama3-8B，使用 int8 每 token 动态激活+int4 按通道分组权重，在有和无 QAT 的情况下，在 hellaswag 和 wikitext 上评估，使用 A100 GPU。注意 wikitext 的日志刻度（越低越好）。</p>
+<p>图 1：在 C4 数据集（en 子集）上微调的 Llama3-8B，使用 int8 per token 动态激活+int4 按通道分组权重，带有和没有 QAT，在 A100 GPU 上评估 hellaswag 和 wikitext。注意 wikitext 的日志刻度（越低越好）。</p>
 
-<p>为了展示 QAT 在端到端流程中的有效性，我们进一步将量化模型降低到 <a href="https://github.com/google/XNNPACK">XNNPACK</a>，这是一个针对 iOS 和 Android 等后端高度优化的神经网络库，通过 <a href="https://github.com/pytorch/executorch/tree/main/examples/models/llama2">executorch</a> 实现。在降低到 XNNPACK 后，QAT 模型在保持相同模型大小和设备上推理和生成速度的同时，比 PTQ 模型降低了 16.8%的困惑度。<strong> 降低到 XNNPACK 后，QAT 模型在困惑度上比 PTQ 模型降低了 16.8%，同时保持了相同的模型大小和设备上的推理和生成速度。</strong></p>
+<p>为了证明 QAT 在端到端流程中的有效性，我们进一步将量化模型降低到 XNNPACK，这是一个针对 iOS 和 Android 等后端高度优化的神经网络库，通过 executorch 实现。降低到 XNNPACK 后，QAT 模型比 PTQ 模型困惑度降低了 16.8%，同时保持了相同的模型大小和设备上的推理和生成速度。</p>
 
 <table class="table table-bordered">
   <tbody><tr>
-   <td><strong>降低后的模型指标</strong>
+   <td><strong>模型指标降低</strong>
    </td>
    <td><strong>PTQ</strong>
    </td>
@@ -543,7 +549,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
    </td>
   </tr>
   <tr>
-   <td>维基文本单词困惑度（↓）</td>
+   <td>维基文本词困惑度（↓）</td>
    <td>23.316
    </td>
    <td>19.403
@@ -557,7 +563,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
    </td>
   </tr>
   <tr>
-   <td>每字节 Wikitext 位（↓）</td>
+   <td>维基文本每字节比特数（↓）</td>
    <td>0.887
    </td>
    <td>0.836
@@ -574,23 +580,20 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
    <td>设备端推理速度</td>
    <td>5.065 tok/s
    </td>
-   <td>5.265 tok/s
-   </td>
+   <td>5.265 每秒词</td>
   </tr>
   <tr>
-   <td>设备端生成速度</td>
-   <td>8.369 tok/s
-   </td>
-   <td>8.701 tok/s
-   </td>
+   <td>离线生成速度</td>
+   <td>8.369 每秒词</td>
+   <td>8.701 每秒词</td>
   </tr>
 </tbody></table>
 
-<p><strong>表 1：</strong>QAT 在 Llama3-8B 模型上实现了 16.8%的更低困惑度，模型大小、设备上的推理和生成速度保持不变，并降低到 XNNPACK。线性层使用 int8 按 token 动态激活+int4 按通道分组权重进行量化，嵌入层额外使用 32 组大小进行 int4 量化（QAT 仅应用于线性层）。由于设备上无法进行评估，因此在服务器 CPU 上使用 5 个样本和最大序列长度为 127 进行 Wikitext 评估（所有 Wikitext 结果中，数值越低越好）。在三星 Galaxy S22 智能手机上对设备上的推理和生成进行了基准测试。</p>
+<p>表格 1：QAT 在 Llama3-8B 模型上实现了 16.8%的更低困惑度，模型大小、设备上的推理和生成速度保持不变，并在 XNNPACK 上降低。线性层使用 int8 按 token 动态激活+int4 按通道分组权重进行量化，嵌入层额外使用 32 组大小进行 int4 量化（QAT 仅应用于线性层）。由于设备上无法进行评估，因此在服务器 CPU 上使用 5 个样本和最大序列长度为 127 进行 Wikitext 评估（所有 Wikitext 结果中，数值越低越好）。在三星 Galaxy S22 智能手机上对设备上的推理和生成进行了基准测试。</p>
 
 <h3 id="qat-apis">QAT API</h3>
 
-<p>我们期待用户在 torchao 中尝试我们的 <a href="https://github.com/pytorch/ao/blob/v0.3.0/torchao/quantization/prototype/qat.py">QAT API</a>，该 API 可用于训练和微调。此 API 涉及两个步骤：准备和转换。准备步骤对模型中的线性层应用转换以模拟训练期间的量化数值，转换步骤则将这些层实际量化为更低的位宽。转换后的模型可以像 PTQ 模型一样使用：</p>
+<p>我们期待用户尝试 torchao 中的 QAT API，该 API 可用于训练和微调。此 API 涉及两个步骤：准备和转换。准备步骤对模型中的线性层应用转换，以模拟训练期间的量化数值；转换步骤则在实际训练后将这些层量化为更低的位宽。转换后的模型可以像 PTQ 模型一样使用：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">from</span> <span class="nn">torchtune.models.llama3</span> <span class="kn">import</span> <span class="n">llama3</span>
@@ -638,14 +641,14 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
 <h4 id="fine-tuning-with-torchtune">使用 torchtune 进行微调</h4>
 
-<p>我们还将此 QAT 流程集成到 <a href="https://github.com/pytorch/torchtune">torchtune</a> 中，并提供了<a href="https://github.com/pytorch/torchtune/blob/main/recipes/configs/llama3/8B_qat_full.yaml">食谱</a>以在分布式环境中运行此流程，类似于现有的完整微调分布式食谱。用户还可以在LLM微调期间应用 QAT，通过运行以下命令。请参阅<a href="https://github.com/pytorch/torchtune/blob/main/recipes/quantization.md">此 README</a> 获取更多详细信息。</p>
+<p>我们还将其 QAT 流程集成到 torchtune 中，并提供了在分布式环境中运行此流程的配方，类似于现有的全微调分布式配方。用户还可以在LLM微调期间应用 QAT，通过运行以下命令。请参阅此 README 获取更多详细信息。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">tune</span> <span class="n">run</span> <span class="o">--</span><span class="n">nproc_per_node</span> <span class="mi">8</span> <span class="n">qat_distributed</span> <span class="o">--</span><span class="n">config</span> <span class="n">llama3</span><span class="o">/</span><span class="mi">8</span><span class="n">B_qat_full</span>
 </code></pre></div></div>
 
 <h2 id="what-is-quantization-aware-training">什么是量化感知训练？</h2>
 
-<p>量化感知训练（QAT）是一种常见的量化技术，用于减轻量化过程中模型精度/困惑度下降的问题。这是通过在训练过程中模拟量化数值，同时保持权重和/或激活在原始数据类型（通常是浮点数）中实现的，有效地“模拟量化”值，而不是实际将它们转换为更低的位宽：</p>
+<p>量化感知训练（QAT）是一种常见的量化技术，用于减轻量化过程中产生的模型精度/困惑度下降。这是通过在训练过程中模拟量化数值，同时保持权重和/或激活在原始数据类型（通常是浮点型）中实现的，有效地“模拟量化”值，而不是实际将它们转换为更低的位宽：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># PTQ: x_q is quantized and cast to int8
 # scale and zero point (zp) refer to parameters used to quantize x_float
@@ -658,25 +661,25 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 <span class="n">x_fq</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_fq</span> <span class="o">-</span> <span class="n">zp</span><span class="p">)</span> <span class="o">*</span> <span class="n">scale</span>
 </code></pre></div></div>
 
-<p>由于量化涉及非可微操作，如四舍五入，QAT 反向传播通常使用<a href="https://arxiv.org/pdf/1308.3432">直通估计器（STE）</a>，这是一种估计通过非光滑函数流动的梯度的机制，以确保传递给原始权重的梯度仍然有意义。以这种方式，梯度是在知道权重最终将在训练后量化的情况下计算的，从而有效地允许模型在训练过程中调整量化噪声。请注意，QAT 的替代方案是量化训练，它实际上在训练期间将值转换为更低的位宽数据类型，但<a href="https://cloud.google.com/blog/products/compute/accurate-quantized-training-aqt-for-tpu-v5e">先前的研究</a>仅在 8 位宽上取得了成功，而 QAT 即使在更低的位宽下也有效。</p>
+<p>由于量化涉及非可微操作，如四舍五入，因此 QAT 反向传播通常使用直通估计器（STE），这是一种估计通过非光滑函数流动的梯度的机制，以确保传递给原始权重的梯度仍然有意义。以这种方式，梯度是在知道权重最终将在训练后量化的情况下计算的，从而有效地允许模型在训练过程中调整量化噪声。请注意，QAT 的替代方法是量化训练，它实际上在训练期间将值转换为更低的位宽数据类型，但之前的努力仅在 8 位宽上取得了成功，而 QAT 即使在更低的位宽下也有效。</p>
 
 <h3 id="qat-in-pytorch">PyTorch 中的 QAT</h3>
 
-<p>我们在 torchao 原型中添加了初始 QAT 流程，详情请<a href="https://github.com/pytorch/ao/blob/v0.2.0/torchao/quantization/prototype/qat.py">点击这里 </a>。目前我们支持线性层使用 int8 动态每 token 激活+int4 分组每通道权重（简称 8da4w）。这些设置是由边缘后端上<a href="https://github.com/pytorch/executorch/blob/main/examples/models/llama2/README.md#quantization">内核可用性</a>和<a href="https://arxiv.org/pdf/2305.17888">关于LLM量化的先前研究</a>共同驱动的，该研究指出，与其它量化方案相比，每 token 激活和每组权重量化能实现最佳的模型质量。</p>
+<p>我们在 torchao 原型中添加了初始的 QAT 流程。目前我们支持线性层使用 int8 动态每 token 激活+int4 分组每通道权重（简称 8da4w）。这些设置是由边缘后端上内核的可用性和关于LLM量化的先前研究相结合而激发的，该研究发现在LLMs与其他量化方案相比，每 token 激活和每组权重量化可以实现最佳模型质量。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg2.png" alt="torchao QAT flow. This flow involves two steps: (1) prepare, which inserts the fake quantization ops into the model’s linear layers, and (2) convert, which converts these fake quantization ops with actual quantize and dequantize ops after training." style="width:100%"></p>
 
-<p><strong>图 2：</strong>torchao QAT 流程。此流程包括两个步骤：（1）准备，将伪量化操作插入模型线性层；（2）转换，在训练后用实际的量化和反量化操作替换这些伪量化操作。</p>
+<p>图 2：torchao QAT 流程。此流程包括两个步骤：（1）准备，将假量化操作插入模型的线性层中；（2）转换，在训练后用实际的量化和反量化操作替换这些假量化操作。</p>
 
-<p>此流程生成的量化模型与 PTQ 流程使用相同的量化设置（通过 <a href="https://github.com/pytorch/ao/blob/v0.3.0/torchao/quantization/GPTQ.py#L941">Int8DynActInt4WeightQuantizer</a>）完全相同，但量化权重实现了更优的准确率和困惑度。因此，我们可以将 QAT 流程转换的模型作为 PTQ 模型的直接替换，并重用所有后端委托逻辑和底层内核。</p>
+<p>此流程生成的量化模型与 PTQ 流程使用相同的量化设置（通过 Int8DynActInt4WeightQuantizer）完全相同，但量化权重实现了更优的准确率和困惑度。因此，我们可以使用从 QAT 流程转换的模型作为 PTQ 模型的直接替换，并重用所有后端委托逻辑和底层内核。</p>
 
 <h2 id="experimental-results">实验结果</h2>
 
-<p>本博客文章中的所有实验均使用上述 torchtune QAT 集成进行。我们使用 6-8 个每个 80GB 的 A100 GPU 进行微调 <a href="https://huggingface.co/meta-llama/Llama-2-7b">Llama2-7B</a> 和 <a href="https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct">Llama3-8B</a>，在 <a href="https://huggingface.co/datasets/allenai/c4">C4 数据集 </a>（英文子集）上进行 5000 步。对于所有实验，我们使用批大小=2，学习率=2e-5，最大序列长度=4096（Llama2）和 8192（Llama3），<a href="https://pytorch.org/docs/stable/fsdp.html"> 完全分片数据并行 </a>（FSDP）作为我们的分布式策略，并使用激活检查点来减少内存占用。对于 8da4w 实验，我们使用权重分组大小为 256。</p>
+<p>本博客文章中所有实验均使用上述描述的 torchtune QAT 集成进行。我们使用 6-8 个每个 80GB 的 A100 GPU，对 C4 数据集（en 子集）上的 Llama2-7B 和 Llama3-8B 进行微调，共 5000 步。对于所有实验，我们使用批大小=2，学习率=2e-5，最大序列长度=4096（Llama2）和 8192（Llama3），使用完全分片数据并行（FSDP）作为我们的分布式策略，并使用激活检查点来减少内存占用。对于 8da4w 实验，我们使用权重组的规模为 256。</p>
 
-<p>由于预训练数据集不易获取，我们在微调过程中进行 QAT。经验表明，在最初的 N 步中禁用伪量化可以带来更好的结果，这可能是由于这样做允许权重在开始引入量化噪声到微调过程中之前稳定下来。对于所有实验，我们禁用伪量化前 1000 步。</p>
+<p>由于预训练数据集不易获取，我们在微调过程中执行 QAT。经验表明，在最初的 N 步中禁用伪量化可以带来更好的结果，这可能是由于这样做允许权重在我们开始引入量化噪声到微调过程中之前稳定下来。对于所有我们的实验，我们禁用伪量化前 1000 步。</p>
 
-<p>我们使用 torchtune 中的 <a href="https://github.com/EleutherAI/lm-evaluation-harness">lm-evaluation-harness</a> 集成来评估我们的量化模型。我们报告了来自各种常见评估任务的评估结果，包括 hellaswag（一个常识句子补全任务）、wikitext（一个下一个标记/字节预测任务），以及 arc、openbookqa 和 piqa 等几个问答任务。对于 wikitext，困惑度指的是模型预测下一个单词或字节的能力的倒数（越低越好），而 <code class="language-plaintext highlighter-rouge">bits_per_byte</code> 指的是预测下一个字节所需的位数（这里也越低越好）。对于所有其他任务，<code class="language-plaintext highlighter-rouge">acc_norm</code> 指的是按目标字符串的字节长度归一化的准确率。</p>
+<p>我们使用 torchtune 中的 lm-evaluation-harness 集成来评估我们的量化模型。我们报告了来自各种任务的评估结果，这些任务通常用于评估LLMs，包括 hellaswag，一个常识句子补全任务，wikitext，一个下一个标记/字节预测任务，以及一些问答任务，如 arc、openbookqa 和 piqa。对于 wikitext，困惑度指的是模型预测下一个单词或字节的能力的倒数（越低越好），而 <code class="language-plaintext highlighter-rouge">bits_per_byte</code> 指的是预测下一个字节所需的位数（这里也越低越好）。对于所有其他任务， <code class="language-plaintext highlighter-rouge">acc_norm</code> 指的是按目标字符串的字节长度归一化的准确率。</p>
 
 <h4 id="int8-dynamic-activations--int4-weight-quantization-8da4w">Int8 动态激活 + Int4 权重量化（8da4w）</h4>
 
@@ -684,53 +687,53 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
 <p><img src="/assets/images/quantization-aware-training/fg3a.png" alt="Llama2-7B 8da4w quantization with and without QAT" style="width:100%"></p>
 
-<p><strong>图 3a：</strong> 带有和没有 QAT 的 Llama2-7B 8da4w 量化</p>
+<p>图 3a：Llama2-7B 8da4w 量化，带 QAT 和不带 QAT</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg3b.png" alt="Llama2-7B 8da4w quantization with and without QAT, evaluated on wikitext (lower is better)" style="max-width:400px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p><strong>图 3b:</strong> Llama2-7B 8da4w 量化（带和不带 QAT），在维基文本上评估（越低越好）</p>
+<p>图 3b：Llama2-7B 8da4w 量化（带和不带 QAT），在维基文本上评估（越低越好）</p>
 
-<p>Llama3 8da4w 量化在 QAT 的帮助下取得了更加显著的改进。在 hellaswag 评估任务中，我们能够恢复与 PTQ 相比在 hellaswag 上的 96%的归一化精度下降，与未量化的精度相比整体下降最小（&lt;1%）。在维基文本评估任务中，QAT恢复了68%和65%的词和字节困惑度下降（分别）。即使在Llama2 QAT难以处理的arc_challenge上，我们也能够恢复51%的归一化精度下降。</p>
+<p>Llama3 8da4w 量化在 QAT 的帮助下取得了更加显著的改进。在 hellaswag 评估任务中，我们能够恢复与 PTQ 相比在 hellaswag 上的 96%的归一化准确度下降，与未量化的准确度相比整体下降最小（&lt;1%）。在维基文本评估任务中，QAT 恢复了 68%和 65%的词和字节困惑度下降（分别）。即使在 Llama2 QAT 难以处理的 arc_challenge 上，我们也能够恢复 51%的归一化准确度下降。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg4a.png" alt="Llama3-8B 8da4w quantization with and without QAT" style="width:100%"></p>
 
-<p><strong>图 4a:</strong> Llama3-8B 8da4w 量化（带和不带 QAT）</p>
+<p>图 4a：Llama3-8B 8da4w 量化（带和不带 QAT）</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg4b.png" alt="Llama3-8B 8da4w quantization with and without QAT, evaluated on wikitext (lower is better)" style="max-width:400px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p><strong>图 4b:</strong> Llama3-8B 8da4w 量化（带和不带 QAT），在维基文本上评估（越低越好）</p>
+<p>图 4b：Llama3-8B 8da4w 量化（带和不带 QAT），在维基文本上评估（越低越好）</p>
 
 <h4 id="lower-bit-weight-only-quantization">仅低比特位量化</h4>
 
-<p>我们进一步扩展了 torchao QAT 流程，支持 2 比特和 3 比特权重仅量化，并对 Llama3-8B 进行了相同的实验。在更低的比特宽度下，量化退化更为严重，因此所有实验都使用 32 组大小进行更细粒度的量化。</p>
+<p>我们进一步扩展了 torchao QAT 流程，支持 2 比特和 3 比特权重仅量化，并对 Llama3-8B 进行了相同的实验。在更低的比特宽度下，量化退化更为严重，因此我们为所有实验使用 32 的组大小进行更细粒度的量化。</p>
 
-<p>然而，这仍然不足以满足 2 比特 PTQ 的需求，导致 wikitext 困惑度爆炸。为了缓解这个问题，我们利用先前敏感性分析的知识，即 Llama3 模型的前 3 层和最后 2 层对量化最敏感，因此跳过这些层的量化，以换取量化模型大小的适度增加（2 比特为 1.78 GB，3 比特为 1.65 GB）。这使 wikitext 单词困惑度从 603336 降至 6766，这是一个显著的改进，但仍然远非可接受。为了进一步提高量化模型，我们转向 QAT。</p>
+<p>然而，这仍然不足以满足 2 比特 PTQ 的需求，导致 wikitext 困惑度爆炸。为了缓解这个问题，我们利用先前敏感性分析的知识，即 Llama3 模型的前 3 层和最后 2 层对量化最敏感，因此跳过对这些层的量化，以换取量化模型大小的适度增加（2 比特为 1.78 GB，3 比特为 1.65 GB）。这使 wikitext 单词困惑度从 603336 降至 6766，这是一个显著的改进，但仍然远非可接受的。为了进一步提高量化模型，我们转向 QAT。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg5a.png" alt="Llama3-8B 2-bit weight only quantization with and without QAT, evaluated on wikitext (lower is better). Bars with “skip” refer to skipping quantization for the first 3 and last 2 layers of the model, which are more sensitive to quantization. Note the log scale." style="max-width:400px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p><strong>图 5a：</strong> 带有和没有 QAT 的 Llama3-8B 2 比特权重仅量化，在 wikitext 上评估（越低越好）。带有“skip”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。注意对数刻度。</p>
+<p>图 5a：Llama3-8B 2 比特权重仅量化，带 QAT 和不带 QAT，在 wikitext 上评估（越低越好）。带有“skip”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。注意对数刻度。</p>
 
-<p>我们观察到在跳过前 3 层和最后 2 层的量化操作的同时应用 QAT，进一步将词困惑度降低到更合理的 30（从 6766）。更普遍地说，与 PTQ 相比，QAT 在 hellaswag 上能够恢复 53%的标准化精度下降，以及在 wikitext 上分别恢复 99%和 89%的词和字节困惑度下降。然而，如果不跳过敏感层，QAT 在减轻量化模型质量下降方面效果远不如跳过这些层。</p>
+<p>我们观察到在跳过前 3 层和最后 2 层的量化操作的同时应用 QAT，进一步将词困惑度降低到更合理的 30（从 6766）。更普遍地说，与 PTQ 相比，QAT 在 hellaswag 上能够恢复 53%的标准化精度下降，以及在 wikitext 上的词和字节困惑度下降分别达到 99%和 89%。然而，如果不跳过敏感层，QAT 在减轻量化模型质量下降方面效果远不如跳过这些层。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg5b.png" alt="Llama3-8B 2-bit weight only quantization with and without QAT. Bars with “skip” refer to skipping quantization for the first 3 and last 2 layers of the model, which are more sensitive to quantization." style="width:100%"></p>
 
-<p><strong>图 5b：</strong> 带有和没有 QAT 的 Llama3-8B 2 位权重仅量化。带有“跳过”的条形表示跳过模型前 3 层和最后 2 层的量化，这些层对量化更敏感。</p>
+<p>图 5b：Llama3-8B 仅 2 位权重量化，带 QAT 和不带 QAT。带有“skip”的条形表示跳过模型前 3 层和最后 2 层的量化，这些层对量化更敏感。</p>
 
-<p>对于仅 3 位权重量化，即使不跳过前 3 层和最后 2 层，QAT 仍然有效，尽管跳过这些层仍然对 PTQ 和 QAT 都带来了更好的结果。在跳过的情况下，QAT 能够恢复与 PTQ 相比在 hellaswag 上的 63%的标准化精度下降，以及在 wikitext 上分别恢复 72%和 65%的词和字节困惑度下降。</p>
+<p>对于仅 3 位权重量化，即使不跳过前 3 层和最后 2 层，QAT 仍然有效，尽管跳过这些层仍然对 PTQ 和 QAT 都带来了更好的结果。在跳过的情况下，QAT 能够恢复与 PTQ 相比在 hellaswag 上的 63%的标准化精度下降，以及在 wikitext 上的词和字节困惑度下降分别达到 72%和 65%。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg6a.png" alt="Llama3-8B 3-bit weight only quantization with and without QAT. Bars with “skip” refer to skipping quantization for the first 3 and last 2 layers of the model, which are more sensitive to quantization." style="width:100%"></p>
 
-<p><strong>图 6a:</strong> Llama3-8B 仅权重 3 位量化，带和不带 QAT。带有“skip”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。</p>
+<p>图 6a：Llama3-8B 3 位权重量化（带和不带 QAT）。带有“跳过”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。</p>
 
 <p><img src="/assets/images/quantization-aware-training/fg6b.png" alt="Llama3-8B 3-bit weight only quantization with and without QAT, evaluated on wikitext (lower is better). Bars with “skip” refer to skipping quantization for the first 3 and last 2 layers of the model, which are more sensitive to quantization. Note the log scale." style="max-width:400px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p><strong>图 6b:</strong> Llama3-8B 仅权重 3 位量化，带和不带 QAT，在 wikitext 上评估（越低越好）。带有“skip”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。注意使用对数刻度。</p>
+<p>图 6b：Llama3-8B 3 位权重量化（带和不带 QAT），在 wikitext 上评估（越低越好）。带有“跳过”的条形表示跳过对模型前 3 层和最后 2 层的量化，这些层对量化更敏感。注意对数刻度。</p>
 
 <h4 id="qat-overhead">QAT 开销</h4>
 
-<p>QAT 在模型中插入许多模拟量化操作，这给微调速度和内存使用都增加了相当大的开销。例如，对于 Llama3-8B 这样的模型，我们有(32 * 7) + 1 = 225 个线性层，每个层至少有 1 个模拟量化用于权重，可能还有 1 个模拟量化用于输入激活。内存占用增加也很显著，因为我们不能就地修改权重，所以在应用模拟量化之前需要克隆它们，尽管可以通过启用激活检查点来大部分缓解这种开销。</p>
+<p>QAT 在模型中插入许多假量化操作，给微调速度和内存使用增加了相当大的开销。例如，对于 Llama3-8B 这样的模型，我们有(32 * 7) + 1 = 225 个线性层，每个层至少有 1 个假量化操作用于权重，可能还有 1 个假量化操作用于输入激活。内存占用增加也很显著，因为我们不能就地修改权重，因此需要在应用假量化之前克隆它们，尽管可以通过启用激活检查点来大部分缓解这种开销。</p>
 
-<p>在我们的微基准测试中，我们发现 8da4w QAT 微调比常规全量微调慢约 34%。使用激活检查点，每个 GPU 的内存增加约为 2.35 GB。尽管我们可能在未来通过 <a href="https://maskerprc.github.io/get-started/pytorch-2.0/">torch.compile</a> 加速计算，但这些开销大多与 QAT 的工作原理密切相关。</p>
+<p>在我们的微基准测试中，我们发现 8da4w QAT 微调比常规全量微调慢约 34%。使用激活检查点，每个 GPU 的内存增加约为 2.35 GB。尽管我们可能在未来通过 torch.compile 加速计算，但这些开销大多与 QAT 的工作原理密切相关。</p>
 
 <table class="table table-bordered">
   <tbody><tr>
@@ -754,23 +757,23 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
   </tr>
 </tbody></table>
 
-<p><strong>表 2：</strong> 在 6 个 A100 GPU（每个具有 80GB 内存）上进行的 Llama3 QAT 微调开销，针对 int8 每 token 动态激活和 int4 按通道分组权重。</p>
+<p>表 2：在 6 个 A100 GPU（每个 80GB 内存）上进行的 Llama3 QAT 微调开销，针对 int8 每 token 动态激活和 int4 按通道分组权重</p>
 
 <h2 id="looking-ahead">展望未来</h2>
 
-<p>在本博客中，我们通过 <a href="https://github.com/pytorch/ao/">torchao</a> 提出了一个 QAT 流程，将其与 <a href="https://github.com/pytorch/torchtune/">torchtune</a> 中的微调 API 集成，并展示了其相对于 PTQ 恢复大部分量化降级的潜力，并在某些任务上与非量化性能相匹配。未来有许多探索方向：</p>
+<p>在本文中，我们通过 torchao 提出了一个 QAT 流程，将其与 torchtune 中的微调 API 集成，并展示了其相对于 PTQ 恢复大部分量化降级的潜力，并在某些任务上与非量化性能相匹配。未来有许多探索方向：</p>
 
 <ul>
-  <li><strong>超参数调整。</strong> 可能通过广泛的超参数调整可以进一步改善微调和 QAT 的结果。除了学习率、批量大小、数据集大小和微调步数等一般超参数外，我们还应该调整 QAT 特定的超参数，例如何时开始/停止伪量化、伪量化的步数以及伪量化值的正则化参数。</li>
-  <li><strong>异常值减少技术。</strong> 在我们的实验中，我们发现 PTQ 和 QAT 都容易受到异常值的影响。除了在微调期间进行简单的钳位和正则化之外，我们可以探索允许网络学习如何控制这些异常值的技术（例如<a href="https://arxiv.org/pdf/1902.08153">学习量化范围 </a>、<a href="https://arxiv.org/pdf/2306.12929"> 剪裁 softmax</a> 和<a href="https://arxiv.org/pdf/2306.12929">门控注意力 </a>），或者甚至从后训练设置中借用异常值抑制技术（例如 <a href="https://arxiv.org/pdf/2405.16406">SpinQuant</a>、<a href="https://arxiv.org/pdf/2211.10438">SmoothQuant</a>）并在微调过程中谨慎应用。</li>
-  <li><strong>混合精度和更复杂的数据类型。</strong> 特别是在低位域，我们发现对于某些敏感层跳过量化对于 PTQ 和 QAT 都有效。我们是否需要完全跳过这些层的量化，或者我们仍然可以量化它们，只是降低位宽？在 QAT 的背景下探索混合精度量化将非常有趣。使用 MX4 等新数据类型进行训练也是另一个有希望的方向，尤其是考虑到即将推出的 Blackwell GPU 将不再支持 int4 张量核心。</li>
-  <li><strong>与 LoRA 和 QLoRA 的兼容性。</strong> 我们目前在 torchtune 中的 QAT 集成仅支持完整的微调工作流程。然而，许多用户希望使用低秩适配器进行微调，以显著减少他们的内存占用。将 QAT 与 LoRA / QLoRA 等技术相结合将使用户能够获得这些方法的内存和性能优势，同时产生一个最终以最小模型质量下降进行量化的模型。</li>
-  <li><strong>与 torch.compile 的兼容性。</strong> 这是在 QAT（量化感知训练）中显著加快假量化计算并减少内存占用的一种潜在方法。目前，torch.compile 与 torchtune 中全分布式微调食谱（带 QAT 或不带 QAT）所使用的分布策略不兼容，但将在不久的将来添加支持。</li>
-  <li><strong>量化其他层。</strong> 在本工作中，我们仅探讨了量化线性层。然而，在长序列长度的情况下，KV 缓存经常成为吞吐量瓶颈，可以达到数十 GB，因此 <a href="https://arxiv.org/pdf/2305.17888">LLM-QAT</a> 探讨了量化 KV 缓存以及激活和权重。在<a href="https://arxiv.org/pdf/2109.12948">先前的工作</a>中，在其他基于 transformer 的模型中将嵌入层量化到 2 位也取得了成功。</li>
-  <li><strong>端到端评估高性能 CUDA 内核。</strong> 此工作的自然扩展是提供一个在性能良好的 CUDA 内核上评估的端到端 QAT 流程，类似于现有的 8da4w QAT 流程通过 executorch 降低到 XNNPACK 内核。对于仅对 int4 权重进行量化，我们可以利用高效的 <a href="https://github.com/pytorch/pytorch/blob/v2.3.1/aten/src/ATen/native/cuda/int4mm.cu#L865">int4 权重 mm 内核与位打包</a>进行量化，并且正在进行添加对此内核的 QAT 支持的工作：<a href="https://github.com/pytorch/ao/pull/383">https://github.com/pytorch/ao/pull/383</a>。对于 8da4w 量化，cutlass 中也在添加<a href="https://github.com/NVIDIA/cutlass/pull/1413">混合 4 位/8 位 GEMM</a>。这将需要构建一个高效的 8da4w CUDA 内核。</li>
+  <li>超参数调整。大量超参数调整可能会进一步改善微调和 QAT 的结果。除了学习率、批量大小、数据集大小和微调步数等一般超参数外，我们还应该调整 QAT 特定的超参数，例如何时开始/停止伪量化、伪量化的步数以及伪量化值的正则化参数。</li>
+  <li>异常值减少技术。在我们的实验中，我们发现 PTQ 和 QAT 都容易受到异常值的影响。除了在微调期间进行简单的钳位和正则化之外，我们可以探索允许网络学习如何控制这些异常值的技术（例如，学习量化范围、剪枝 softmax 和门控注意力），或者甚至可以从训练后设置中借用异常值抑制技术（例如，SpinQuant、SmoothQuant）并在微调过程中适度应用。</li>
+  <li>混合精度和更复杂的数据类型。特别是在低位域，我们发现对于某些敏感层跳过量化对于 PTQ 和 QAT 都有效。我们是否需要完全跳过这些层的量化，或者我们仍然可以量化它们，只是降低位宽？在 QAT 的背景下探索混合精度量化将非常有趣。使用 MX4 等新数据类型进行训练也是另一个有希望的方向，特别是考虑到即将推出的 Blackwell GPU 将不再支持 int4 张量核心。</li>
+  <li>与 LoRA 和 QLoRA 的兼容性。我们目前在 torchtune 中的 QAT 集成仅支持完整的微调工作流程。然而，许多用户希望使用低秩适配器进行微调，以显著减少他们的内存占用。将 QAT 与 LoRA / QLoRA 等技术相结合将使用户能够获得这些方法的内存和性能优势，同时产生一个最终以最小模型质量下降进行量化的模型。</li>
+  <li>使用 torch.compile 实现可组合性。这是在 QAT（量化感知训练）中显著加快假量化计算并减少内存占用的一种潜在方法。目前，torch.compile 与 torchtune 中全分布式微调食谱（带 QAT 或不带 QAT）使用的分布式策略不兼容，但未来将添加支持。</li>
+  <li>其他层的量化。在这项工作中，我们只探索了量化线性层。然而，在长序列长度的情况下，KV 缓存经常成为吞吐量瓶颈，可以达到数十 GB，因此LLM-QAT 在量化激活和权重的同时，也探索了量化 KV 缓存。先前的工作在其他基于 transformer 的模型中将嵌入层量化到 2 位也取得了成功。</li>
+  <li>对性能良好的 CUDA 内核进行端到端评估。这项工作的自然扩展是为性能良好的 CUDA 内核提供端到端 QAT 流程，类似于现有的 8da4w QAT 流程通过 executorch 降低到 XNNPACK 内核。对于仅对 int4 权重进行量化，我们可以利用高效的 int4 权重 mm 内核和位打包进行量化，并且正在进行为该内核添加 QAT 支持的工作：https://github.com/pytorch/ao/pull/383。对于 8da4w 量化，cutlass 中也在添加混合 4 位/8 位 GEMM。这将需要构建一个高效的 8da4w CUDA 内核。</li>
 </ul>
 
-<p>QAT 代码可以在<a href="https://github.com/pytorch/ao/blob/v0.3.0/torchao/quantization/prototype/qat.py">这里</a>找到。请参考<a href="https://pytorch.org/torchtune/main/tutorials/qat_finetune.html">此 torchtune 教程</a>开始使用。如果您有任何进一步的问题，请随时在 torchao <a href="https://github.com/pytorch/ao/issues">github</a> 上打开一个问题或联系 <a href="mailto:andrewor@meta.com">andrewor@meta.com</a>。我们欢迎您的反馈和贡献！</p>
+<p>QAT 代码可以在这里找到。请参考这个 torchtune 教程开始使用。如果您有任何进一步的问题，请随时在 torchao github 上打开一个问题或联系 andrewor@meta.com。我们欢迎您的反馈和贡献！</p>
 
                 </article>
             </div>
@@ -786,14 +789,14 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -810,7 +813,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -823,7 +826,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -831,7 +834,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -860,9 +863,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -872,7 +873,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -897,19 +898,19 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -932,7 +933,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -946,7 +947,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -981,7 +982,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -995,7 +996,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1063,7 +1064,7 @@ qat_quantizer = Int8DynActInt4WeightQATQuantizer()
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

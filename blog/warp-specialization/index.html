@@ -50,8 +50,8 @@ To enable warp specialization, users simply need to specify two autotune flags: 
             {
                 " block_size_m":="" 128,="" "block_size_n":="" 256,="" "block_size_k":="" 64,="" "group_size_m":="" 8,="" },="" num_stages="2," num_warps="4," num_consumer_groups="2," num_buffers_warp_spec="3," ),="" ],="" key="[&quot;M&quot;," "n",="" "k"],="" )="" @triton.jit="" def="" matmul_persistent_ws_kernel(="" a_ptr,="" b_ptr,="" c_ptr,="" m,="" n,="" k,="" stride_am,="" stride_ak,="" stride_bk,="" stride_bn,="" stride_cm,="" stride_cn,="" block_m:="" tl.constexpr,="" block_n:="" block_k:="" ):="" pid="tl.program_id(axis=0)" num_pid_m="tl.cdiv(M," block_m)="" num_pid_n="tl.cdiv(N," block_n)="" pid_m="pid" pid_n="pid" %="" offs_m="pid_m" *="" block_m="" +="" tl.arange(0,="" offs_n="pid_n" block_n="" offs_k="tl.arange(0," block_k)="" a_ptrs="a_ptr" (offs_m[:,="" none]="" stride_am="" offs_k[none,="" :]="" stride_ak)="" b_ptrs="b_ptr" (offs_k[:,="" stride_bk="" offs_n[none,="" stride_bn)="" acc="tl.zeros((BLOCK_M," block_n),="" dtype="tl.float32)" for="" k="" in="" range(0,="" tl.cdiv(k,="" block_k)):="" a="tl.load(a_ptrs)" b="tl.load(b_ptrs)" b)="" stride_ak="" c="acc.to(tl.float16)" c_ptrs="c_ptr" stride_cm="" offs_m[:,="" stride_cn="" tl.store(c_ptrs,="" c)="" under="" the="" hood="" warp="" specialization="" uses="" set="" of="" hierarchical="" compiler="" transformations="" and="" ir="" changes="" to="" translate="" user’s="" non-warp-specialized="" kernel="" into="" warp-specialized="" machine="" code.="" these="" include:="" task="" partitioning:="" entire="" is="" automatically="" divided="" asynchronous="" tasks="" based="" on="" predefined="" heuristics.="" determines="" how="" utilize="" one="" producer="" group="" user-specified="" number="" consumer="" groups="" execute="" kernel.="" it="" assigns="" ids="" specific="" anchor="" operations,="" which="" then="" influence="" assignments="" remaining="" operations="" through="" id="" propagation="" dependency="" analysis.="" since="" shared="" memory="" most="" efficient="" method="" data="" transfer="" between="" across="" all="" supported="" platforms,="" optimizes="" partitions="" minimize="" register="" spills="" memory,="" ensuring="" execution.="" partitioning="" multiple="" groups:="" efficiently="" among="" optimizing="" workload="" distribution.="" h100="" gpu,="" compiler,="" by="" default,="" attempts="" partition="" input="" tensor="" along="" m="" dimension,="" allowing="" each="" compute="" half="" output="" independently.="" this="" strategy,="" known="" as="" cooperative="" partitioning,="" maximizes="" efficiency="" conditions.="" however,="" if="" split="" leads="" inefficiencies—such="" producing="" smaller="" than="" native="" wgmma="" instruction="" size—the="" dynamically="" adjusts="" n="" dimension="" instead.="" dataflow="" pipelining:="" creates="" cyclic="" buffers="" pipeline="" dataflows="" multiple-dimensional="" loops.="" pipelining="" supports="" complex="" control="" flow.="" example,="" our="" persistent="" gemm="" doubly-nested="" loop,="" begin="" fetching="" next="" tile="" while="" finishing="" prior="" tile.="" communication="" operations:="" we="" introduced="" four="" high-level="" triton="" gpu="" (ttgir)="" operations—produceracquireop,="" producercommitop,="" consumerwaitop,="" consumerreleaseop—to="" manage="" pipelined="" dataflows.="" support="" both="" tma="" non-tma="" operations.="" code="" async="" outlined="" its="" own="" standalone="" region,="" guarded="" checks.="" dependencies="" are="" duplicated="" needed.="" ttgir="" llvm="" ptx="" materialization:="" materialized="" corresponding="" barrier="" performance="" release="" introduces="" range="" that="" collectively="" convert="" user="" kernels.="" feature="" has="" been="" applied="" several="" kernels,="" including="" flash="" attention="" fp8="" row-wise="" gemm,="" resulting="" significant="" gains="" 10%="" 15%.="" below,="" highlight="" latest="" metrics="" high-impact="" future="" work="" looking="" ahead,="" plan="" further="" enhance="" triton’s="" introducing="" new="" features="" such="" ping-pong="" scheduling,="" expanded="" buffer="" sharing="" support,="" improved="" transparent="" handling="" tma,="" refined="" heuristics="" upcoming="" nvidia="" hardware.="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -145,7 +145,7 @@ To enable warp specialization, users simply need to specify two autotune flags: 
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -153,7 +153,7 @@ To enable warp specialization, users simply need to specify two autotune flags: 
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -165,24 +165,24 @@ To enable warp specialization, users simply need to specify two autotune flags: 
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
             <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -193,21 +193,27 @@ To enable warp specialization, users simply need to specify two autotune flags: 
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -220,15 +226,15 @@ To enable warp specialization, users simply need to specify two autotune flags: 
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -239,12 +245,12 @@ To enable warp specialization, users simply need to specify two autotune flags: 
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -255,28 +261,28 @@ To enable warp specialization, users simply need to specify two autotune flags: 
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -290,7 +296,7 @@ To enable warp specialization, users simply need to specify two autotune flags: 
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -326,7 +332,7 @@ To enable warp specialization, users simply need to specify two autotune flags: 
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2025年2月5日</p>
+            <p class="featured-post">2025 年 2 月 5 日</p>
             <h1>
                 <a class="blog-title">在 PyTorch 中启用高级 GPU 功能 - Warp 专业化</a>
             </h1>
@@ -338,11 +344,11 @@ To enable warp specialization, users simply need to specify two autotune flags: 
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">Meta 和 NVIDIA 联合开发</p>
-                    <p><strong>Meta</strong>：余红涛，任曼曼，伯特·马赫，肖恩·奈<br>
-<strong>NVIDIA</strong>：朱古斯塔夫·朱，江书豪</p>
+                    <p class="author">由 Meta 和 NVIDIA 开发</p>
+                    <p>Meta：余红涛，任曼曼，伯特·马赫，肖恩·奈<br>
+NVIDIA：朱古斯塔夫，姜舒豪</p>
 
-<p>在过去几个月里，我们一直在通过 Triton 编译器为 PyTorch 和 Triton 用户启用高级 GPU 功能。我们的一个主要目标是引入 NVIDIA Hopper GPU 上的 warp 专业化支持。今天，我们非常高兴地宣布，我们的努力已经导致完全自动化的 Triton warp 专业化推出，现在将在即将发布的 Triton 3.2 版本中提供给用户，该版本将随 PyTorch 2.6 一起发布。PyTorch 用户可以通过 <a href="https://maskerprc.github.io/tutorials/recipes/torch_compile_user_defined_triton_kernel_tutorial.html"> 实现用户定义的 Triton 内核 </a> 来利用此功能。这项工作利用了 NVIDIA 在 Triton 中对 warp 专业化进行的初始实现，我们期待未来与社区进一步合作开发。</p>
+<p>在过去的几个月里，我们一直在通过 Triton 编译器为 PyTorch 和 Triton 用户启用高级 GPU 功能。我们的一个关键目标是在 NVIDIA Hopper GPU 上引入 warp 专业化支持。今天，我们非常高兴地宣布，我们的努力已经导致完全自动化的 Triton warp 专业化推出，现在将在即将发布的 Triton 3.2 版本中提供给用户，该版本将随 PyTorch 2.6 一起发布。PyTorch 用户可以通过实现用户定义的 Triton 内核来利用此功能。这项工作利用了 NVIDIA 在 Triton 中进行的 warp 专业化的初始实现，我们期待着与社区在未来进行进一步的开发。</p>
 
 <p>warp 专业化（WS）是一种 GPU 编程技术，其中线程块内的 warp（NVIDIA GPU 上的 32 个线程的组）被分配不同的角色或任务。这种方法通过使需要任务区分或协作处理的负载高效执行来优化性能。它通过利用异步执行模型来提高内核性能，其中内核的不同部分由不同的硬件单元管理。这些单元之间的数据通信通过 NVIDIA H100 上的共享内存进行，效率非常高。与统一 warp 方法相比，warp 专业化允许硬件多任务 warp 调度器更有效地运行，最大化资源利用率和整体性能。</p>
 
@@ -350,19 +356,19 @@ To enable warp specialization, users simply need to specify two autotune flags: 
 
 <p><img src="/assets/images/warp-specialization/fg1.jpg" alt="Figure 1. GEMM K-loop Body with Uniform Warps" style="width:100%"></p>
 
-<p>图 1. 带有统一 warp 的 GEMM K 循环体</p>
+<p>图 1. 带有统一 warp 的 GEMM K-loop 体</p>
 
 <p>实现干净、易于理解，并且通常表现良好，归功于优雅的软件管道器。管道器的目的是通过在不同的硬件单元上执行非依赖性操作来增强指令级并行性。例如，可以从下一个循环迭代中执行加载操作，同时与当前迭代中的 WGMMA 操作同时执行。然而，这种方法严重依赖于编译器来构建一个指令序列，确保加载和 WGMMA 指令在精确的时机发出。虽然对于涉及有限操作数量的 GEMM 来说这相对简单，但对于更复杂的内核，如闪存注意力，这变得具有显著挑战性。</p>
 
-<p>另一方面，通过将旨在不同硬件单元上同时运行的运算操作分离成独立的 warp，并使用共享内存中的低成本屏障进行高效同步，来应对编程挑战。这使得每个 warp 都有自己的指令序列，由于多路 warp 调度器，指令可以连续发布和执行，而不会被其他操作中断。图 2 展示了具有 warp 优化的 GEMM 的示例。</p>
+<p>另一方面，通过将旨在不同硬件单元上同时运行的运算操作分离成独立的 warp，并使用共享内存中的低成本屏障进行高效同步，来应对编程挑战。这使得每个 warp 都有自己的指令序列，多路 warp 调度器使得指令可以连续发布和执行，不会被其他操作中断。图 2 展示了专门化的 GEMM 的示例。</p>
 
 <p><img src="/assets/images/warp-specialization/fg2.jpg" alt="Figure 2. GEMM K-loop Body with Specialized Warps" style="width:100%"></p>
 
-<p>图 2. 具有专用 warp 的 GEMM K-loop 体</p>
+<p>图 2. 专门化 warp 的 GEMM K-loop 体</p>
 
 <h2 id="how-to-enable-ws">如何启用 WS</h2>
 
-<p>要启用 warp 专业化，用户只需指定两个自动调整标志：num_consumer_groups 和 num_buffers_warp_spec。例如，一个 warp 专业化 GEMM 实现可能如下所示。用户可以通过设置非零值来启用 warp 专业化，该值定义了消费者 warp 组的数量。目前没有设置生产者 warp 组数量的对应标志，因为目前只支持一个生产者。num_buffers_warp_spec 标志指定生产者 warp 组将用于与消费者 warp 组通信的缓冲区数量。提供了一个持久 GEMM <a href="https://github.com/triton-lang/triton/blob/6771065cb3137f7e64454cc047b9b74d577cbf7f/python/tutorials/09-persistent-matmul.py#L620"> 教程 </a> 中 warp 专业化内核的工作示例。</p>
+<p>要启用 warp 专业化，用户只需指定两个自动调整标志：num_consumer_groups 和 num_buffers_warp_spec。例如，一个 warp 专业化 GEMM 实现可能如下所示。用户可以通过设置非零值来启用 warp 专业化，该值定义了消费者 warp 组的数量。目前没有设置生产者 warp 组数量的对应标志，因为目前只支持一个生产者。num_buffers_warp_spec 标志指定生产者 warp 组将用于与消费者 warp 组通信的缓冲区数量。在持久 GEMM 教程中提供了一个 warp 专业化内核的工作示例。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>@triton.autotune(
     configs=[
@@ -409,22 +415,22 @@ def matmul_persistent_ws_kernel(
    tl.store(c_ptrs, c)
 </code></pre></div></div>
 
-<h2 id="under-the-hood">内部结构</h2>
+<h2 id="under-the-hood">内部机制</h2>
 
-<p>Warp 专业化使用一系列分层编译器转换和 IR 变换来将用户的非 warp 专业化内核转换为 warp 专业化机器代码。这包括：</p>
+<p>Warp 专业化使用一系列分层编译器转换和 IR 变换来将用户的非 warp 专业化内核转换为 warp 专业化机器代码。这些包括：</p>
 
 <ul>
   <li>任务划分：整个内核根据预定义的启发式算法自动划分为异步任务。编译器确定如何利用一个生产者 warp 组和用户指定的消费者 warp 组数量来执行内核。它为特定的锚定操作分配任务 ID，然后通过异步任务 ID 传播和依赖分析影响剩余操作的任务分配。由于共享内存是所有支持平台之间数据传输最有效的方法，编译器优化任务划分以最小化寄存器溢出到共享内存，确保高效执行。</li>
-  <li><strong>数据分区针对多个消费者组 </strong>：在多个消费者组之间高效地分区数据是优化工作负载分配的关键。在 H100 GPU 上，编译器默认尝试沿着 <code class="language-plaintext highlighter-rouge">M</code> 维度对输入张量 <code class="language-plaintext highlighter-rouge">A</code> 进行分区，使每个消费者组能够独立计算输出张量的一半。这种称为<a href="https://github.com/NVIDIA/cutlass/blob/main/media/docs/efficient_gemm.md#warp-specialization">协同分区</a>的策略在大多数情况下都能最大化效率。然而，如果这种分割导致效率低下——例如产生的工作负载小于原生 WGMMA 指令大小——编译器会动态调整并沿着 <code class="language-plaintext highlighter-rouge">N</code> 维度进行分区。</li>
-  <li><strong>数据流流水线 </strong>：编译器创建循环共享内存缓冲区，以在多维循环之间流水线化数据流。支持复杂控制流的 Warp 专用流水线。例如，我们的 Warp 专用持久 GEMM 内核使用双层循环，允许生产者在消费者完成前一个输出瓦片计算的同时开始获取下一个输出瓦片的数据。</li>
-  <li><strong>通信操作 </strong><code class="language-plaintext highlighter-rouge">：</code> 我们引入了四个高级 Triton GPU IR (TTGIR) 通信操作 <code class="language-plaintext highlighter-rouge">—ProducerAcquireOp, ProducerCommitOp, ConsumerWaitOp, </code> 和 <code class="language-plaintext highlighter-rouge">ConsumerReleaseOp—</code> 来管理流水线数据流。这些操作支持 TMA 和非 TMA 内存操作。</li>
-  <li><strong>代码分区 </strong>：每个异步任务都划分到自己的独立代码区域，并由 warp 组 ID 检查保护。控制依赖项按需复制。</li>
-  <li><strong>TTGIR 到 LLVM/PTX 的物化 </strong>：TTGIR 通信操作被物化为相应的 LLVM/PTX 屏障操作。</li>
+  <li>多消费者组的数据分区：在多个消费者组之间高效地分区数据是优化工作负载分配的关键。在 H100 GPU 上，编译器默认尝试沿着 <code class="language-plaintext highlighter-rouge">M</code> 维度对输入张量 <code class="language-plaintext highlighter-rouge">A</code> 进行分区，使每个消费者组能够独立计算输出张量的一半。这种称为协作分区的策略在大多数情况下都能最大化效率。然而，如果这种分割导致效率低下——例如产生小于原生 WGMMA 指令大小的负载——编译器会动态调整并沿着 <code class="language-plaintext highlighter-rouge">N</code> 维度进行分区。</li>
+  <li>数据流流水线：编译器创建循环共享内存缓冲区，以在多维循环之间流水线化数据流。支持复杂控制流的 Warp 专用流水线。例如，我们的 Warp 专用持久 GEMM 内核使用双层循环，允许生产者在消费者完成前一个输出瓦片的计算时开始获取下一个输出瓦片的数据。</li>
+  <li>我们引入了四种高级 Triton GPU IR (TTGIR)通信操作 <code class="language-plaintext highlighter-rouge">: </code> 和 <code class="language-plaintext highlighter-rouge">—ProducerAcquireOp, ProducerCommitOp, ConsumerWaitOp, </code> ，用于管理流水线数据流。这些操作支持 TMA 和非 TMA 内存操作。</li>
+  <li>代码分区：每个异步任务被划分为独立的代码区域，并由 warp 组 ID 检查保护。控制依赖关系根据需要复制。</li>
+  <li>TTGIR 到 LLVM/PTX 的物化：TTGIR 通信操作被物化为相应的 LLVM/PTX 屏障操作。</li>
 </ul>
 
 <h2 id="performance">性能</h2>
 
-<p><a href="https://github.com/triton-lang/triton/pull/5622">warpspecialization release</a> 引入了一系列 Triton 编译器转换，这些转换共同将用户代码转换为 warpspecialized 内核。这一特性已应用于包括 Flash Attention 和 FP8 行向 GEMM 在内的几个关键内核，实现了 10%到 15%的性能提升。以下，我们突出显示这些高影响内核的最新性能指标。</p>
+<p>warp 专用化释放引入了一系列 Triton 编译器转换，这些转换共同将用户代码转换为 warp 专用内核。这一特性已应用于多个关键内核，包括 Flash Attention 和 FP8 行向 GEMM，实现了 10%到 15%的性能提升。以下，我们突出显示这些高影响内核的最新性能指标。</p>
 
 <p><img src="/assets/images/warp-specialization/fg3.png" alt="bar chart" style="width:100%"></p>
 
@@ -448,14 +454,14 @@ def matmul_persistent_ws_kernel(
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -472,7 +478,7 @@ def matmul_persistent_ws_kernel(
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -485,7 +491,7 @@ def matmul_persistent_ws_kernel(
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -493,7 +499,7 @@ def matmul_persistent_ws_kernel(
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -522,9 +528,7 @@ def matmul_persistent_ws_kernel(
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -534,7 +538,7 @@ def matmul_persistent_ws_kernel(
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -559,19 +563,19 @@ def matmul_persistent_ws_kernel(
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -594,7 +598,7 @@ def matmul_persistent_ws_kernel(
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -608,7 +612,7 @@ def matmul_persistent_ws_kernel(
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -643,7 +647,7 @@ def matmul_persistent_ws_kernel(
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -657,7 +661,7 @@ def matmul_persistent_ws_kernel(
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -725,7 +729,7 @@ def matmul_persistent_ws_kernel(
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

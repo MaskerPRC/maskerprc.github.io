@@ -57,8 +57,8 @@ from transformers import AutoModelForCausalLM
 from transformers_neuronx.module import save_pretrained_split
 model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf",="" low_cpu_mem_usage="True)" model_dir="./llama-2-13b-split" save_pretrained_split(model_cpu,="" model_dir)="" load="" and="" compile="" model="" from="" the="" local="" directory="" that="" you="" saved="" serialized="" checkpoints="" using="" following.="" to="" llama="" 2="" model,="" we="" use="" llamaforsampling="" transformers="" neuron.="" note="" environment="" variable neuron_rt_num_cores="" specifies="" number="" of="" neuroncores="" be="" used="" at="" runtime="" it="" should="" match="" tensor="" parallelism="" (tp)="" degree="" specified="" for="" model.="" also,="" neuron_cc_flags="" enables="" compiler="" optimization="" on="" decoder-only="" llm="" models.="" transformers_neuronx.llama.model="" import="" os.environ['neuron_rt_num_cores']="24" os.environ['neuron_cc_flags']="--model-type=transformer" model_dir,="" batch_size="1," tp_degree="24," amp="bf16" ,="" n_positions="16," context_length_estimate="[8]" )="" now="" let's="" weights="" into="" device="" memory="" with="" a="" one="" liner="" api.="" model.to_neuron()="" finally="" let’s="" run="" inference="" compiled="" both="" input="" output="" sample="" function="" are="" sequence="" tokens.="" inputs="torch.tensor([[1," 16644,="" 31844,="" 312,="" 31876,="" 31836,="" 260,="" 3067,="" 2228,="" 31844]])="" seq_len="16" outputs="model.sample(inputs," seq_len,="" top_k="1)" optimizations="" in="" neuron="" transformer="" implements="" parallel="" operations="" across="" multiple="" neuroncores.="" denote="" cores="" as="" tp="" degree.="" larger="" provides="" higher="" bandwidth,="" leading="" lower="" latency,="" token="" generation="" is="" memory-io="" bound="" workload.="" increasing="" degree,="" latency="" has="" decreased="" significantly,="" our="" results="" shows,="" ~4x="" overall="" speed="" up="" increased="" degrees="" 24.="" llama-2="" 7b="" decreases="" 30.1="" ms="" 7.9="" 24="" cores;="" similarly="" 13b="" goes="" down="" 57.3="" 11.1="" token.="" context="" encoding="" architecture,="" tokens="" produced="" sequential="" procedure="" called="" autoregressive="" sampling="" while="" prompt="" can="" processed="" encoding.="" this="" significantly="" reduce="" before="" through="" sampling.="" by="" default,="" parameter="" would="" set="" list="" power-of-2="" numbers="" which="" aims="" cover="" wide="" variety="" lengths.="" depending="" case,="" custom="" numbers.="" done="" when="" creating="" llamaforsampling.from_pretrained.="" characterize="" impact="" length="" end-to-end="" (e2e)="" latency.="" shown="" figure,="" text="" only="" slightly="" increases="" bigger="" prompts,="" thanks="" kv="" caching="" self-attention="" block="" performs="" operation="" vectors.="" and,="" vectors="" calculated="" embeddings="" thus="" associated="" naive="" implementations,="" each="" generated="" token,="" entire="" cache="" recalculated,="" but="" reduces="" performance.="" therefore="" library="" reusing="" previously="" avoid="" unnecessary="" computation,="" also="" known="" caching,="" phase. ="" benchmarking="" benchmarked="" cost="" models="" under="" different="" conditions,="" i.e.,="" tokens,="" instance="" types.="" unless="" specified,="" data="" type="" ‘bf16’="" batch="" size="" 1="" common="" configuration="" real-time="" applications="" like="" chatbot="" code="" assistant.="" following="" graphs="" shows="" per="" inf2.48xlarge="" here,="" divided="" experiments="" show="" generate="" 256="" 2x="" faster="" compared="" other="" comparable="" inference-optimized="" ec2="" instances. ="" throughput="" second="" delivered="" instance.="" 24,="" fully="" utilizing="" all="" neuroncores,="" achieve="" 130="" sec="" 90="" models,="" respectively.="" latency-first="" applications,="" hosting="" instance,="" $0.011="" 1000="" $0.016="" respectively,="" 3x="" saving="" over="" instances. note="" report="" based="" 3-year="" reserved="" price="" what="" customers="" large="" production="" deployments.="" compare="" inf2.xlarge="" instances.="" see="" more="" than="" 4x="" cheaper="" expense="" longer="" due="" smaller="" example,="" takes="" inf2.xlarge.="" serving="" llama2="" torchserve="" inf2="" now,="" move="" deployment.="" section,="" how="" deploy="" sagemaker="" torchserve,="" recommended="" server="" pytorch,="" preinstalled="" aws="" pytorch="" deep="" learning="" containers="" (dlc).="" section="" describes="" preparation="" work="" needed="" particularly,="" configure="" model_config.yaml="" inf2_handler.py="" well="" artifacts="" pre-compile="" later="" preparing="" ahead-of-time="" avoids="" compilation="" during="" deployment="" thus reduces="" loading="" time.="" configuration model-config.yaml="" parameters="" defined="" handler="" micro_batching="" customer="" inf2_handler.py.="" details="" about="" are here.="" micro-batching="" mechanism="" pre-process="" post-process="" requests="" parallel.="" able="" better="" available="" accelerator="" backend="" steadily="" fed="" incoming="" data,="" see here for="" details.="" inf2,="" micro_batch_size,="" amp,="" max_length specify="" size,="" type,="" max="" length,="" #="" frontend="" minworkers:="" maxworkers:="" maxbatchdelay:="" 100="" responsetimeout:="" 10800="" batchsize:="" 16="" handler:="" model_checkpoint_dir:="" "llama-2-13b-split"="" amp:="" "bf16"="" tp_degree:="" 12="" max_length:="" micro_batching:="" llamaforsampling.from_pretrained="" micro_batch_size:="" parallelism:="" preprocess:="" inference:="" postprocess:="" handler inf2_handler.py="" simple="" python="" script="" lets="" define="" initialization,="" preprocessing,="" post-processing="" logic="" functions.="" create="" handler.="" the initialize function="" sdk="" will="" first="" time="" save="" precompiled="" enabled="" neuronx_cache in="" neuronx_dump_to.="" after="" time,="" subsequent="" runs="" check="" if="" there="" already="" pre-compiled="" artifacts.="" so,="" skip="" compilation.="" once="" loaded,="" initiate="" warm-up="" so="" version="" cached.="" persistent="" utilized,="" ensuring="" swiftly.="" os.environ["neuronx_cache"]="on" os.environ["neuronx_dump_to"]="f&quot;{model_dir}/neuron_cache&quot;" `textiteratorstreamerbatch` extends="" hugging="" face="" `basestreamer` to="" support="" response="" streaming="" `batchsize`="" 1. ="" self.output_streamer="TextIteratorStreamerBatch(" self.tokenizer,="" skip_special_tokens="True," the inference function="" calls send_intermediate_predict_response to="" send="" response.="" new_text="" self.output_streamer:="" logger.debug("send="" stream")="" send_intermediate_predict_response(="" new_text[:="" len(micro_batch_req_id_map)],="" micro_batch_req_id_map,="" "intermediate="" prediction="" success",="" 200,="" self.context,="" package="" folder="" llama-2-13b-neuronx-b1="" torch-model-archiver. ="" torch-model-archiver="" --model-name="" --version="" 1.0="" --handler="" -r="" requirements.txt="" --config-file="" model-config.yaml="" --archive-format="" no-archive="" serve="" export="" ts_install_py_dep_per_model="true" --ncs="" --start="" --model-store="" model_store="" --models="" log="" “worker_model_loaded”,="" folder llama-2-13b-neuronx-b1="" neuron_cache,="" tightly="" coupled="" version.="" then,="" upload="" llama-2-13b-neuronx-b1 to="" your="" s3="" bucket="" product="" blog="" found="" 2.13.2, in="" zoo.="" sagemaker inf2="" torchserve ="" neuronx container="" endpoint="" an="" ml.inf2.24xlarge="" 6="" inferentia2="" accelerators="" corresponding="" handler’s="" setting="" -="" 12. given="" have="" packaged="" uploaded="" bucket,="" uncompressed="" method.="" key="" benefit="" deploying="" manner="" get="" functional="" ready="" complete="" secure="" restful="" without="" any="" effort="" spent="" infrastructure.="" 3="" steps="" running="" sagemaker.="" notebook="" example="" found here.="" datetime="" instance_type="ml.inf2.24xlarge" endpoint_name="sagemaker.utils.name_from_base(&quot;ts-inf2-llama2-13b-b1&quot;)" +="" datetime.now().strftime("%y-%m-%d-%h-%m-%s"),="" enable="" model_data="{" "s3datasource":="" {="" "s3uri":="" s3_uri,="" "s3datatype":="" "s3prefix",="" "compressiontype":="" "none",="" }="" },="" image_uri="container," role="role," sagemaker_session="sess," env="{&quot;TS_INSTALL_PY_DEP_PER_MODEL&quot;:" "true"},="" model.deploy(="" initial_instance_count="1," volume_size="512," increase="" store="" model_data_download_timeout="3600," timeout="" download="" container_startup_health_check_timeout="600," service,="" invoke_endpoint_with_response_stream="" api="" call="" invoke="" feature="" return="" user,="" enhancing="" user="" experience.="" it’s="" especially="" beneficial="" generating="" time-consuming.="" json="" body="Today the weather is really nice and I am planning on" .encode('utf-8')="" resp="smr.invoke_endpoint_with_response_stream(EndpointName=endpoint_name," contenttype="application/json" event_stream="resp['Body']" parser="Parser()" event="" event_stream:="" parser.write(event['payloadpart']['bytes'])="" line="" parser.scan_lines():="" print(line.decode("utf-8"),="" end=" " “today="" weather="" really="" nice="" i="" am="" planning="" on”="" going="" beach.="" take="" my="" camera="" some="" pictures="" sand,="" water,="" people.="" sunset.="" excited="" go="" beach="" pictures.="" great="" place="" people="" subjects="" sunset="" subject="" pictures.”="" conclusion="" post,="" showcased="" amazon="" demonstrated="" benefits="" inferentia2—low="" low="" cost—enabled="" including="" parallelism,="" particularly="" inference.="" stay="" date,="" please="" follow="" neuron’s="" latest="" release for="" new="" features.="" started="" today="" examples="" tuned="" optimize="" 70b="" inf2!="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -166,7 +166,7 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -174,7 +174,7 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -186,24 +186,24 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 食谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -214,21 +214,27 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -236,18 +242,20 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -258,12 +266,12 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -271,31 +279,31 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">博客与新闻</a>
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -309,7 +317,7 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -345,7 +353,7 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2023年10月4日</p>
+            <p class="featured-post">2023 年 10 月 4 日</p>
             <h1>
                 <a class="blog-title">使用 AWS Inferentia2 和 TorchServe 部署高性能 Llama 2</a>
             </h1>
@@ -358,38 +366,38 @@ model_cpu = AutoModelForCausalLM.from_pretrained(" meta-llama="" llama-2-13b-hf"
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由张米克、李宁、谢尔盖·伊万诺夫、纳曼·南丹、哈米德·肖贾纳泽里、吉塔·乔汗、阿比·希瓦迪亚、迈克尔·阮、平克·帕尼格拉希</p>
-                    <p>最近，<a href="https://ai.meta.com/llama/">LLaMA 2</a> 发布并引起了机器学习社区的广泛关注。<a href="https://aws.amazon.com/ec2/instance-types/inf2/">Amazon EC2 Inf2 实例 </a>，由 <a href="https://aws.amazon.com/machine-learning/inferentia/">AWS Inferentia2</a> 驱动，现在支持 LLaMA 2 模型的训练和推理。在这篇文章中，我们展示了使用最新的 <a href="https://aws.amazon.com/machine-learning/neuron/">AWS Neuron SDK</a> 版本在 Amazon EC2 Inf2 实例上实现 LLaMA-2 模型低延迟和成本效益推理的方法。我们首先介绍了如何创建、编译和部署 LLaMA-2 模型，并解释了 AWS Neuron SDK 引入的优化技术，以在低成本下实现高性能。然后，我们展示了我们的基准测试结果。最后，我们展示了如何通过 Amazon SageMaker 使用 TorchServe 在 Inf2 实例上部署 LLaMA-2 模型。</p>
+                    <p>最近，Llama 2 发布并引起了机器学习社区的广泛关注。现在，由 AWS Inferentia2 驱动的 Amazon EC2 Inf2 实例支持 Llama 2 模型的训练和推理。在这篇文章中，我们展示了使用最新的 AWS Neuron SDK 版本在 Amazon EC2 Inf2 实例上对 Llama-2 模型进行低延迟和成本效益推理的方法。我们首先介绍了如何创建、编译和部署 Llama-2 模型，并解释了 AWS Neuron SDK 引入的优化技术，以实现低成本下的高性能。然后，我们展示了我们的基准测试结果。最后，我们展示了如何通过 Amazon SageMaker 使用 TorchServe 在 Inf2 实例上部署 Llama-2 模型。</p>
 
 <p><img src="/assets/images/high-performance-llama/software_stack_inf2.jpg" alt="Llama 2 is an auto-regressive language model that uses an optimized transformer architecture" style="width:100%; max-width: 420px; display: block; margin-left: auto; margin-right: auto"></p>
 
-<h2 id="what-is-llama-2">什么是 LLaMA 2</h2>
+<h2 id="what-is-llama-2">什么是 Llama 2</h2>
 
-<p>Llama 2 是一种自回归语言模型，采用优化的 Transformer 架构。Llama 2 旨在用于英语的商业和研究用途。它有多种尺寸——70 亿、130 亿和 700 亿参数——以及预训练和微调版本。根据 Meta 的说法，微调版本使用监督式微调（SFT）和人类反馈强化学习（RLHF）来与人类偏好对齐，以实现有用性和安全性。Llama 2 在来自公开来源的 2 万亿个数据标记上进行了预训练。微调模型旨在用于类似助手的聊天，而预训练模型可以适应各种自然语言生成任务。无论开发者使用哪种版本的模型，Meta 的<a href="https://ai.meta.com/llama/responsible-use-guide/">负责任的使用指南</a>都可以帮助指导可能需要的额外微调，以定制和优化模型并采取适当的安全缓解措施。</p>
+<p>Llama 2 是一种使用优化后的 Transformer 架构的自动回归语言模型。Llama 2 旨在用于英语的商业和研究用途。它有多种尺寸——70 亿、130 亿和 700 亿参数——以及预训练和微调版本。根据 Meta 的说法，微调版本使用监督式微调（SFT）和人类反馈强化学习（RLHF）来与人类对有用性和安全性的偏好保持一致。Llama 2 在来自公开来源的 2000 亿个数据标记上进行了预训练。微调模型旨在用于类似助手的聊天，而预训练模型可以适应各种自然语言生成任务。无论开发者使用哪种版本的模型，Meta 的负责任使用指南都可以帮助指导可能需要的额外微调，以定制和优化模型并采取适当的安全缓解措施。</p>
 
 <h2 id="amazon-ec2-inf2-instances-overview">Amazon EC2 Inf2 实例概述</h2>
 
-<p>亚马逊 EC2 Inf2 实例，配备 Inferentia2，计算能力提升 3 倍，加速器内存增加 4 倍，相比第一代 Inf1 实例，吞吐量最高提升 4 倍，延迟降低至 10 倍。</p>
+<p>配备 Inferentia2 的 Amazon EC2 Inf2 实例提供 3 倍的计算能力，4 倍的加速器内存，与第一代 Inf1 实例相比，吞吐量最高提高 4 倍，延迟降低至 10 倍。</p>
 
-<p>大型语言模型（LLM）推理是内存密集型工作负载，性能随着更多加速器内存带宽的提升而提升。Inf2 实例是亚马逊 EC2 中唯一针对推理优化的实例，提供高速加速器互连（NeuronLink），使高性能大型LLM模型部署具有成本效益的分布式推理成为可能。现在您可以在 Inf2 实例上高效且经济地部署跨多个加速器的亿级LLMs。</p>
+<p>大型语言模型（LLM）推理是内存密集型工作负载，性能随着更多加速器内存带宽的增加而提升。Inf2 实例是 Amazon EC2 中唯一针对推理优化的实例，提供高速加速器互连（NeuronLink），从而实现高性能的大LLM模型部署，同时实现成本效益的分布式推理。现在您可以在 Inf2 实例上高效且经济地部署跨多个加速器的亿级LLMs。</p>
 
-<p>Inferentia2 支持 FP32、TF32、BF16、FP16、UINT8 以及新的可配置 FP8（cFP8）数据类型。AWS Neuron 可以将高精度 FP32 和 FP16 模型自动转换为低精度数据类型，同时优化精度和性能。自动转换可以缩短上市时间，无需对低精度进行重新训练，并允许使用更小的数据类型进行高性能推理。</p>
+<p>Inferentia2 支持 FP32、TF32、BF16、FP16、UINT8 以及新的可配置 FP8（cFP8）数据类型。AWS Neuron 可以将高精度 FP32 和 FP16 模型自动转换为低精度数据类型，同时优化精度和性能。自动转换通过消除对低精度重新训练的需求，并允许使用更小的数据类型进行高性能推理，从而缩短上市时间。</p>
 
-<p>为了使其灵活且可扩展，以便部署不断演进的深度学习模型，Inf2 实例具有硬件优化和软件支持，以动态输入形状以及使用 C++编写的自定义操作符，通过标准的 PyTorch 自定义操作符编程接口。</p>
+<p>为了使其灵活且可扩展，以便部署不断演变的深度学习模型，Inf2 实例具有硬件优化和软件支持，包括动态输入形状以及通过标准 PyTorch 自定义操作符编程接口编写的自定义操作符。</p>
 
 <h2 id="transformers-neuron-transformers-neuronx">Transformers Neuron (transformers-neuronx)</h2>
 
-<p><a href="https://github.com/aws-neuron/transformers-neuronx">Transformers Neuron</a> 是一个软件包，它使 PyTorch 用户能够部署性能优化的LLM推理。它实现了使用 XLA 高级操作符（HLO）优化的 transformer 模型版本，这使张量可以在多个 NeuronCores（即张量并行）之间分片，并针对 Neuron 硬件进行性能优化，例如并行上下文编码和 KV 缓存。Llama 2 的 XLA HLO 源代码可以在<a href="https://github.com/aws-neuron/transformers-neuronx/blob/main/src/transformers_neuronx/llama/model.py">这里</a>找到。</p>
+<p>Transformers Neuron 是一个软件包，它使 PyTorch 用户能够部署性能优化的 LLM 推理。它实现了使用 XLA 高级算子 (HLO) 的 Transformer 模型优化版本，这允许跨多个 NeuronCore 分片张量，即张量并行，以及针对 Neuron 硬件的性能优化，如并行上下文编码和 KV 缓存。Llama 2 的 XLA HLO 源代码可在此处找到。</p>
 
-<p>Llama 2 在 Transformers Neuron 中得到支持，通过 <a href="https://github.com/aws-neuron/transformers-neuronx/blob/33fa412447a4028edb252fd06aae9ed93086a450/src/transformers_neuronx/llama/model.py#L29">LlamaForSampling</a> 类。Transformers Neuron 与 Hugging Face 模型无缝集成，为 Inf2 实例提供优化的推理。更多详情请参阅 <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/libraries/transformers-neuronx/transformers-neuronx-developer-guide.html#transformers-neuronx-developer-guide">Transforms Neuron 开发者指南 </a>。在下一节中，我们将解释如何使用 Transformers Neuron 部署 Llama-2 13B 模型。此外，此示例也适用于其他基于 Llama 的模型。</p>
+<p>Llama 2 通过 LlamaForSampling 类在 Transformers Neuron 中得到支持。Transformers Neuron 提供了与 Hugging Face 模型无缝的用户体验，以在 Inf2 实例上提供优化的推理。更多详情可从 Transformers Neuron 开发者指南中获取。在下一节中，我们将解释如何使用 Transformers Neuron 部署 Llama-2 13B 模型。此示例也适用于其他基于 Llama 的模型。</p>
 
 <h2 id="llama-2-model-inference-with-transformers-neuron">使用 Transformers Neuron 进行 Llama 2 模型推理</h2>
 
-<h3 id="create-model-compile-and-deploy">创建模型、编译和部署</h3>
+<h3 id="create-model-compile-and-deploy">创建模型，编译和部署</h3>
 
-<p>我们在这里有三个简单的步骤来创建、编译和将模型部署到 Inf2 实例上。</p>
+<p>在这里，我们有三个简单的步骤来创建、编译和部署模型到 Inf2 实例上。</p>
 
 <ol>
-  <li>创建 CPU 模型，使用此<a href="https://github.com/pytorch/serve/blob/d0ae857abfe6d36813c88e531316149a5a354a93/examples/large_models/inferentia2/llama2/Readme.md?plain=1#L71">脚本</a>或以下代码片段在本地目录中序列化和保存检查点。</li>
+  <li>创建一个 CPU 模型，使用此脚本或以下代码片段将检查点序列化并保存到本地目录。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from transformers import AutoModelForCausalLM
@@ -400,7 +408,7 @@ save_pretrained_split(model_cpu, model_dir)
 </code></pre></div></div>
 
 <ol start="2">
-  <li>使用以下命令从本地目录加载并编译您保存的序列化检查点的模型。要加载 Llama 2 模型，我们使用 Transformers Neuron 中的 <code class="language-plaintext highlighter-rouge">LlamaForSampling</code>。请注意，环境变量 <code class="language-plaintext highlighter-rouge">NEURON_RT_NUM_CORES</code> 指定了在运行时使用的 NeuronCores 数量，它应与模型指定的张量并行度（TP）相匹配。此外，<code class="language-plaintext highlighter-rouge">NEURON_CC_FLAGS</code> 启用了仅对解码器LLM模型进行编译器优化。</li>
+  <li>使用以下方法从您保存的序列化检查点的本地目录加载和编译模型。要加载 Llama 2 模型，我们使用来自 Transformers Neuron 的 <code class="language-plaintext highlighter-rouge">LlamaForSampling</code> 。请注意，环境变量 <code class="language-plaintext highlighter-rouge">NEURON_RT_NUM_CORES</code> 指定了在运行时使用的 NeuronCores 数量，它应与模型指定的张量并行度（TP）相匹配。 <code class="language-plaintext highlighter-rouge">NEURON_CC_FLAGS</code> 启用了仅解码器LLM模型的编译器优化。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from transformers_neuronx.llama.model import LlamaForSampling
@@ -416,12 +424,12 @@ model = LlamaForSampling.from_pretrained(
     )
 </code></pre></div></div>
 
-<p style="padding-left:6.25rem">现在让我们使用单行 API 编译模型并将模型权重加载到设备内存中。</p>
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>model.to_neuron()</code>
-</font></font></font></pre></div></div>
+<p style="padding-left:6.25rem">现在让我们用一行 API 编译模型并将模型权重加载到设备内存中。</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>model.to_neuron()
+</code></pre></div></div>
 
 <ol start="3">
-  <li>最后，让我们在编译好的模型上运行推理。请注意，<code class="language-plaintext highlighter-rouge">sample</code> 函数的输入和输出都是一个标记序列。</li>
+  <li>最后，让我们在编译好的模型上运行推理。注意， <code class="language-plaintext highlighter-rouge">sample</code> 函数的输入和输出都是一个标记序列。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>inputs = torch.tensor([[1, 16644, 31844, 312, 31876, 31836, 260, 3067, 2228, 31844]])
@@ -431,15 +439,15 @@ outputs = model.sample(inputs, seq_len, top_k=1)
 
 <h3 id="inference-optimizations-in-transformers-neuron">Transformers Neuron 中的推理优化</h3>
 
-<p><strong>张量并行化</strong></p>
+<p><strong>张量并行</strong></p>
 
 <p><img src="/assets/images/high-performance-llama/latency_vs_tp.jpg" alt="Latency with different TP degrees" style="width:100%"></p>
 
-<p>Transformer 神经元在多个 NeuronCores 上实现了并行张量操作。我们用 TP 度表示用于推理的核心数量。较大的 TP 度提供更高的内存带宽，从而降低延迟，因为LLM令牌生成是一个内存-I/O 密集型的工作负载。随着 TP 度的增加，推理延迟显著降低，我们的结果显示，从 2 度增加到 24 度，整体速度提高了约 4 倍。对于 Llama-2 7B 模型，延迟从 2 个核心的 30.1 ms/令牌降低到 24 个核心的 7.9 ms/令牌；同样地，对于 Llama-2 13B 模型，它从 57.3 ms/令牌降低到 11.1 ms/令牌。</p>
+<p>Transformer 神经元在多个 NeuronCores 上实现了并行张量操作。我们用 TP 度表示用于推理的核心数量。较大的 TP 度提供更高的内存带宽，从而降低延迟，因为LLM令牌生成是一个内存-IO 密集型的工作负载。随着 TP 度的增加，推理延迟显著降低，我们的结果显示，从 2 度增加到 24 度，整体速度提高了约 4 倍。对于 Llama-2 7B 模型，延迟从 2 个核心的 30.1 ms/令牌降低到 24 个核心的 7.9 ms/令牌；同样地，对于 Llama-2 13B 模型，它从 57.3 ms/令牌降低到 11.1 ms/令牌。</p>
 
 <p><strong>并行上下文编码</strong></p>
 
-<p>在 Transformer 架构中，通过自回归采样以顺序方式生成标记，而输入提示标记可以与并行上下文编码并行处理。这可以显著减少通过自回归采样生成标记之前对输入提示上下文编码的延迟。默认情况下，参数 <code class="language-plaintext highlighter-rouge">context_length_estimate</code> 将被设置为一系列 2 的幂次方数字，旨在覆盖广泛的上下文长度。根据使用情况，它可以设置为自定义数字。这可以在创建 Llama 2 模型时使用 <code class="language-plaintext highlighter-rouge">LlamaForSampling.from_pretrained</code> 完成。我们分析了输入标记长度对端到端（E2E）延迟的影响。如图所示，由于并行上下文编码，使用 Llama-2 7B 模型进行文本生成的延迟仅随着更大的输入提示略有增加。</p>
+<p>在 Transformer 架构中，通过自回归采样以顺序方式生成标记，而输入提示标记可以与并行上下文编码并行处理。这可以显著减少通过自回归采样生成标记之前对输入提示上下文编码的延迟。默认情况下，参数 <code class="language-plaintext highlighter-rouge">context_length_estimate</code> 将被设置为一系列 2 的幂次方数，旨在覆盖广泛的上下文长度。根据用例，它可以设置为自定义数字。这可以在创建 Llama 2 模型时使用 <code class="language-plaintext highlighter-rouge">LlamaForSampling.from_pretrained</code> 完成。我们分析了输入标记长度对端到端（E2E）延迟的影响。如图所示，由于并行上下文编码，使用 Llama-2 7B 模型进行文本生成的延迟仅随着更大的输入提示略有增加。</p>
 
 <p><img src="/assets/images/high-performance-llama/latency_vs_input_token_length.jpg" alt="E2E latency" style="width:100%"></p>
 
@@ -449,7 +457,7 @@ outputs = model.sample(inputs, seq_len, top_k=1)
 
 <h3 id="benchmarking-results">基准测试结果</h3>
 
-<p>我们在不同条件下对 Llama-2 7B 和 13B 模型进行了延迟和成本的基准测试，即输出标记的数量、实例类型。除非指定，我们使用数据类型‘bf16’和批处理大小为 1，因为这通常是聊天机器人和代码助手等实时应用的常见配置。</p>
+<p>我们在不同条件下对 Llama-2 7B 和 13B 模型进行了延迟和成本的基准测试，即输出标记的数量、实例类型。除非特别说明，我们使用数据类型‘bf16’和批处理大小为 1，因为这通常是聊天机器人、代码助手等实时应用的常见配置。</p>
 
 <p><strong>延迟</strong></p>
 
@@ -465,7 +473,7 @@ outputs = model.sample(inputs, seq_len, top_k=1)
 
 <p><strong>成本</strong></p>
 
-<p>对于以延迟优先的应用，我们展示了在 inf2.48xlarge 实例上托管 Llama-2 模型的成本，每 1000 个 token 的费用为 0.011 美元，7B 和 13B 模型的费用分别为 0.016 美元，相较于其他同类推理优化的 EC2 实例，实现了 3 倍的成本节省。请注意，我们报告的成本是基于 3 年预留实例价格，这是客户用于大型生产部署的价格。</p>
+<p>对于以延迟优先的应用程序，我们展示了在 inf2.48xlarge 实例上托管 Llama-2 模型的成本，每 1000 个 token 为 0.011 美元，7B 和 13B 模型分别为 0.016 美元，相较于其他同类推理优化的 EC2 实例，实现了 3 倍的成本节省。请注意，我们报告的成本是基于 3 年预留实例价格，这是客户用于大型生产部署的价格。</p>
 
 <p><img src="/assets/images/high-performance-llama/cost_vs_output_token_length_7b_13b.jpg" alt="Cost on inf2" style="width:100%"></p>
 
@@ -477,11 +485,11 @@ outputs = model.sample(inputs, seq_len, top_k=1)
 
 <p>现在，我们进入模型部署环节。在本节中，我们将向您展示如何通过 SageMaker 使用 TorchServe 部署 Llama-2 13B 模型，TorchServe 是 PyTorch 的推荐模型服务器，预安装在 AWS PyTorch 深度学习容器（DLC）中。</p>
 
-<p>本节描述了使用 TorchServe 所需的前期准备工作，特别是如何配置 <code class="language-plaintext highlighter-rouge">model_config.yaml</code> 和 <code class="language-plaintext highlighter-rouge">inf2_handler.py</code>，以及如何生成模型工件并预编译模型以便在后续模型部署中使用。提前准备模型工件可以避免在模型部署时进行模型编译，从而减少模型加载时间。</p>
+<p>本节描述了使用 TorchServe 所需的准备工作，特别是如何配置 <code class="language-plaintext highlighter-rouge">model_config.yaml</code> 和 <code class="language-plaintext highlighter-rouge">inf2_handler.py</code> ，以及如何生成模型工件并预编译模型以便在后续模型部署中使用。提前准备模型工件可以避免在模型部署期间进行模型编译，从而减少模型加载时间。</p>
 
-<h3 id="model-configurationmodel-configyaml">模型配置 <a href="https://github.com/pytorch/serve/blob/master/examples/large_models/inferentia2/llama2/model-config.yaml">model-config.yaml</a></h3>
+<h3 id="model-configurationmodel-configyaml">模型配置文件 model-config.yaml</h3>
 
-<p>部分中定义的参数在客户处理器 <a href="https://github.com/pytorch/serve/blob/master/examples/large_models/inferentia2/llama2/inf2_handler.py">inf2_handler.py 中使用。有关 model_config.yaml 的更多详细信息，请参阅</a><a href="https://github.com/pytorch/serve/blob/2bf505bae3046b0f7d0900727ec36e611bb5dca3/docs/configuration.md?plain=1#L267">此处 </a>。TorchServe 微批处理是一种并行预处理和后处理一批推理请求的机制。当后端稳定地接收数据时，它能够通过更好地利用可用的加速器来实现更高的吞吐量，更多详情请参阅<a href="https://github.com/pytorch/serve/tree/master/examples/micro_batching">此处 </a>。对于 Inf2 上的模型推理，分别指定批大小、数据类型、张量并行度以及最大序列长度。</p>
+<p> <code class="language-plaintext highlighter-rouge">handler</code> 和 <code class="language-plaintext highlighter-rouge">micro_batching</code> 中定义的参数用于客户处理程序 inf2_handler.py。有关 model_config.yaml 的更多详细信息，请参阅此处。TorchServe 微批处理是一种并行预处理和后处理一批推理请求的机制。当后端稳定地接收数据时，它能够通过更好地利用可用的加速器来实现更高的吞吐量，更多详情请参阅此处。对于 Inf2 上的模型推理， <code class="language-plaintext highlighter-rouge">micro_batch_size, amp, tp_degree and max_length</code> 分别指定批大小、数据类型、张量并行度以及最大序列长度。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># TorchServe Frontend Parameters
 minWorkers: 1
@@ -506,12 +514,12 @@ micro_batching:
         postprocess: 2
 </code></pre></div></div>
 
-<h3 id="custom-handlerinf2_handlerpy">自定义处理器 <a href="https://github.com/pytorch/serve/blob/master/examples/large_models/inferentia2/llama2/inf2_handler.py">inf2_handler.py</a></h3>
+<h3 id="custom-handlerinf2_handlerpy">自定义处理程序 inf2_handler.py</h3>
 
 <p>Torchserve 中的自定义处理器是一个简单的 Python 脚本，允许您将模型初始化、预处理、推理和后处理逻辑定义为函数。在这里，我们创建我们的 Inf2 自定义处理器。</p>
 
 <ol>
-  <li>`<a href="https://github.com/pytorch/serve/blob/d0ae857abfe6d36813c88e531316149a5a354a93/examples/large_models/inferentia2/llama2/inf2_handler.py#L33">initialize</a>`函数用于加载模型。在这里，Neuron SDK 将首次编译模型，并将预编译的模型保存到由 <code class="language-plaintext highlighter-rouge">NEURONX_CACHE</code> 指定的目录中，该目录由 <code class="language-plaintext highlighter-rouge">NEURONX_DUMP_TO</code> 指定。首次之后，后续运行将检查是否已存在预编译的模型工件。如果存在，它将跳过模型编译。模型加载后，我们发起预热推理请求，以便缓存编译版本。当使用 <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/arch/neuron-features/neuron-caching.html">neuron 持久缓存</a>时，可以显著减少模型加载延迟，确保后续推理运行迅速。</li>
+  <li>初始化函数用于加载模型。在这里，Neuron SDK 将首次编译模型，并将预编译的模型保存到由 <code class="language-plaintext highlighter-rouge">NEURONX_CACHE</code> 指定的目录中。之后，后续运行将检查是否已存在预编译的模型工件。如果存在，它将跳过模型编译。一旦模型加载，我们就会发起预热推理请求，以便缓存编译版本。当使用 neuron 持久缓存时，它可以显著减少模型加载延迟，确保后续推理运行迅速。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>os.environ["NEURONX_CACHE"] = "on"
@@ -528,7 +536,7 @@ os.environ["NEURONX_DUMP_TO"] = f"{model_dir}/neuron_cache"
 </code></pre></div></div>
 
 <ol start="2">
-  <li>`<a href="https://github.com/pytorch/serve/blob/d0ae857abfe6d36813c88e531316149a5a354a93/examples/large_models/inferentia2/llama2/inf2_handler.py#L124">inference</a>`函数调用`send_intermediate_predict_response`以发送流式响应。</li>
+  <li>推理函数调用 send_intermediate_predict_response 来发送流式响应。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>for new_text in self.output_streamer:
@@ -544,7 +552,7 @@ os.environ["NEURONX_DUMP_TO"] = f"{model_dir}/neuron_cache"
 
 <h3 id="package-model-artifacts">打包模型工件</h3>
 
-<p>使用 <code class="language-plaintext highlighter-rouge">torch-model-archiver</code> 将所有模型工件打包到文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1</code> 中。</p>
+<p>将所有模型工件打包到一个文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1</code> 中，使用 <code class="language-plaintext highlighter-rouge">torch-model-archiver</code> .</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch-model-archiver --model-name llama-2-13b-neuronx-b1 --version 1.0 --handler inf2_handler.py -r requirements.txt --config-file model-config.yaml --archive-format no-archive
 </code></pre></div></div>
@@ -555,11 +563,11 @@ os.environ["NEURONX_DUMP_TO"] = f"{model_dir}/neuron_cache"
 torchserve --ncs --start --model-store model_store --models llama-2-13b-neuronx-b1
 </code></pre></div></div>
 
-<p>当日志显示 “<strong>WORKER_MODEL_LOADED</strong>” 时，预编译的模型应保存在文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1/neuron_cache</code> 中，该文件夹与 Neuron SDK 版本紧密耦合。然后，将文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1</code> 上传到您的 S3 桶中，以便在产品部署中使用。本博客中的 Llama-2 13B 模型工件可在此处找到 <a href="https://torchserve.s3.amazonaws.com/mar_files/sm-neuronx/llama-2-13b-neuronx-b1/"> 这里 </a>，与 Neuron SDK 2.13.2 版本相关联，位于 TorchServe 模型库中。</p>
+<p>当日志显示“WORKER_MODEL_LOADED”时，预编译的模型应保存在文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1/neuron_cache</code> 中，该文件夹与 Neuron SDK 版本紧密耦合。然后，将文件夹 <code class="language-plaintext highlighter-rouge">llama-2-13b-neuronx-b1</code> 上传到您的 S3 存储桶，以便在产品部署中使用。本博客中提到的 Llama-2 13B 模型工件可在此处找到，与 Neuron SDK 2.13.2 版本相关，位于 TorchServe 模型库中。</p>
 
 <h2 id="deploy-llama-2-13b-model-on-sagemakerinf2-instance-using-torchserve">在 SageMaker Inf2 实例上使用 TorchServe 部署 Llama-2 13B 模型</h2>
 
-<p>在本节中，我们使用一个 <a href="https://github.com/aws/deep-learning-containers/blob/master/available_images.md#neuron-containers">PyTorch Neuronx 容器</a>在 SageMaker 端点部署 Llama-2 13B 模型，该端点由一个 ml.inf2.24xlarge 托管实例提供支持，该实例具有 6 个 Inferentia2 加速器，与我们的模型配置 <code class="language-plaintext highlighter-rouge">model_config.yaml</code> 处理器的设置 - <code class="language-plaintext highlighter-rouge">tp_degree: 12</code> 相对应。鉴于我们已经将所有模型工件打包到一个文件夹中，并上传到 S3 桶，我们现在将使用 SageMaker Python SDK 创建一个 SageMaker 模型并将其部署到 SageMaker 实时端点，使用 deploy <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/large-model-inference-uncompressed.html"> 未压缩模型方法 </a>。使用 SageMaker 以这种方式部署的速度是关键优势，您将获得一个完全功能的生产就绪端点，包括一个安全的 RESTful 端点，而无需在基础设施上花费任何努力。在 SageMaker 上部署模型和运行推理有 3 个步骤。笔记本示例可以在<a href="https://github.com/aws/amazon-sagemaker-examples-community/blob/main/torchserve/inf2/llama2/llama-2-13b.ipynb">这里</a>找到。</p>
+<p>在本节中，我们使用 PyTorch Neuronx 容器在 SageMaker 端点部署 Llama-2 13B 模型，该端点由一个 ml.inf2.24xlarge 托管实例提供支持，该实例具有 6 个与我们的模型配置相对应的 Inferentia2 加速器，即 <code class="language-plaintext highlighter-rouge">model_config.yaml</code> 处理器的设置 - <code class="language-plaintext highlighter-rouge">tp_degree: 12</code> 。鉴于我们已经使用 torch-model-archiver 将所有模型工件打包到一个文件夹中并上传到 S3 桶，我们现在将使用 SageMaker Python SDK 创建一个 SageMaker 模型并将其部署到 SageMaker 实时端点，使用的是部署未压缩模型的方法。使用 SageMaker 以这种方式部署的关键优势是速度，您将获得一个完全功能的生产就绪端点，包括一个安全的 RESTful 端点，而无需在基础设施上花费任何努力。在 SageMaker 上部署模型和运行推理有 3 个步骤。笔记本示例可以在此处找到。</p>
 
 <ol>
   <li>创建 SageMaker 模型</li>
@@ -602,7 +610,7 @@ model = Model(
 </code></pre></div></div>
 
 <ol start="3">
-  <li>当 SageMaker 端点处于服务状态时，您可以使用 <code class="language-plaintext highlighter-rouge">invoke_endpoint_with_response_stream</code> API 调用模型。此功能可以增强用户体验，使每个生成的标记都能返回给用户。当生成整个序列耗时较长时，尤其有益。</li>
+  <li>在 SageMaker 上运行流式响应推理，当端点处于服务状态时，您可以使用 <code class="language-plaintext highlighter-rouge">invoke_endpoint_with_response_stream</code> API 调用调用模型。此功能使每个生成的标记都能返回给用户，从而提升用户体验。当生成整个序列耗时较长时，尤其有益。</li>
 </ol>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import json
@@ -621,19 +629,19 @@ for event in event_stream:
 
 <p>输入</p>
 
-<p>“今天天气真好，我打算去...”</p>
+<p>“今天天气真好，我打算...”</p>
 
 <p>输出</p>
 
 <p>“今天天气真的很不错，我打算去海滩。我要带上我的相机，去海滩上拍一些照片。我要拍沙滩、水和人们的照片。我还要拍日落。我真的很期待去海滩拍照。”</p>
 
-<p>海滩是拍照的好地方。沙滩、水和人们都是拍照的好题材。日落也是拍照的好题材。”</p>
+<p>海滩是拍照的好地方。沙滩、水和人们都是拍照的好题材。日落也是拍照的好题材。</p>
 
 <h2 id="conclusion">结论</h2>
 
-<p>在这篇帖子中，我们展示了如何使用 Transformers Neuron 运行 Llama 2 模型推理，并使用 TorchServe 在 Amazon SageMaker 上部署 Llama 2 模型服务，在 EC2 Inf2 实例上。我们展示了使用 Inferentia2 的优势——低延迟和低成本，这得益于 AWS Neuron SDK 中的优化，包括张量并行、并行上下文编码和 KV 缓存，特别是对于LLM推理。要了解最新动态，请关注 <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/release-notes/index.html">AWS Neuron 的最新发布</a>以获取新功能。</p>
+<p>在这篇帖子中，我们展示了如何使用 Transformers Neuron 运行 Llama 2 模型推理，并使用 TorchServe 在 Amazon SageMaker 上部署 Llama 2 模型服务，在 EC2 Inf2 实例上。我们展示了使用 Inferentia2 的优势——低延迟和低成本——这是由 AWS Neuron SDK 中的优化实现的，包括张量并行、并行上下文编码和 KV 缓存，特别是对于LLM推理。为了保持最新，请关注 AWS Neuron 的最新发布以获取新功能。</p>
 
-<p>今天开始使用 Llama 2 示例在 <a href="https://github.com/aws-neuron/aws-neuron-samples/blob/master/torch-neuronx/transformers-neuronx/inference/meta-llama-2-13b-sampling.ipynb">EC2</a> 上和通过 <a href="https://github.com/aws/amazon-sagemaker-examples-community/blob/main/torchserve/inf2/llama2/llama-2-13b.ipynb">SageMaker</a>，并关注如何在 Inf2 上优化 Llama 70B！</p>
+<p>今天开始使用 Llama 2 在 EC2 和 SageMaker 上的示例，并关注如何优化 Inf2 上的 Llama 70B！</p>
 
                 </article>
             </div>
@@ -649,14 +657,14 @@ for event in event_stream:
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -673,7 +681,7 @@ for event in event_stream:
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -686,7 +694,7 @@ for event in event_stream:
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -694,7 +702,7 @@ for event in event_stream:
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -723,9 +731,7 @@ for event in event_stream:
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -735,7 +741,7 @@ for event in event_stream:
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -760,19 +766,19 @@ for event in event_stream:
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手指南 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -799,17 +805,17 @@ for event in event_stream:
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -825,7 +831,7 @@ for event in event_stream:
         </ul>
 
         <li class="resources-mobile-menu-title">
-          <a>博客与新闻</a>
+          <a>博客 &amp; 新闻</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -844,7 +850,7 @@ for event in event_stream:
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -858,7 +864,7 @@ for event in event_stream:
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -926,7 +932,7 @@ for event in event_stream:
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

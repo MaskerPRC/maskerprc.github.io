@@ -38,8 +38,8 @@ Python uses Setuptools to build the library. Setuptools is an extension to the o
 
 setup(name=" torch",="" version="version," description="Tensors and Dynamic neural networks in Python with strong GPU acceleration" ,="" ext_modules="extensions," cmdclass="{" 'build':="" build,="" 'build_py':="" build_py,="" 'build_ext':="" build_ext,="" 'build_deps':="" build_deps,="" 'build_module':="" build_module,="" 'develop':="" develop,="" 'install':="" install,="" 'clean':="" clean,="" },="" packages="packages," package_data="{'torch':" [="" 'lib="" *.so*',="" *.dylib*',="" torch_shm_manager',="" *.h',="" include="" th="" generic="" thc="" *.h']},="" install_requires="['pyyaml']," )="" the="" function="" is="" composed="" entirely="" of="" keyword="" arguments,="" which="" serve="" two="" purposes:="" metadata="" (e.g.="" name,="" description,="" version)="" contents="" package="" we="" are="" concerned="" with="" #2.="" let’s="" break="" down="" individual="" components:="" ext_modules:="" python="" modules="" either="" “pure”="" modules,="" containing="" only="" code,="" or="" “extension”="" written="" in="" low-level="" language="" implementation.="" here="" listing="" extension="" including="" main="" torch._c="" library="" that="" contains="" our="" tensor="" cmdclass:="" when="" using="" setup.py="" script="" from="" command="" line,="" user="" must="" specify="" one="" more="" “commands”,="" code="" snippets="" perform="" a="" specific="" action.="" for="" example,="" “install”="" builds="" and="" installs="" package.="" this="" mapping="" routes="" commands="" to="" functions="" implement="" them="" packages:="" list="" project.="" these="" -="" i.e.="" they="" contain="" code.="" defined="" elsewhere="" package_data:="" additional="" files="" need="" be="" installed="" into="" package:="" case="" header="" shared="" libraries="" build="" will="" generate="" included="" installation="" install_requires:="" order="" pytorch,="" pyyaml.="" setuptools="" handle="" making="" sure="" pyyaml="" available,="" downloading="" installing="" it="" if="" necessary="" consider="" components="" detail,="" but="" now="" instructive="" look="" at="" end="" product="" an="" –="" what="" does="" after="" building="" site_packages="" third="" party="" by="" default="" lib="" &lt;version&gt;="" directory="" associated="" your="" binary.="" because="" i="" am="" miniconda="" environment,="" my="" binary="" found="" at:="" (p3)="" killeent@devgpu047:pytorch="" (master)$="" ~="" local="" miniconda2="" envs="" p3="" bin="" thus="" into:="" home="" killeent="" python3.6="" site-packages="" take="" torch="" folder="" site-packages:="" killeent@devgpu047:site-packages$="" cd="" killeent@devgpu047:torch$="" ls="" autograd="" backends="" _c.cpython-36m-x86_64-linux-gnu.so="" cuda="" distributed="" _dl.cpython-36m-x86_64-linux-gnu.so="" functional.py="" __init__.py="" legacy="" multiprocessing="" nn="" optim="" __pycache__="" serialization.py="" _six.py="" sparse="" storage.py="" _tensor_docs.py="" tensor.py="" _tensor_str.py="" _thnn="" _torch_docs.py="" utils="" _utils.py="" version.py="" note="" everything="" would="" expect="" here:="" all="" [todo="" print="" explain]="" ._c*="" ._dl*="" match="" exactly="" described="" setup="" function:="" libnccl.so.1="" libthc.so.1="" libthcunn.so.1="" libthnn.so.1="" libth.so.1="" thcunn.h="" torch_shm_manager="" libnccl.so="" libshm.so="" libthcs.so.1="" libthd.so.1="" libthpp.so.1="" libths.so.1="" thnn.h="" interpreter="" looks="" during="" import.="" call="" import="" find="" module="" initialize="" it.="" you="" can="" read="" about="" system="" here.="" parts="" next,="" various="" start="" finish.="" illustrate="" how="" combine="" mentioned="" introduction.="" backend="" vendor="" install="" cmd="" override="" pytorch’s="" setup.py:="" class="" install(setuptools.command.install.install):="" def="" run(self):="" not="" self.skip_build:="" self.run_command('build_deps')="" setuptools.command.install.install.run(self)="" first="" thing="" run="" called="" “build_deps”="" it’s="" run()="" method:="" tools.nnwrap="" generate_wrappers="" as="" generate_nn_wrappers="" build_all_cmd="['bash'," 'torch="" build_all.sh']="" with_cuda:="" +="['--with-cuda']" with_nccl="" system_nccl:="" with_distributed:="" subprocess.call(build_all_cmd)="" !="0:" sys.exit(1)="" generate_nn_wrappers()="" have="" shell="" build_all.sh="" directory.="" configurable="" whether="" on="" enabled,="" nccl="" enabled.="" lib:="" killeent@devgpu047:lib="" libshm="" readme.md="" thcs="" thcunn="" thd="" thnn="" thpp="" ths="" see="" directories="" libraries.="" th,="" thc,="" thnn,="" thcunn,="" git="" subtrees="" sync="" e.g.="" github.com="" torch.="" ths,="" thcs,="" thd,="" pytorch.="" cmakelists.txt="" indicating="" built="" cmake.="" essentially="" runs="" cmake="" configure="" step="" libraries,="" then="" make="" install.="" .="" left="" with:="" --with-cuda="" --with-nccl="" --with-distributed="" [various="" output="" logs]="" tmp_install="" there="" number="" extra="" things="" directory:="" each="" headers="" executable="" explore="" further.="" script,="" create="" subdir="" build:="" #="" library,="" output.="" $1="" mkdir="" -p="" configuration="" makefile="" also="" result="" running="" tmp_install:="" share="" like="" standard="" binaries,="" files.="" headers,="" file.="" so="" why="" directory?="" used="" compile="" depend="" other.="" depends="" its="" headers.="" referenced="" arguments="" command:="" install_dir="" ...="" -dth_include_path="$INSTALL_DIR/include" \="" -dth_lib_path="$INSTALL_DIR/lib" indeed="" built:="" ldd="" github="" pytorch="" (0x00007f84478b7000)="" way="" specifies="" paths="" little="" messy="" representative="" overall="" idea.="" finally,="" script:="" succeed="" copy="" binaries="" cp="" $install_dir="" *="" -r="" see,="" end,="" top-level="" explaining="" saw="" above.="" we’ll="" do="" next:="" wrappers="" briefly,="" touch="" last="" part="" build_deps="" generate_nn_wrappers().="" bind="" custom="" cwrap="" tooling,="" touched="" upon="" previous="" post.="" binding="" manually="" write="" yaml="" declarations="" function.="" however,="" due="" relative="" simplicity="" auto-generate="" both="" resulting="" c++="" reason="" where="" expects="" located.="" few="" things:="" parses="" files,="" generating="" writing="" .cwrap="" calls="" appropriate="" plugins="" source="" second="" time="" thnn_generic.h="" takes="" tensors,="" “generic”="" based="" dynamic="" type="" csrc="" output:="" killeent@devgpu047:nn="" thcunn.cpp="" thcunn.cwrap="" thnn.cpp="" thnn.cwrap="" thnn_generic.cpp="" thnn_generic.cwrap="" thnn_generic.inc.h="" generates="" like:="" [[="" name:="" floatbatchnormalization_updateoutput="" return:="" void="" cname:="" thnn_floatbatchnormalization_updateoutput="" arguments:="" void*="" state="" thfloattensor*="" input="" type:="" weight="" nullable:="" true="" bias="" running_mean="" running_var="" save_mean="" save_std="" bool="" train="" double="" momentum="" eps="" ]]="" corresponding="" .cpp:="" extern="" "c"="" thnn_floatbatchnormalization_updateoutput(void*,="" thfloattensor*,="" bool,="" double,="" double);="" pyobject="" floatbatchnormalization_updateoutput(pyobject="" *_unused,="" *args)="" {="" argument="" checking,="" unpacking="" pythreadstate="" *_save="NULL;" try="" py_unblock_threads;="" thnn_floatbatchnormalization_updateoutput(arg_state,="" arg_input,="" arg_output,="" arg_weight,="" arg_bias,="" arg_running_mean,="" arg_running_var,="" arg_save_mean,="" arg_save_std,="" arg_train,="" arg_momentum,="" arg_eps);="" py_block_threads;="" py_return_none;="" }="" catch="" (...)="" (_save)="" throw;="" generated="" this:="" batchnormalization_updateoutput(thpp::tensor*="" input,="" thpp::tensor*="" output,="" weight,="" bias,="" running_mean,="" running_var,="" save_mean,="" save_std,="" train,="" momentum,="" eps)="" type,="" cuda,="" etc.="" later.="" “building”="" pure="" (the="" “dependencies”)="" move="" forward="" actual="" next="" library.="" “packages”="" passed="" setup.py.="" setuptools’="" utility="" find_packages():="" ['torch',="" 'torch._thnn',="" 'torch.autograd',="" 'torch.backends',="" 'torch.cuda',="" 'torch.distributed',="" 'torch.legacy',="" 'torch.multiprocessing',="" 'torch.nn',="" 'torch.optim',="" 'torch.sparse',="" 'torch.utils',="" 'torch.autograd._functions',="" 'torch.backends.cudnn',="" 'torch.legacy.nn',="" 'torch.legacy.optim',="" 'torch.nn._functions',="" 'torch.nn.backends',="" 'torch.nn.modules',="" 'torch.nn.parallel',="" 'torch.nn.utils',="" 'torch.nn._functions.thnn',="" 'torch.utils.data',="" 'torch.utils.ffi',="" 'torch.utils.serialization',="" 'torch.utils.trainer',="" 'torch.utils.backcompat',="" 'torch.utils.trainer.plugins']="" find_package="" has="" recursively="" traversed="" directory,="" finding="" setuptools,="" tool="" creates="" distribution="" root,="" same="" location="" preserve="" information="" operating="" performing="" build.="" see:="" lib.linux-x86_64-3.6="" temp.linux-x86_64-3.6="" indicates="" i’ve="" project="" linux-x86-64="" 3.6.="" while="" temp="" aren’t="" needed="" final="" installation.="" just="" don’t="" “compiled”,="" build_py="" process="" simply="" copies="" their="" locations="" find_packages="" equivalent="" littered="" lines="" copying="" _functions="" blas.py="" -&gt;="" noted="" earlier="" could="" pass="" setup()="" function,="" those="" location.="" copied="" thctensor.h="" cpython="" backend.="" constitutes="" majority="" logic="" overridden="" build_ext="" some="" special="" before="" extensions="" themselves="" actually="" tools.cwrap="" tools.cwrap.plugins.thpplugin="" thpplugin="" tools.cwrap.plugins.argcountsortplugin="" argcountsortplugin="" tools.cwrap.plugins.autogpu="" autogpu="" tools.cwrap.plugins.booloption="" booloption="" tools.cwrap.plugins.kwargsplugin="" kwargsplugin="" tools.cwrap.plugins.nullablearguments="" nullablearguments="" tools.cwrap.plugins.cudnnplugin="" cudnnplugin="" tools.cwrap.plugins.wrapdim="" wrapdim="" tools.cwrap.plugins.assertndim="" assertndim="" tools.cwrap.plugins.broadcast="" broadcast="" tools.cwrap.plugins.processorspecificplugin="" processorspecificplugin="" thp_plugin="THPPlugin()" cwrap('torch="" tensormethods.cwrap',="" processorspecificplugin(),="" booloption(),="" thp_plugin,="" autogpu(condition="IS_CUDA" ),="" argcountsortplugin(),="" kwargsplugin(),="" assertndim(),="" wrapdim(),="" broadcast()="" ])="" cudnn="" cudnn.cwrap',="" cudnnplugin(),="" nullablearguments()="" recall="" above="" documented="" auto-generated="" calling="" cudnn.="" tensormethods.cwrap,="" use="" implementations="" work="" within="" ecosystem.="" simple="" declaration="" zero_:="" zero_="" zero="" self="" thtensor*="" thptensor_(zero_)(pyobject="" *self,="" *args,="" *kwargs)="" thtensor_(zero)(library_state="" arg_self);="" post="" tied="" types,="" won’t="" expand="" there.="" enough="" know="" prior="" being="" built,="" compilation.="" specifying="" unlike="" go="" out="" right="" files;="" file(s),="" any="" link="" requirements="" (include="" directories,="" with,="" etc.).="" bulk="" (200~="" loc="" writing)="" goes="" extensions.="" here,="" choices="" begin="" sense.="" specified="" reference="" adding="" include:="" tmp_install_path="" include_dirs="" cwd,="" os.path.join(cwd,="" "torch",="" "csrc"),="" "="" include",="" th",="" thpp",="" thnn",="" similarly,="" object="" script.="" directly="" identifying="" may="" against:="" lib_path="" th_lib="os.path.join(lib_path," 'libth.so.1')="" ths_lib="os.path.join(lib_path," 'libths.so.1')="" thc_lib="os.path.join(lib_path," 'libthc.so.1')="" thcs_lib="os.path.join(lib_path," 'libthcs.so.1')="" thnn_lib="os.path.join(lib_path," 'libthnn.so.1')="" module:="" c="Extension(&quot;torch._C&quot;," sources="main_sources," extra_compile_args="main_compile_args" extra_compile_args,="" library_dirs="library_dirs," extra_link_args="extra_link_args" main_link_args="" [make_relative_rpath('lib')],="" against.="" includes="" shm,="" memory="" management="" cudart="" listed="" up="" args="" flags="" might="" want="" add="" debug="" compiling="" mode="" dirs="" another="" example="" important="" search="" time.="" .so="" build_all.sh,="" linking="" together="" extension.="" normal="" options="" decided="" libstdc++="" statically.="" key="" component:="" explicit="" ths_lib,="" thpp_lib,="" thnn_lib]="" wondering="" opposed="" argument.="" all,="" issue="" lua="" often="" set="" ld_library_path="" variable,="" mistakenly="" against="" torch,="" instead="" locally.="" problematic="" date,="" torch’s="" play="" nicely="" such,="" linker.="" other="" power="" similar="" way.="" invokes="" compiler="" linker="" succeed,="" successfully="" finished,="" quite="" simple.="" result,="" install_lib="" creating="" _thnn.cpython-36m-x86_64-linux-gnu.so="" _thcunn.cpython-36m-x86_64-linux-gnu.so="" finally="" lets="" interpreter.="" executes="" statement,="" searches="" along="" path.="" value="" path="" configured="" built.="" killeent@devgpu047:~$="" 3.6.1="" |continuum="" analytics,="" inc.|="" (default,="" mar="" 22="" 2017,="" 19:54:23)="" [gcc="" 4.4.7="" 20120313="" (red="" hat="" 4.4.7-1)]="" linux="" "help",="" "copyright",="" "credits"="" "license"="" information.="" &gt;&gt;&gt;="" sys="" sys.path="" ['',="" '="" python36.zip',="" python3.6',="" lib-dynload',="" .local="" site-packages',="" pytorch',="" setuptools-27.2.0-py3.6.egg']="" load="" location:="" inspect="" inspect.getfile(torch)="" __init__.py'="" loaded="" expected="" successful!="" note:="" prepends="" empty="" string="" represent="" current="" working="" place="" module.="" accidentally="" rather="" than="" version.="" something="" watch="" for.="" addendum="" developer="" efficiency,="" 3rd="" didn’t="" cover="" entire="" loop="" time-consuming.="" devserver,="" around="" 5="" minutes="" source.="" times,="" developing="" subset="" project,="" re-build="" test="" changes.="" fortunately,="" enables="" this.="" develop="" supports="" command.="" documentation="" states="" that:="" allows="" deploy="" project’s="" “staging="" areas”="" available="" importing.="" deployment="" done="" such="" changes="" immediately="" staging="" area(s),="" without="" needing="" change.="" work?="" suppose="" run,="" dependencies="" (th,="" thpp,="" etc.)="" inside="" -la="" torch*="" -rw-r--r--.="" 1="" users="" 31="" jun="" 27="" 08:02="" torch.egg-link="" looking="" file,="" references="" cat="" navigate="" back="" new="" torch.egg-info:="" torch.egg-info="" total="" 28="" drwxr-xr-x.="" 2="" 4096="" 08:09="" 10="" 08:01="" ..="" dependency_links.txt="" 255="" pkg-info="" 7="" requires.txt="" 16080="" sources.txt="" 12="" top_level.txt="" file="" requirements.txt="" lists="" setting="" pytorch:="" going="" too="" much="" us="" treat="" repo="" itself="" were="" site-packages,="" works:="" torch.__file__="" following="" consequences="" hold:="" change="" automatically="" picked="" up,="" let="" re-run="" command,="" codebases="" seamlessly,="" easy="" dependency="" quickly="" directly.="" appropriately.="" mode,="" up:="" torch._c.__file__="" _c.cpython-36m-x86_64-linux-gnu.so'="" re-built="" (0x00007f543d0e2000)="" having="" full="" rebuild.="" usual="" mechanism="" via="" anaconda,="" them.="" mkl="" doing:="" libmkl_intel_lp64.so="" conda="" long="" $cmake_prefix_path,="" compiling:="" dir="" (0x00007f3450bba000)="" covered,="" relevant="" ccache="" speed="" times="" handles="" initial="" pulling="" system,="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -109,7 +109,7 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -117,7 +117,7 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -126,27 +126,27 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -157,21 +157,27 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -179,18 +185,20 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -201,12 +209,12 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -217,28 +225,28 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -252,7 +260,7 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -288,9 +296,9 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2017年6月27日</p>
+            <p class="featured-post">2017 年 6 月 27 日</p>
             <h1>
-                <a class="blog-title">PyTorch 内部机制第二部分 - 构建系统</a>
+                <a class="blog-title">PyTorch 内部揭秘 II - 构建系统</a>
             </h1>
         </div>
     </div>
@@ -300,8 +308,8 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">作者：Trevor Killeen</p>
-                    <p>在第一篇<a href="/blog/a-tour-of-pytorch-internals-1/">文章</a>中，我解释了如何生成一个可以在 Python 解释器中使用的 <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 对象。接下来，我将探讨 PyTorch 的构建系统。PyTorch 代码库包含各种组件：</p>
+                    <p class="author">由 Trevor Killeen 撰写</p>
+                    <p>在第一篇帖子中，我解释了如何生成一个可以在 Python 解释器中使用的 <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 对象。接下来，我将探讨 PyTorch 的构建系统。PyTorch 代码库包含各种组件：</p>
 
 <ul>
   <li>核心 Torch 库：TH、THC、THNN、THCUNN</li>
@@ -310,13 +318,13 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
   <li>额外的第三方库：NumPy、MKL、LAPACK</li>
 </ul>
 
-<p>简单地执行 <code class="language-plaintext highlighter-rouge">python setup.py install</code> 命令是如何工作的，它允许你在代码中调用 <code class="language-plaintext highlighter-rouge">import torch</code> 并使用 PyTorch 库？</p>
+<p>简单调用 <code class="language-plaintext highlighter-rouge">python setup.py install</code> 是如何完成工作，使您能够在代码中调用 <code class="language-plaintext highlighter-rouge">import torch</code> 并使用 PyTorch 库的？</p>
 
-<p>本文的第一部分将从最终用户的角度解释构建过程。这将解释我们如何使用上述组件来构建库。本文的第二部分对 PyTorch 开发者来说非常重要。它将记录通过仅构建你正在工作的代码子集来提高迭代速度的方法。</p>
+<p>本文的第一部分将从最终用户的角度解释构建过程。这将解释我们如何使用上述组件构建库。本文的第二部分对 PyTorch 开发者来说非常重要。它将记录通过仅构建您正在工作的代码子集来提高迭代速度的方法。</p>
 
-<h3 id="setuptools-and-pytorchs-setup--function">Setuptools 和 PyTorch 的 setup() 函数</h3>
+<h3 id="setuptools-and-pytorchs-setup--function">Setuptools 和 PyTorch 的 setup()函数</h3>
 
-<p>Python 使用 <a href="https://setuptools.readthedocs.io/en/latest/index.html">Setuptools</a> 来构建库。Setuptools 是 Python 核心库中原始 distutils 系统的扩展。Setuptools 的核心组件是 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件，它包含了构建项目所需的所有信息。最重要的函数是 <code class="language-plaintext highlighter-rouge">setup()</code> 函数，它作为主入口点。让我们看看 PyTorch 中的例子：</p>
+<p>Python 使用 Setuptools 构建库。Setuptools 是 Python 核心库原始 distutils 系统的扩展。Setuptools 的核心组件是 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件，它包含构建项目所需的所有信息。最重要的功能是 <code class="language-plaintext highlighter-rouge">setup()</code> 函数，它作为主入口点。让我们看看 PyTorch 中的实现：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">setup</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s">"torch"</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">,</span>
       <span class="n">description</span><span class="o">=</span><span class="s">"Tensors and Dynamic neural networks in Python with strong GPU acceleration"</span><span class="p">,</span>
@@ -342,28 +350,28 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
       <span class="p">)</span>
 </code></pre></div></div>
 
-<p>函数完全由关键字参数组成，它有两个作用：</p>
+<p>该函数完全由关键字参数组成，具有两个作用：</p>
 
 <ul>
   <li>元数据（例如名称、描述、版本）</li>
-  <li>包的内容</li>
+  <li>包含的内容</li>
 </ul>
 
-<p>我们关注于 #2。让我们分解各个组成部分：</p>
+<p>我们关注的是 #2。让我们分解各个组成部分：</p>
 
 <ul>
-  <li><strong>ext_modules</strong>：Python 模块可以是“纯”模块，只包含 Python 代码，或者是用 Python 实现底层语言编写的“扩展”模块。在这里，我们列出了构建中的扩展模块，包括包含我们的 Python Tensor 的 <code class="language-plaintext highlighter-rouge">torch._C</code> 主库</li>
-  <li><strong>cmdclass</strong>：当使用命令行中的 <code class="language-plaintext highlighter-rouge">setup.py</code> 脚本时，用户必须指定一个或多个“命令”，这些是执行特定操作的代码片段。例如，“安装”命令构建并安装软件包。此映射将特定命令路由到实现它们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的函数</li>
-  <li><strong>packages</strong>：项目中的软件包列表。这些是“纯”的，即它们只包含 Python 代码。这些在其他地方的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中定义</li>
-  <li><strong>package_data</strong>：需要安装到包中的附加文件：在这种情况下，必须包括构建过程中生成的头文件和共享库，它们将包含在我们的安装中</li>
-  <li><strong>install_requires</strong>：为了构建 PyTorch，我们需要 pyyaml。Setuptools 将负责确保 pyyaml 可用，并在必要时下载和安装它</li>
+  <li>ext_modules：Python 模块要么是“纯”模块，只包含 Python 代码，要么是使用 Python 实现底层语言的“扩展”模块。在这里，我们列出了构建中的扩展模块，包括包含我们的 Python 张量的主 <code class="language-plaintext highlighter-rouge">torch._C</code> 库</li>
+  <li>cmdclass：当使用命令行中的 <code class="language-plaintext highlighter-rouge">setup.py</code> 脚本时，用户必须指定一个或多个“命令”，这些是执行特定操作的代码片段。例如，“安装”命令构建并安装软件包。此映射将特定命令路由到实现它们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的函数</li>
+  <li>项目中的包列表。这些是“纯”包，即它们只包含 Python 代码。这些定义在其他地方，例如 <code class="language-plaintext highlighter-rouge">setup.py</code> </li>
+  <li>package_data：需要安装到包中的附加文件：在这种情况下，构建将生成的头文件和共享库必须包含在我们的安装中</li>
+  <li>install_requires：为了构建 PyTorch，我们需要 pyyaml。Setuptools 将负责确保 pyyaml 可用，并在必要时下载和安装它</li>
 </ul>
 
-<p>我们将更详细地考虑这些组件，但到目前为止，查看安装的最终产品是有教育意义的——即 Setuptools 在构建代码后所做的工作</p>
+<p>我们将更详细地考虑这些组件，但到目前为止，查看安装的最终产品是有教育意义的——即 Setuptools 在构建代码后所做的工作。</p>
 
-<h3 id="site_packages">site_packages</h3>
+<h3 id="site_packages">站点包</h3>
 
-<p>第三方包默认安装到与您的 Python 二进制文件关联的 <code class="language-plaintext highlighter-rouge">lib/&lt;version&gt;/site_packages</code> 目录中。例如，因为我使用的是 <a href="https://conda.io/miniconda.html">Miniconda</a> 环境，所以我的 Python 二进制文件位于：</p>
+<p>默认情况下，第三方包会被安装到与您的 Python 二进制文件关联的 <code class="language-plaintext highlighter-rouge">lib/&lt;version&gt;/site_packages</code> 目录中。例如，因为我使用的是 Miniconda 环境，所以我的 Python 二进制文件位于：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span>which python
 ~/local/miniconda2/envs/p3/bin/python
@@ -379,27 +387,27 @@ setup(name=" torch",="" version="version," description="Tensors and Dynamic neur
 </span>autograd  backends  _C.cpython-36m-x86_64-linux-gnu.so  cuda  distributed  _dl.cpython-36m-x86_64-linux-gnu.so  functional.py  __init__.py  legacy  lib  multiprocessing  nn  optim  __pycache__  serialization.py  _six.py  sparse  storage.py  _tensor_docs.py  tensor.py  _tensor_str.py  _thnn  _torch_docs.py  utils  _utils.py  version.py
 </code></pre></div></div>
 
-<p>注意，这里应该有的东西都在这里：</p>
+<p>注意，我们期望在这里出现的所有内容都在这里：</p>
 
 <ul>
-  <li>所有“纯净”的包都在这里 [待办：从 setup.py 打印包以解释]</li>
+  <li>所有“纯”包都在这里 [待办：从 setup.py 打印包以解释]</li>
   <li>扩展库在这里 - . _C * 和 . _dl * 共享库</li>
-  <li>package_data 在这里：lib/ 的内容与我们 setup 函数中描述的完全一致：</li>
+  <li>package_data 在这里：lib/ 的内容与我们 setup 函数中描述的完全匹配：</li>
 </ul>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:torch<span class="nv">$ </span><span class="nb">ls </span>lib/
 include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1   THCUNN.h  torch_shm_manager libnccl.so  libshm.so     libTHCS.so.1  libTHD.so.1     libTHPP.so.1  libTHS.so.1  THNN.h
 </code></pre></div></div>
 
-<p>Python 解释器在导入时查看 <code class="language-plaintext highlighter-rouge">site_packages</code>。如果我们 Python 代码中调用 <code class="language-plaintext highlighter-rouge">import torch</code>，它将在这里找到模块并初始化和导入。您可以在此处了解更多关于导入系统的信息 <a href="https://docs.python.org/3/tutorial/modules.html"> 这里 </a>。</p>
+<p>Python 解释器在导入时会查找 <code class="language-plaintext highlighter-rouge">site_packages</code> 。如果我们调用 <code class="language-plaintext highlighter-rouge">import torch</code> ，我们的 Python 代码将在这里找到模块并初始化导入。您可以在这里了解更多关于导入系统的信息。</p>
 
-<h3 id="building-individual-parts">建立个体部分</h3>
+<h3 id="building-individual-parts">构建单个部分</h3>
 
-<p>接下来，我们将从始至终查看构建的各种个体组件。这将说明我们如何结合介绍中提到的所有代码。</p>
+<p>接下来，我们将从开始到结束查看构建的各种单个组件。这将说明我们如何结合介绍中提到的所有代码。</p>
 
-<h3 id="backend-torch-and-vendor-libraries">后端火炬和供应商库</h3>
+<h3 id="backend-torch-and-vendor-libraries">后端 Torch 和供应商库</h3>
 
-<p>让我们看看 PyTorch 的 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的 <code class="language-plaintext highlighter-rouge">install</code> cmd 覆盖：</p>
+<p>让我们来了解一下 PyTorch 中的 <code class="language-plaintext highlighter-rouge">install</code> cmd 覆盖：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">install</span><span class="p">(</span><span class="n">setuptools</span><span class="p">.</span><span class="n">command</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">install</span><span class="p">):</span>
 
@@ -409,7 +417,7 @@ include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1
         <span class="n">setuptools</span><span class="p">.</span><span class="n">command</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">install</span><span class="p">.</span><span class="n">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>我们注意到它首先执行一个名为“build_deps”的命令——让我们看看它的 <code class="language-plaintext highlighter-rouge">run()</code> 方法：</p>
+<p>我们注意到它首先执行了一个名为“build_deps”的命令 - 让我们来查看它的 <code class="language-plaintext highlighter-rouge">run()</code> 方法：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="kn">from</span> <span class="nn">tools.nnwrap</span> <span class="kn">import</span> <span class="n">generate_wrappers</span> <span class="k">as</span> <span class="n">generate_nn_wrappers</span>
@@ -425,17 +433,17 @@ include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1
         <span class="n">generate_nn_wrappers</span><span class="p">()</span>
 </code></pre></div></div>
 
-<p>在这里，我们注意到在 <code class="language-plaintext highlighter-rouge">torch/lib/</code> 目录中有一个名为 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 的 shell 脚本。此脚本可以通过是否在启用 CUDA 的系统上、启用 NCCL 库以及启用 PyTorch 分布式库来配置。</p>
+<p>在这里，我们注意到我们有一个位于 <code class="language-plaintext highlighter-rouge">torch/lib/</code> 目录下的 shell 脚本 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 。这个脚本可以通过我们是否在启用了 CUDA、启用了 NCCL 库以及启用了 PyTorch 分布式库的系统上来进行配置。</p>
 
-<p>让我们看看 <code class="language-plaintext highlighter-rouge">torch/lib</code> 目录：</p>
+<p>让我们来查看 <code class="language-plaintext highlighter-rouge">torch/lib</code> ：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls
 </span>build_all.sh  libshm  nccl  README.md  TH  THC  THCS  THCUNN  THD  THNN  THPP  THS
 </code></pre></div></div>
 
-<p>在这里，我们可以看到所有后端库的目录。 <code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THC</code>、<code class="language-plaintext highlighter-rouge">THNN</code>、<code class="language-plaintext highlighter-rouge">THCUNN</code> 和 <code class="language-plaintext highlighter-rouge">nccl</code> 是与例如 <a href="https://github.com/torch/torch7/tree/master/lib/TH">github.com/torch</a> 中的库同步的 <a href="https://developer.atlassian.com/blog/2015/05/the-power-of-git-subtree/">git 子树 </a>。 <code class="language-plaintext highlighter-rouge">THS</code>、<code class="language-plaintext highlighter-rouge">THCS</code>、<code class="language-plaintext highlighter-rouge">THD</code>、<code class="language-plaintext highlighter-rouge">THPP</code> 和 <code class="language-plaintext highlighter-rouge">libshm</code> 是特定于 PyTorch 的库。所有库都包含 <code class="language-plaintext highlighter-rouge">CMakeLists.txt</code> 文件——表明它们是用 CMake 构建的。</p>
+<p>这里我们可以看到所有后端库的目录。 <code class="language-plaintext highlighter-rouge">TH</code> 、 <code class="language-plaintext highlighter-rouge">THC</code> 、 <code class="language-plaintext highlighter-rouge">THNN</code> 、 <code class="language-plaintext highlighter-rouge">THCUNN</code> 和 <code class="language-plaintext highlighter-rouge">nccl</code> 是与 e.g. github.com/torch 中的库同步的 git 子树。 <code class="language-plaintext highlighter-rouge">THS</code> 、 <code class="language-plaintext highlighter-rouge">THCS</code> 、 <code class="language-plaintext highlighter-rouge">THD</code> 、 <code class="language-plaintext highlighter-rouge">THPP</code> 和 <code class="language-plaintext highlighter-rouge">libshm</code> 是针对 PyTorch 的特定库。所有库都包含 <code class="language-plaintext highlighter-rouge">CMakeLists.txt</code> ，表示它们是用 CMake 构建的。</p>
 
-<p>《build_all.sh》脚本本质上是一个在所有这些库上运行 CMake 配置步骤的脚本，然后执行 <code class="language-plaintext highlighter-rouge">make install</code>。让我们运行 <code class="language-plaintext highlighter-rouge">./build_all.sh</code> 看看我们留下了什么：</p>
+<p> <code class="language-plaintext highlighter-rouge">build_all.sh</code> 实质上是一个脚本，它会运行所有这些库的 CMake 配置步骤，然后 <code class="language-plaintext highlighter-rouge">make install</code> 。让我们运行 <code class="language-plaintext highlighter-rouge">./build_all.sh</code> 看看我们剩下什么：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span>./build_all.sh <span class="nt">--with-cuda</span> <span class="nt">--with-nccl</span> <span class="nt">--with-distributed</span>
 <span class="o">[</span>various CMake output logs]
@@ -447,12 +455,12 @@ include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1
 
 <ul>
   <li>每个库的共享库文件</li>
-  <li><code class="language-plaintext highlighter-rouge">THNN</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN</code> 的头文件</li>
-  <li><code class="language-plaintext highlighter-rouge">build</code> 和 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录</li>
-  <li><code class="language-plaintext highlighter-rouge">torch_shm_manager</code> 可执行文件</li>
+  <li> <code class="language-plaintext highlighter-rouge">THNN</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN</code> 的标题</li>
+  <li> <code class="language-plaintext highlighter-rouge">build</code> 和 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录</li>
+  <li> <code class="language-plaintext highlighter-rouge">torch_shm_manager</code> 可执行文件</li>
 </ul>
 
-<p>让我们进一步探索。在 shell 脚本中，我们创建 <code class="language-plaintext highlighter-rouge">build</code> 目录并为每个库创建一个构建子目录：</p>
+<p>让我们进一步探索。在 shell 脚本中，我们创建 <code class="language-plaintext highlighter-rouge">build</code> 目录并为每个库构建子目录：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># We create a build directory for the library, which will</span>
 <span class="c"># contain the cmake output. $1 is the library to be built</span>
@@ -460,17 +468,17 @@ include     libnccl.so.1  libTHC.so.1   libTHCUNN.so.1  libTHNN.so.1  libTH.so.1
   <span class="nb">cd </span>build/<span class="nv">$1</span>
 </code></pre></div></div>
 
-<p>因此例如 <code class="language-plaintext highlighter-rouge">build/TH</code> 包含 TH 的 CMake 配置输出，包括构建 TH 的 <code class="language-plaintext highlighter-rouge">Makefile</code>，以及在此目录中运行 make install 的结果。</p>
+<p>例如， <code class="language-plaintext highlighter-rouge">build/TH</code> 包含了 CMake 配置输出，包括用于构建 TH 的 <code class="language-plaintext highlighter-rouge">Makefile</code> ，以及在此目录下运行 make install 的结果。</p>
 
-<p>让我们也看看 <code class="language-plaintext highlighter-rouge">tmp_install</code>:</p>
+<p>让我们再看看 <code class="language-plaintext highlighter-rouge">tmp_install</code> ：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:lib <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls </span>tmp_install/
 bin  include  lib  share
 </code></pre></div></div>
 
-<p><code class="language-plaintext highlighter-rouge">tmp_install</code> 看起来是一个标准的安装目录，包含二进制文件、头文件和库文件。例如，<code class="language-plaintext highlighter-rouge">tmp_install/include/TH</code> 包含所有的 <code class="language-plaintext highlighter-rouge">TH</code> 头文件，而 <code class="language-plaintext highlighter-rouge">tmp_install/lib/</code> 包含 <code class="language-plaintext highlighter-rouge">libTH.so.1</code> 文件。</p>
+<p> <code class="language-plaintext highlighter-rouge">tmp_install</code> 看起来是一个标准的安装目录，包含二进制文件、头文件和库文件。例如， <code class="language-plaintext highlighter-rouge">tmp_install/include/TH</code> 包含了所有 <code class="language-plaintext highlighter-rouge">TH</code> 头文件，而 <code class="language-plaintext highlighter-rouge">tmp_install/lib/</code> 包含了 <code class="language-plaintext highlighter-rouge">libTH.so.1</code> 文件。</p>
 
-<p>那么为什么有这个目录呢？它是用来编译相互依赖的库的。例如，<code class="language-plaintext highlighter-rouge">THC</code> 库依赖于 <code class="language-plaintext highlighter-rouge">TH</code> 库及其头文件。这在构建 shell 脚本中作为 <code class="language-plaintext highlighter-rouge">cmake</code> 命令的参数被引用：</p>
+<p>那为什么有这个目录呢？它是用来编译相互依赖的库的。例如， <code class="language-plaintext highlighter-rouge">THC</code> 库依赖于 <code class="language-plaintext highlighter-rouge">TH</code> 库及其头文件。这在构建 shell 脚本中作为 <code class="language-plaintext highlighter-rouge">cmake</code> 命令的参数被引用：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># install_dir is tmp_install</span>
 cmake ...
@@ -485,7 +493,7 @@ cmake ...
 	libTH.so.1 <span class="o">=&gt;</span> /home/killeent/github/pytorch/torch/lib/tmp_install/lib/./libTH.so.1 <span class="o">(</span>0x00007f84478b7000<span class="o">)</span>
 </code></pre></div></div>
 
-<p>build_all.sh 脚本指定包含和库路径的方式有点杂乱，但这代表了整体思路。最后，在脚本末尾：</p>
+<p> <code class="language-plaintext highlighter-rouge">build_all.sh</code> 指定包含和库路径的方式有点杂乱，但这代表了整体思路。最后，在脚本末尾：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># If all the builds succeed we copy the libraries, headers,</span>
 <span class="c"># binaries to torch/lib</span>
@@ -496,27 +504,27 @@ cmake ...
 <span class="nb">cp</span> <span class="nv">$INSTALL_DIR</span>/bin/<span class="k">*</span> <span class="nb">.</span>
 </code></pre></div></div>
 
-<p>如我们所见，在末尾，我们将所有内容复制到顶级目录 torch/lib - 解释了我们上面看到的内容。我们将在下一部分看到这样做的原因：</p>
+<p>如我们所见，最后我们将所有内容复制到顶级 <code class="language-plaintext highlighter-rouge">torch/lib</code> 目录中——解释了我们上面看到的内容。我们将在下一节中看到我们为什么要这样做：</p>
 
 <h3 id="nn-wrappers">神经网络包装器</h3>
 
-<p>简单来说，让我们简要介绍一下 build_deps 命令的最后部分：generate_nn_wrappers()。我们使用 PyTorch 的自定义 cwrap 工具绑定到后端库，这在之前的文章中已经提到过。对于绑定 TH 和 THC，我们手动为每个函数编写 YAML 声明。然而，由于 THNN 和 THCUNN 库的相对简单性，我们自动生成 cwrap 声明和生成的 C++ 代码。</p>
+<p>简要来说，让我们谈谈 <code class="language-plaintext highlighter-rouge">build_deps</code> 命令的最后部分： <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 。我们使用 PyTorch 的自定义 <code class="language-plaintext highlighter-rouge">cwrap</code> 工具绑定到后端库，这在之前的文章中已经提到过。对于绑定 <code class="language-plaintext highlighter-rouge">TH</code> 和 <code class="language-plaintext highlighter-rouge">THC</code> ，我们手动编写每个函数的 YAML 声明。然而，由于 <code class="language-plaintext highlighter-rouge">THNN</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN</code> 库相对简单，我们自动生成 cwrap 声明和生成的 C++ 代码。</p>
 
 <p>我们将 <code class="language-plaintext highlighter-rouge">THNN.h</code> 和 <code class="language-plaintext highlighter-rouge">THCUNN.h</code> 头文件复制到 <code class="language-plaintext highlighter-rouge">torch/lib</code> 的原因是因为这是 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 代码期望这些文件所在的位置。 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 做了几件事情：</p>
 
 <ol>
-  <li>解析头文件，生成 cwrap YAML 声明，并将它们写入输出 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件</li>
-  <li>使用适当的插件调用 <code class="language-plaintext highlighter-rouge">cwrap</code>，针对这些 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件生成每个的源代码</li>
-  <li>再次解析头文件 <em> 第二次 </em> 以生成 <code class="language-plaintext highlighter-rouge">THNN_generic.h</code> - 这是一个库，它接受 <code class="language-plaintext highlighter-rouge">THPP</code> Tensors，PyTorch 的“通用”C++ Tensor 库，并根据 Tensor 的动态类型调用适当的 <code class="language-plaintext highlighter-rouge">THNN</code>/<code class="language-plaintext highlighter-rouge">THCUNN</code> 库函数</li>
+  <li>解析头文件，生成 cwrap YAML 声明并将它们写入输出 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件</li>
+  <li>调用 <code class="language-plaintext highlighter-rouge">cwrap</code> ，使用适当的插件处理这些 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件以生成每个文件的源代码</li>
+  <li>再次解析头部以生成 <code class="language-plaintext highlighter-rouge">THNN_generic.h</code> - 一个库，它接受 <code class="language-plaintext highlighter-rouge">THPP</code> Tensors，PyTorch 的“通用”C++ Tensor 库，并根据 Tensor 的动态类型调用相应的 <code class="language-plaintext highlighter-rouge">THNN</code> / <code class="language-plaintext highlighter-rouge">THCUNN</code> 库函数</li>
 </ol>
 
-<p>在运行 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 后，如果我们查看 <code class="language-plaintext highlighter-rouge">torch/csrc/nn</code>，我们可以看到输出：</p>
+<p>如果我们在运行 <code class="language-plaintext highlighter-rouge">generate_nn_wrappers()</code> 后查看 <code class="language-plaintext highlighter-rouge">torch/csrc/nn</code> ，我们可以看到输出：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:nn <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls
 </span>THCUNN.cpp  THCUNN.cwrap  THNN.cpp  THNN.cwrap  THNN_generic.cpp  THNN_generic.cwrap  THNN_generic.h  THNN_generic.inc.h
 </code></pre></div></div>
 
-<p>例如，代码生成类似 cwrap 的代码：</p>
+<p>例如，代码生成 cwrap 如下：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[[
   name: FloatBatchNormalization_updateOutput
@@ -565,41 +573,41 @@ cmake ...
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>在生成的 <code class="language-plaintext highlighter-rouge">THPP</code> 代码中，函数看起来是这样的：</p>
+<p>在 <code class="language-plaintext highlighter-rouge">THPP</code> 生成的代码中，函数看起来是这样的：</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">BatchNormalization_updateOutput</span><span class="p">(</span><span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">input</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">output</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">weight</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">bias</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">running_mean</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">running_var</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">save_mean</span><span class="p">,</span> <span class="n">thpp</span><span class="o">::</span><span class="n">Tensor</span><span class="o">*</span> <span class="n">save_std</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">train</span><span class="p">,</span> <span class="kt">double</span> <span class="n">momentum</span><span class="p">,</span> <span class="kt">double</span> <span class="n">eps</span><span class="p">)</span> <span class="p">{</span>
 	<span class="c1">// Call appropriate THNN function based on tensor type, whether its on CUDA, etc.</span>
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>我们稍后会详细看看这些源文件是如何被使用的。</p>
+<p>我们稍后会更详细地看看这些源文件是如何被使用的。</p>
 
 <h3 id="building-the-pure-python-modules">“构建”纯 Python 模块</h3>
 
-<p>现在我们已经构建了后端库（即“依赖项”），我们可以继续构建实际的 PyTorch 代码。接下来运行的 Setuptools 命令是 <code class="language-plaintext highlighter-rouge">build_py</code>，它用于构建我们库中的所有“纯”Python 模块。这些是传递给 <code class="language-plaintext highlighter-rouge">setup.py</code> 的“包”。</p>
+<p>现在我们已经构建了后端库（即“依赖”），我们可以继续构建实际的 PyTorch 代码。接下来运行的 Setuptools 命令是 <code class="language-plaintext highlighter-rouge">build_py</code> ，它用于构建我们库中的所有“纯”Python 模块。这些是传递给 <code class="language-plaintext highlighter-rouge">setup.py</code> 的“包”。</p>
 
-<p>使用 Setuptools 的实用函数 <code class="language-plaintext highlighter-rouge">find_packages()</code> 查找这些包：</p>
+<p>使用 Setuptools 的实用函数 <code class="language-plaintext highlighter-rouge">find_packages()</code> 找到包</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">packages</span> <span class="o">=</span> <span class="n">find_packages</span><span class="p">(</span><span class="n">exclude</span><span class="o">=</span><span class="p">(</span><span class="s">'tools.*'</span><span class="p">,))</span>
 <span class="p">[</span><span class="s">'torch'</span><span class="p">,</span> <span class="s">'torch._thnn'</span><span class="p">,</span> <span class="s">'torch.autograd'</span><span class="p">,</span> <span class="s">'torch.backends'</span><span class="p">,</span> <span class="s">'torch.cuda'</span><span class="p">,</span> <span class="s">'torch.distributed'</span><span class="p">,</span> <span class="s">'torch.legacy'</span><span class="p">,</span> <span class="s">'torch.multiprocessing'</span><span class="p">,</span> <span class="s">'torch.nn'</span><span class="p">,</span> <span class="s">'torch.optim'</span><span class="p">,</span> <span class="s">'torch.sparse'</span><span class="p">,</span> <span class="s">'torch.utils'</span><span class="p">,</span> <span class="s">'torch.autograd._functions'</span><span class="p">,</span> <span class="s">'torch.backends.cudnn'</span><span class="p">,</span> <span class="s">'torch.legacy.nn'</span><span class="p">,</span> <span class="s">'torch.legacy.optim'</span><span class="p">,</span> <span class="s">'torch.nn._functions'</span><span class="p">,</span> <span class="s">'torch.nn.backends'</span><span class="p">,</span> <span class="s">'torch.nn.modules'</span><span class="p">,</span> <span class="s">'torch.nn.parallel'</span><span class="p">,</span> <span class="s">'torch.nn.utils'</span><span class="p">,</span> <span class="s">'torch.nn._functions.thnn'</span><span class="p">,</span> <span class="s">'torch.utils.data'</span><span class="p">,</span> <span class="s">'torch.utils.ffi'</span><span class="p">,</span> <span class="s">'torch.utils.serialization'</span><span class="p">,</span> <span class="s">'torch.utils.trainer'</span><span class="p">,</span> <span class="s">'torch.utils.backcompat'</span><span class="p">,</span> <span class="s">'torch.utils.trainer.plugins'</span><span class="p">]</span>
 </code></pre></div></div>
 
-<p>如我们所见，<code class="language-plaintext highlighter-rouge">find_package</code> 已递归遍历了 <code class="language-plaintext highlighter-rouge">torch</code> 目录，找到了所有包含 <code class="language-plaintext highlighter-rouge">__init__.py</code> 文件的目录路径。</p>
+<p>如我们所见， <code class="language-plaintext highlighter-rouge">find_package</code> 已递归遍历 <code class="language-plaintext highlighter-rouge">torch</code> 目录，找到所有包含 <code class="language-plaintext highlighter-rouge">__init__.py</code> 文件的目录路径。</p>
 
-<p>当使用 Setuptools 构建时，该工具会在发行根目录中创建一个 <code class="language-plaintext highlighter-rouge">build</code> 目录，即与 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件相同的目录。由于 PyTorch 由“纯”Python 模块和扩展模块组成，我们需要保留构建时使用的操作系统和 Python 版本信息。因此，如果我们查看我的 <code class="language-plaintext highlighter-rouge">build</code> 目录，我们会看到：</p>
+<p>使用 Setuptools 构建时，工具会在分发根目录中创建一个 <code class="language-plaintext highlighter-rouge">build</code> 目录，即与 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件相同的目录。由于 PyTorch 由“纯”Python 模块和扩展模块组成，我们需要保留构建时使用的操作系统和 Python 版本信息。因此，如果我们查看我的 <code class="language-plaintext highlighter-rouge">build</code> 目录，我们会看到：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls </span>build
 lib.linux-x86_64-3.6  temp.linux-x86_64-3.6
 </code></pre></div></div>
 
-<p>这表明我使用 Python 3.6 在 <code class="language-plaintext highlighter-rouge">linux-x86-64</code> 上构建了项目。lib 目录包含库文件，而 temp 目录包含在构建过程中生成的文件，这些文件在最终安装中不需要。</p>
+<p>这表明我使用 Python 3.6 构建了该项目。lib 目录包含库文件，而 temp 目录包含在最终安装中不需要的构建过程中生成的文件。</p>
 
-<p>由于“纯”Python 模块只是 Python 代码，不需要“编译”，所以 <code class="language-plaintext highlighter-rouge">build_py</code> 过程只是将 <code class="language-plaintext highlighter-rouge">find_packages</code> 找到的文件从其位置复制到 <code class="language-plaintext highlighter-rouge">build/</code> 中的等效位置。因此，我们的构建输出中充满了类似以下行：</p>
+<p>因为“纯”Python 模块只是 Python 代码，不需要“编译”，所以 <code class="language-plaintext highlighter-rouge">build_py</code> 过程只是将文件从 <code class="language-plaintext highlighter-rouge">find_packages</code> 找到的位置复制到 <code class="language-plaintext highlighter-rouge">build/</code> 的等效位置。因此，我们的构建输出中充满了类似以下内容的行：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>copying torch/autograd/_functions/blas.py -&gt; build/lib.linux-x86_64-3.6/torch/autograd/_functions
 </code></pre></div></div>
 
-<p>我们之前也提到过，可以将文件和目录传递给主 <code class="language-plaintext highlighter-rouge">setup()</code> 函数的 <code class="language-plaintext highlighter-rouge">package_data</code> 关键字参数，并且 Setuptools 会处理将这些文件复制到安装位置。在 <code class="language-plaintext highlighter-rouge">build_py</code> 过程中，这些文件会被复制到 <code class="language-plaintext highlighter-rouge">build/</code> 目录，所以我们也会看到类似以下这样的行：</p>
+<p>我们之前也注意到，我们可以将文件和目录传递给 <code class="language-plaintext highlighter-rouge">setup()</code> 主函数的 <code class="language-plaintext highlighter-rouge">package_data</code> 关键字参数，并且 Setuptools 会处理将这些文件复制到安装位置。在 <code class="language-plaintext highlighter-rouge">build_py</code> 过程中，这些文件被复制到 <code class="language-plaintext highlighter-rouge">build/</code> 目录，所以我们也会看到类似以下内容的行：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>copying torch/lib/libTH.so.1 -&gt; build/lib.linux-x86_64-3.6/torch/lib
 ...
@@ -608,7 +616,7 @@ copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3
 
 <h3 id="building-the-extension-modules">构建扩展模块</h3>
 
-<p>最后，我们需要构建扩展模块，即使用 CPython 后端编写的 PyTorch 模块。这也构成了 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的大部分代码逻辑。我们重写的 <code class="language-plaintext highlighter-rouge">build_ext</code> 命令在扩展模块实际构建之前有一些特殊的逻辑：</p>
+<p>最后，我们需要构建扩展模块，即使用 CPython 后端编写的 PyTorch 模块。这也构成了 <code class="language-plaintext highlighter-rouge">setup.py</code> 中的大部分代码逻辑。我们重写的 <code class="language-plaintext highlighter-rouge">build_ext</code> 命令在扩展模块实际构建之前有一些特殊逻辑：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">tools.cwrap</span> <span class="kn">import</span> <span class="n">cwrap</span>
 <span class="kn">from</span> <span class="nn">tools.cwrap.plugins.THPPlugin</span> <span class="kn">import</span> <span class="n">THPPlugin</span>
@@ -633,7 +641,7 @@ copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3
         <span class="p">])</span>
 </code></pre></div></div>
 
-<p>回想一下，我之前记录了我们自动生成用于调用 <code class="language-plaintext highlighter-rouge">THNN</code> 等库的 C++ 代码。这里我们绑定了 <code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THC</code> 和 <code class="language-plaintext highlighter-rouge">CuDNN</code>。我们使用 <code class="language-plaintext highlighter-rouge">TensorMethods.cwrap</code> 中的 YAML 声明，并使用它们生成包含在 PyTorch C++ 生态系统内运行的实现输出的 C++ 源文件。例如，一个简单的声明如下：</p>
+<p>回想一下，我记录了我们自动生成用于调用 <code class="language-plaintext highlighter-rouge">THNN</code> 等库的 C++代码。这里是我们绑定 <code class="language-plaintext highlighter-rouge">TH</code> 、 <code class="language-plaintext highlighter-rouge">THC</code> 和 <code class="language-plaintext highlighter-rouge">CuDNN</code> 的地方。我们使用 <code class="language-plaintext highlighter-rouge">TensorMethods.cwrap</code> 中的 YAML 声明，并使用它们生成包含在 PyTorch C++生态系统内运行的实现输出的 C++源文件。例如，一个简单的声明如下：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[[
   name: zero_
@@ -653,13 +661,13 @@ copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>在上一篇文章中，我们记录了这些函数与特定 Tensor 类型的关联，因此在此不再赘述。对于构建过程来说，只需知道这些 C++文件是在扩展构建之前生成的即可，因为这些源文件在扩展编译过程中会被使用。</p>
+<p>在上一篇文章中，我们记录了这些函数与特定张量类型的关联，这里不再赘述。对于构建过程来说，只需知道这些 C++文件是在扩展构建之前生成的，因为这些源文件在扩展编译过程中被使用。</p>
 
 <h3 id="specifying-the-extensions">指定扩展</h3>
 
-<p>与纯模块不同，仅仅列出模块或包并期望 Setuptools 能够找到正确的文件是不够的；您必须指定扩展名称、源文件以及任何编译/链接要求（包含目录、要链接的库等）。</p>
+<p>与纯模块不同，仅仅列出模块或包并期望 Setuptools 去寻找正确的文件是不够的；您必须指定扩展名、源文件以及任何编译/链接要求（包含目录、要链接的库等）。</p>
 
-<p>大部分（截至本文写作时约 200~LOC）的 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码用于指定如何构建这些扩展。在这里，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本中做出的某些选择开始变得有意义。例如，我们看到了我们的构建脚本指定了一个 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录，我们将后端库安装在这个目录中。在我们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中，我们在添加包含头文件的目录列表时引用了这个目录：</p>
+<p>到目前为止，大部分（200~LOC）的 <code class="language-plaintext highlighter-rouge">setup.py</code> 都用于指定如何构建这些扩展。在这里，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 中做出的某些选择开始变得有意义。例如，我们看到了我们的构建脚本指定了一个 <code class="language-plaintext highlighter-rouge">tmp_install</code> 目录，我们将后端库安装在这个目录中。在我们的 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中，我们在添加包含头文件的目录列表时引用了这个目录：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># tmp_install_path is torch/lib/tmp_install
 </span><span class="n">include_dirs</span> <span class="o">+=</span> <span class="p">[</span>
@@ -671,7 +679,7 @@ copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3
     <span class="n">tmp_install_path</span> <span class="o">+</span> <span class="s">"/include/THNN"</span><span class="p">,</span>
 </code></pre></div></div>
 
-<p>同样，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本的末尾将共享对象库复制到了 <code class="language-plaintext highlighter-rouge">torch/csrc</code>。我们在 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中直接引用这些位置来标识我们可能链接的库：</p>
+<p>同样，我们在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本的末尾将共享对象库复制到了 <code class="language-plaintext highlighter-rouge">torch/csrc</code> 。当我们识别可能链接的库时，我们在 <code class="language-plaintext highlighter-rouge">setup.py</code> 代码中直接引用了这些位置：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># lib_path is torch/lib
 </span><span class="n">TH_LIB</span> <span class="o">=</span> <span class="n">os</span><span class="p">.</span><span class="n">path</span><span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="n">lib_path</span><span class="p">,</span> <span class="s">'libTH.so.1'</span><span class="p">)</span>
@@ -696,21 +704,21 @@ copying torch/lib/include/THC/generic/THCTensor.h -&gt; build/lib.linux-x86_64-3
 </code></pre></div></div>
 
 <ul>
-  <li>主要库是我们链接的所有库。这包括像 <code class="language-plaintext highlighter-rouge">shm</code> 这样的 PyTorch 共享内存管理库，以及像 <code class="language-plaintext highlighter-rouge">cudart</code> 和 <code class="language-plaintext highlighter-rouge">cudnn</code> 这样的系统库。请注意，<em> 不</em>在此列出 <code class="language-plaintext highlighter-rouge">TH</code> 库</li>
-  <li>PyTorch 后端的主要来源是构成其 C++后端的 C++文件</li>
+  <li>主要库是我们链接的所有库。这包括像 <code class="language-plaintext highlighter-rouge">shm</code> 这样的 PyTorch 共享内存管理库，以及像 <code class="language-plaintext highlighter-rouge">cudart</code> 和 <code class="language-plaintext highlighter-rouge">cudnn</code> 这样的系统库。请注意， <code class="language-plaintext highlighter-rouge">TH</code> 库在此未列出</li>
+  <li>主要源是构成 PyTorch C++后端的 C++文件</li>
   <li>编译参数是配置编译的各种标志。例如，在调试模式下编译时，我们可能需要添加调试标志</li>
-  <li>包含头文件的目录路径称为包含目录。这也是另一个`build_all.sh`脚本很重要的例子——例如，我们会在指定的 CMake 配置的安装位置中查找`TH`头文件，即 <code class="language-plaintext highlighter-rouge">torch/lib/tmp_install/include/TH</code>  - 这是我们使用 CMake 配置指定的安装位置</li>
-  <li>链接时间搜索共享库的目录称为库目录。例如，我们包括`torch/lib` - 我们在`build_all.sh`脚本结束时将`.so`文件复制到的位置，但也包括 CUDA 和 CuDNN 目录的路径</li>
-  <li>链接参数用于将对象文件链接在一起以创建扩展。在 PyTorch 中，这包括更多<em>常规</em>选项，例如决定将 <code class="language-plaintext highlighter-rouge">libstdc++</code> 静态链接。然而，有一个关键组件：<strong> 这就是我们链接后端 TH 库的地方 </strong>。请注意，我们有如下行：</li>
+  <li>包含目录是包含头文件的目录的路径。这也是 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 脚本重要的另一个例子——例如，我们在 <code class="language-plaintext highlighter-rouge">torch/lib/tmp_install/include/TH</code> 中查找 <code class="language-plaintext highlighter-rouge">TH</code> 头文件， <code class="language-plaintext highlighter-rouge">torch/lib/tmp_install/include/TH</code> 是我们通过 CMake 配置指定的安装位置</li>
+  <li>库目录是链接时搜索共享库的目录。例如，我们包括 <code class="language-plaintext highlighter-rouge">torch/lib</code> - 在 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 结束时将我们的 <code class="language-plaintext highlighter-rouge">.so</code> 文件复制到的位置，但也包括 CUDA 和 CuDNN 目录的路径</li>
+  <li>链接参数用于将对象文件链接在一起以创建扩展。在 PyTorch 中，这包括更常见的选项，例如决定静态链接 <code class="language-plaintext highlighter-rouge">libstdc++</code> 。然而，有一个关键组件：这是我们链接后端 TH 库的地方。注意，我们有如下行：</li>
 </ul>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># The explicit paths to .so files we described above
 </span><span class="n">main_link_args</span> <span class="o">=</span> <span class="p">[</span><span class="n">TH_LIB</span><span class="p">,</span> <span class="n">THS_LIB</span><span class="p">,</span> <span class="n">THPP_LIB</span><span class="p">,</span> <span class="n">THNN_LIB</span><span class="p">]</span>
 </code></pre></div></div>
 
-<p>你可能想知道为什么我们这样做，而不是将这些库添加到传递给 <code class="language-plaintext highlighter-rouge">libraries</code> 关键字参数的列表中。毕竟，那是一个要链接的库列表。问题是 Lua Torch 的安装通常设置 <code class="language-plaintext highlighter-rouge">LD_LIBRARY_PATH</code> 变量，因此我们可能会错误地链接到为 Lua Torch 构建的 <code class="language-plaintext highlighter-rouge">TH</code> 库，而不是我们本地构建的库。这将是一个问题，因为代码可能已经过时，而且 Lua Torch 的 <code class="language-plaintext highlighter-rouge">TH</code> 有各种配置选项，这些选项与 PyTorch 不太兼容。</p>
+<p>你可能想知道为什么我们这样做而不是将这些库添加到传递给 <code class="language-plaintext highlighter-rouge">libraries</code> 关键字参数的列表中。毕竟，那是一个要链接的库列表。问题是 Lua Torch 的安装通常设置 <code class="language-plaintext highlighter-rouge">LD_LIBRARY_PATH</code> 变量，因此我们可能会错误地链接到为 Lua Torch 构建的 <code class="language-plaintext highlighter-rouge">TH</code> 库，而不是我们本地构建的库。这将是一个问题，因为代码可能已经过时，而且 Lua Torch 的 <code class="language-plaintext highlighter-rouge">TH</code> 有各种配置选项，这些选项与 PyTorch 不太兼容。</p>
 
-<p>因此，我们手动指定我们直接生成的共享库的路径，并将其传递给链接器。</p>
+<p>因此，我们直接将我们生成的共享库的路径指定给链接器。</p>
 
 <p>需要其他扩展来支持 PyTorch，它们以类似的方式构建。Setuptools 库调用 C++ 编译器和链接器来构建所有这些扩展。如果构建成功，我们就成功构建了 PyTorch 库，可以继续进行安装。</p>
 
@@ -727,7 +735,7 @@ copying build/lib.linux-x86_64-3.6/torch/_thnn/_THNN.cpython-36m-x86_64-linux-gn
 copying build/lib.linux-x86_64-3.6/torch/_thnn/_THCUNN.cpython-36m-x86_64-linux-gnu.so -&gt; /home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/_thnn
 </code></pre></div></div>
 
-<p>最后让我们激活 Python 解释器。当 Python 解释器执行导入语句时，它会沿着搜索路径搜索 Python 代码和扩展模块。路径的默认值是在解释器构建时配置到 Python 二进制文件中的。</p>
+<p>最后让我们激活 Python 解释器。当 Python 解释器执行 import 语句时，它会沿着搜索路径搜索 Python 代码和扩展模块。当解释器构建时，路径的默认值被配置到 Python 二进制文件中。</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># note we are now in my home directory</span>
 <span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
@@ -739,7 +747,7 @@ Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span 
 <span class="o">[</span><span class="s1">''</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python36.zip'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/lib-dynload'</span>, <span class="s1">'/home/killeent/.local/lib/python3.6/site-packages'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages'</span>, <span class="s1">'/home/killeent/github/pytorch'</span>, <span class="s1">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/setuptools-27.2.0-py3.6.egg'</span><span class="o">]</span>
 </code></pre></div></div>
 
-<p>如我们所见，我们复制 PyTorch 安装到其中的 <code class="language-plaintext highlighter-rouge">site-packages</code> 目录是搜索路径的一部分。现在让我们加载 <code class="language-plaintext highlighter-rouge">torch</code> 模块并查看其位置：</p>
+<p>如我们所见，我们复制的 PyTorch 安装目录 <code class="language-plaintext highlighter-rouge">site-packages</code> 是搜索路径的一部分。现在让我们加载 <code class="language-plaintext highlighter-rouge">torch</code> 模块并查看其位置：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">torch</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="kn">import</span> <span class="nn">inspect</span>
@@ -747,35 +755,35 @@ Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span 
 <span class="s">'/home/killeent/local/miniconda2/envs/p3/lib/python3.6/site-packages/torch/__init__.py'</span>
 </code></pre></div></div>
 
-<p>如我们所见，我们已按预期从 <code class="language-plaintext highlighter-rouge">site_packages</code> 加载了模块——我们的构建和安装成功！</p>
+<p>如我们所见，我们已按预期从 <code class="language-plaintext highlighter-rouge">site_packages</code> 加载了模块，我们的构建和安装是成功的！</p>
 
-<p><strong>注意：</strong>Python 将空字符串添加到 <code class="language-plaintext highlighter-rouge">sys.path</code> 中，以表示当前工作目录——这使得它成为我们首先搜索模块的地方。因此，如果我们从 pytorch 目录运行 Python，我们可能会意外地加载本地版本的 PyTorch 而不是我们安装的版本。这是需要注意的一点。</p>
+<p>注意：Python 将空字符串 prepends 到 <code class="language-plaintext highlighter-rouge">sys.path</code> 以表示当前工作目录，使其成为我们首先搜索模块的地方。因此，如果我们从 pytorch 目录运行 Python，我们可能会意外地加载本地版本的 PyTorch 而不是我们安装的版本。这是需要注意的事项。</p>
 
 <h3 id="addendum---developer-efficiency-3rd-party-libraries-things-i-didnt-cover">补充说明 - 开发者效率，第三方库，我没有涉及的内容</h3>
 
-<p>PyTorch 的整个安装循环可能相当耗时。在我的开发服务器上，从源代码安装大约需要 5 分钟。在开发 PyTorch 时，我们通常只想对整个项目的一部分进行工作，并仅重新构建该部分以测试更改。幸运的是，我们的构建系统支持这样做。</p>
+<p>PyTorch 的整个安装循环可能相当耗时。在我的开发服务器上，从源代码安装大约需要 5 分钟。在开发 PyTorch 时，我们通常只想对整个项目的一部分进行工作，并仅重新构建该部分以测试更改。幸运的是，我们的构建系统支持这一点。</p>
 
 <h3 id="setuptools-develop-mode">Setuptools 开发模式</h3>
 
-<p>支持此功能的主要工具是 Setuptools 的 <code class="language-plaintext highlighter-rouge">develop</code> 命令。文档中说明：</p>
+<p>支持此功能的主要工具是 Setuptools <code class="language-plaintext highlighter-rouge">develop</code> 命令。文档中说明：</p>
 
 <blockquote>
-  <p>此命令允许您将项目的源代码部署到一个或多个“预发布区域”，在那里它将可供导入。这种部署方式使得项目源代码的更改可以立即在预发布区域中可用，无需在每次更改后运行构建或安装步骤。</p>
+  <p>此命令允许您将项目的源代码部署到一个或多个“预发布区域”，在那里它将可供导入。这种部署是以一种方式进行的，即项目源代码的更改将立即在预发布区域（s）中可用，无需在每次更改后运行构建或安装步骤。</p>
 </blockquote>
 
-<p>但它是如何工作的呢？假设我们在 PyTorch 目录下运行 <code class="language-plaintext highlighter-rouge">python setup.py build develop</code>。<code class="language-plaintext highlighter-rouge">build</code> 命令会被执行，构建我们的依赖项（<code class="language-plaintext highlighter-rouge">TH</code>、<code class="language-plaintext highlighter-rouge">THPP</code> 等）和扩展库。然而，如果我们查看 <code class="language-plaintext highlighter-rouge">site-packages</code> 目录：</p>
+<p>但是它是如何工作的呢？假设我们在 PyTorch 目录下运行 <code class="language-plaintext highlighter-rouge">python setup.py build develop</code> 。 <code class="language-plaintext highlighter-rouge">build</code> 命令会被执行，构建我们的依赖（ <code class="language-plaintext highlighter-rouge">TH</code> 、 <code class="language-plaintext highlighter-rouge">THPP</code> 等）和扩展库。然而，如果我们查看 <code class="language-plaintext highlighter-rouge">site-packages</code> ：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:site-packages<span class="nv">$ </span><span class="nb">ls</span> <span class="nt">-la</span> torch<span class="k">*</span>
 <span class="nt">-rw-r--r--</span><span class="nb">.</span> 1 killeent <span class="nb">users </span>31 Jun 27 08:02 torch.egg-link
 </code></pre></div></div>
 
-<p>查看文件 <code class="language-plaintext highlighter-rouge">torch.egg-link</code> 的内容，它仅仅引用了 PyTorch 目录：</p>
+<p>查看 <code class="language-plaintext highlighter-rouge">torch.egg-link</code> 文件的目录内容，它只是简单地引用了 PyTorch 目录：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:site-packages<span class="nv">$ </span><span class="nb">cat </span>torch.egg-link
 /home/killeent/github/pytorch
 </code></pre></div></div>
 
-<p>如果我们回到 PyTorch 目录，我们会看到一个新目录 <code class="language-plaintext highlighter-rouge">torch.egg-info</code>：</p>
+<p>如果我们回到 PyTorch 目录，我们会看到一个新目录 <code class="language-plaintext highlighter-rouge">torch.egg-info</code> ：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">ls</span> <span class="nt">-la</span> torch.egg-info/
 total 28
@@ -788,13 +796,13 @@ drwxr-xr-x. 10 killeent <span class="nb">users  </span>4096 Jun 27 08:01 ..
 <span class="nt">-rw-r--r--</span><span class="nb">.</span>  1 killeent <span class="nb">users    </span>12 Jun 27 08:01 top_level.txt
 </code></pre></div></div>
 
-<p>该文件包含 PyTorch 项目的元数据。例如，<code class="language-plaintext highlighter-rouge">requirements.txt</code> 列出了设置 PyTorch 所需的所有依赖项：</p>
+<p>此文件包含关于 PyTorch 项目的元数据。例如， <code class="language-plaintext highlighter-rouge">requirements.txt</code> 列出了设置 PyTorch 所需的所有依赖项：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:pytorch <span class="o">(</span>master<span class="o">)</span><span class="nv">$ </span><span class="nb">cat </span>torch.egg-info/requires.txt
 pyyaml
 </code></pre></div></div>
 
-<p>不深入细节，<code class="language-plaintext highlighter-rouge">develop</code> 允许我们将 PyTorch 仓库本身基本上当作 <code class="language-plaintext highlighter-rouge">site-packages</code> 来处理，这样我们就可以导入模块，它就会自动工作：</p>
+<p>不深入细节， <code class="language-plaintext highlighter-rouge">develop</code> 允许我们将 PyTorch 仓库本身基本上视为在 <code class="language-plaintext highlighter-rouge">site-packages</code> 中，这样我们就可以导入模块，它就会正常工作：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
 Python 3.6.1 |Continuum Analytics, Inc.| <span class="o">(</span>default, Mar 22 2017, 19:54:23<span class="o">)</span>
@@ -808,15 +816,15 @@ Type <span class="s2">"help"</span>, <span class="s2">"copyright"</span>, <span 
 <p>因此，以下后果成立：</p>
 
 <ul>
-  <li>如果我们更改 Python 源文件，更改将自动被选中，我们不需要运行任何命令来让 Python 解释器 <em> 看到 </em> 这个更改</li>
+  <li>如果我们更改 Python 源文件，更改将自动被拾取，我们不需要运行任何命令让 Python 解释器看到这个更改</li>
   <li>如果我们在扩展库中的一个 C++ 源文件中进行更改，我们可以重新运行 <code class="language-plaintext highlighter-rouge">develop</code> 命令，它将重新构建扩展</li>
 </ul>
 
-<p>因此我们可以无缝地开发 PyTorch 代码库，并以简单的方式测试我们的更改。</p>
+<p>我们可以无缝地开发 PyTorch 代码库，并以简单的方式测试我们的更改。</p>
 
 <h4 id="working-on-the-dependency-libraries">在依赖库上工作</h4>
 
-<p>如果我们在处理依赖项（例如 <code class="language-plaintext highlighter-rouge">TH</code>，<code class="language-plaintext highlighter-rouge">THPP</code> 等），我们可以通过直接运行 <code class="language-plaintext highlighter-rouge">build_deps</code> 命令来更快地重新构建我们的更改。这将自动调用 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 来重新构建我们的库，并适当地复制生成的库。如果我们使用 Setuptools <code class="language-plaintext highlighter-rouge">develop</code> 模式，我们将使用 PyTorch 目录中构建的本地扩展库。因为我们已经指定了编译扩展库时的共享库路径，所以更改将被自动拾取：</p>
+<p>如果我们在处理依赖项（例如 <code class="language-plaintext highlighter-rouge">TH</code> ， <code class="language-plaintext highlighter-rouge">THPP</code> 等），我们可以通过直接运行 <code class="language-plaintext highlighter-rouge">build_deps</code> 命令来更快地重新构建我们的更改。这将自动调用 <code class="language-plaintext highlighter-rouge">build_all.sh</code> 来重新构建我们的库，并适当地复制生成的库。如果我们使用 Setuptools <code class="language-plaintext highlighter-rouge">develop</code> 模式，我们将使用 PyTorch 目录中内置的本地扩展库。因为我们已经指定了编译扩展库时的共享库路径，所以更改将被自动拾取：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># we are using the local extension</span>
 <span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:~<span class="nv">$ </span>python
@@ -834,17 +842,17 @@ libTH.so.1 <span class="o">=&gt;</span> /home/killeent/github/pytorch/torch/lib/
 <span class="c"># ...</span>
 </code></pre></div></div>
 
-<p>因此，我们可以在这里测试任何更改，而无需进行完整的重新构建。</p>
+<p>因此，我们可以在这里测试任何更改，而无需进行完整的重建。</p>
 
 <h4 id="3rd-party-libraries">第三方库</h4>
 
-<p>PyTorch 依赖于一些第三方库。通常使用这些库的机制是通过 Anaconda 安装，然后链接它们。例如，我们可以通过以下方式使用 <code class="language-plaintext highlighter-rouge">mkl</code> 库与 PyTorch 链接：</p>
+<p>PyTorch 依赖于一些第三方库。通常使用这些库的机制是通过 Anaconda 安装，然后链接它们。例如，我们可以通过以下方式使用 <code class="language-plaintext highlighter-rouge">mkl</code> 库与 PyTorch：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># installed to miniconda2/envs/p3/lib/libmkl_intel_lp64.so</span>
 conda <span class="nb">install </span>mkl
 </code></pre></div></div>
 
-<p>然后，只要我们在我们的 <code class="language-plaintext highlighter-rouge">lib</code> 目录路径上，就可以在编译时成功找到这个库：</p>
+<p>然后只要我们在我们的 <code class="language-plaintext highlighter-rouge">$CMAKE_PREFIX_PATH</code> 上有这个 <code class="language-plaintext highlighter-rouge">lib</code> 目录的路径，编译时就能成功找到这个库：</p>
 
 <div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># in the site-packages dir</span>
 <span class="o">(</span>p3<span class="o">)</span> killeent@devgpu047:torch<span class="nv">$ </span>ldd _C.cpython-36m-x86_64-linux-gnu.so
@@ -856,7 +864,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
 <h3 id="not-covered-but-also-relevant">未涵盖，但也很相关</h3>
 
 <ul>
-  <li>如何使用 <code class="language-plaintext highlighter-rouge">ccache</code> 加速构建时间</li>
+  <li>如何使用 <code class="language-plaintext highlighter-rouge">ccache</code> 来加速构建时间</li>
   <li>PyTorch 的顶级 <code class="language-plaintext highlighter-rouge">__init__.py</code> 文件如何处理初始模块导入以及整合所有各种模块和扩展库</li>
   <li>CMake 构建系统，如何使用 CMake 配置和构建后端库</li>
 </ul>
@@ -875,14 +883,14 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -899,7 +907,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -912,7 +920,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -920,7 +928,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -949,9 +957,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -961,7 +967,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -983,22 +989,22 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1025,17 +1031,17 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1070,7 +1076,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1084,7 +1090,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1152,7 +1158,7 @@ libmkl_intel_lp64.so <span class="o">=&gt;</span> /home/killeent/local/miniconda
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

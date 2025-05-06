@@ -119,8 +119,8 @@ cat train.src train.tgt |
   sort -k1,1bnr -k2 |
   head -n " $((vocab_size="" -="" 4))"="" |="" awk="" '{="" print="" $2="" "="" $1="" }'="" &gt;="" dict.pg.txt="" python3="" -c="" "[print('&lt;unk-{}&gt;="" 0'.format(n))="" for="" n="" in="" range($position_markers)]"="" &gt;&gt;="" this="" will="" create="" a="" file="" “dict.pg.txt”="" that="" contains="" the="" &lt;vocab_size&gt;="" most="" frequent="" words="" followed="" by="" 512="" position="" markers="" named="" from="" “&lt;unk-0&gt;”="" to="" “&lt;unk-511&gt;”.="" case="" we="" have="" an="" input="" like="" src="Hello, I'm The Dogtor" it="" could="" happen="" our="" model="" has="" been="" trained="" without="" word="" “dogtor”="" its="" vocabulary.="" therefore,="" when="" feed="" sequence="" into="" model,="" should="" be="" converted="" to:="" now,="" “&lt;unk-3&gt;”="" is="" part="" of="" vocabulary="" and="" predicted="" (this="" where="" pointer-generator="" comes="" in).="" such="" case,="" only="" need="" post-process="" output="" replace="" at="" 3.="" 2.="" preprocess="" text="" data="" unknown="" positional="" markers:="" can="" use="" scripts="" https:="" github.com="" pytorch="" fairseq="" tree="" master="" examples="" pointer_generator.="" #="" considering="" in:="" train_src="/path/to/train.src" train_tgt="/path/to/train.tgt" valid_src="/path/to/valid.src" valid_tgt="/path/to/valid.tgt" .="" preprocess.py="" --source="" path="" train.src="" \="" --target="" train.tgt="" --vocab="" &lt;(cut="" -d'="" '="" -f1="" dict.pg.txt)="" --source-out="" train.pg.src="" --target-out="" train.pg.tgt="" valid.src="" valid.tgt="" valid.pg.src="" valid.pg.tgt="" test.src="" test.pg.src="" now="" let’s="" binarize="" data,="" so="" processed="" faster:="" fairseq-preprocess="" --task="" "translation"="" --source-lang="" "pg.src"="" --target-lang="" "pg.tgt"="" --trainpref="" train="" --validpref="" valid="" --srcdict="" --cpu="" --joined-dictionary="" --destdir="" &lt;data_dir&gt;="" you="" might="" notice="" type="" task="" “translation”.="" because="" there="" no="" “summarization”="" available;="" understand="" as="" kind="" nmt="" languages="" are="" shared="" (summary)="" shorter="" than="" input.="" 4.="" model:="" fairseq-train="" --save-dir="" &lt;model_dir&gt;="" "src"="" "tgt"="" --arch="" "transformer_pointer_generator"="" --max-source-positions="" --max-target-positions="" 128="" --truncate-source="" --max-tokens="" 2048="" --required-batch-size-multiple="" 1="" --required-seq-len-multiple="" 8="" --share-all-embeddings="" --dropout="" 0.1="" --criterion="" "cross_entropy"="" --optimizer="" adam="" --adam-betas="" '(0.9,="" 0.98)'="" --adam-eps="" 1e-9="" --update-freq="" 4="" --lr="" 0.004="" pointer="" generator="" --alignment-layer="" -1="" --alignment-heads="" --source-position-markers="" configuration="" makes="" features="" nuance="" contributed="" back="" fairseq:="" transformer="" with="" mechanism="" facilitate="" copying="" length="" padded="" multiple="" better="" tensor="" cores="" reduce="" training="" time.="" 5.="" take="" look="" how="" generate="" summary="" new="" medical="" report="" generation="" system:="" import="" torch="" examples.pointer_generator.pointer_generator_src.transformer_pg="" transformerpointergeneratormodel="" patient-doctor="" conversation="" "she="" severe="" right="" wrist="" pain"="" load="" model_name_or_path="<model_dir>," checkpoint_file="checkpoint_best.pt" )="" result="model.translate([input]," beam="2)" print(result[0])="" ms.="" &lt;unk-2&gt;="" 36-year-old="" female="" who="" presents="" clinic="" today="" evaluation="" her="" wrist.="" 6.="" alternatively,="" fairseq-interactive="" postprocessing="" tool="" substitute="" tokens="" input:="" --batch-size="" &lt;batch_size&gt;="" translation="" tgt="" --path="" checkpoint_last.pt="" --input="" --buffer-size="" 20="" --max-len-a="" 0="" --max-len-b="" --beam="" 2="" --skip-invalid-size-inputs-valid-test="" tee="" generate.out="" grep="" "^h-"="" cut="" -f="" 3-="" generate.hyp="" postprocess.py="" &lt;(awk="" 'nf&lt;512'="" test.pg.src)="" generate.hyp.processed="" final="" set="" reports="" “generate.hyp.processed”,="" “&lt;unk-n&gt;”="" replaced="" original="" sequence.="" deployment="" offers="" great="" flexibility="" modeling="" rich="" surrounding="" ecosystem.="" however,="" while="" several="" recent="" articles="" suggested="" research="" academia="" may="" close="" surpassing="" tensorflow,="" seems="" overall="" sense="" tensorflow="" being="" preferred="" platform="" production.="" still="" 2021?="" teams="" looking="" serve="" their="" models="" production="" few="" options.="" before="" describing="" journey,="" brief="" detour="" define="" term="" model.="" computation="" graphs="" years="" back,="" was="" common="" machine="" learning="" toolkits="" support="" particular="" classes="" rather="" fixed="" rigid="" structure,="" degrees="" freedom="" (like="" kernel="" vector="" or="" number="" hidden="" layers="" neural="" network).="" inspired="" foundational="" work="" theano,="" microsoft’s="" cntk="" google’s="" were="" among="" first="" popularize="" more="" flexible="" view="" on="" models,="" associated="" parameters="" estimated="" data.="" blurred="" boundaries="" between="" popular="" types="" (such="" dnns="" svms),="" became="" easy="" blend="" characteristics="" each="" your="" graph.="" still,="" graph="" had="" defined="" upfront="" estimating="" parameters,="" pretty="" static.="" made="" save="" self-contained="" bundle,="" savedmodel="" bundle="" simply="" structure="" graph,="" well="" concrete="" values="" parameters).="" debugging="" difficult="" statements="" python="" code="" build="" logically="" separate="" lines="" execute="" it.="" researchers="" also="" long="" easier="" ways="" expressing="" dynamic="" behavior,="" steps="" forward="" pass="" conditionally="" dependent="" (or="" previous="" output).="" recently,="" above="" limitations="" led="" second="" revolution="" spearheaded="" longer="" explicitly.="" instead,="" populated="" implicitly="" executes="" operations="" arguments.="" essential="" technique="" powers="" development="" automatic="" differentiation.="" built="" executing="" pass,="" all="" necessary="" tracked="" later="" gradient="" concerning="" parameters.="" allows="" but="" raises="" important="" question.="" if="" happening="" inside="" through="" code’s="" what="" want="" model?="" answer="" –="" least="" initially="" dependencies,="" along="" undesirable="" practical="" reasons.="" instance,="" danger="" team="" working="" does="" not="" exactly="" reproduce="" dependencies="" used="" during="" training,="" leading="" subtly="" divergent="" behavior.="" solution="" typically="" consists="" combining="" two="" techniques,="" scripting="" tracing,="" is,="" extra="" annotations="" execution="" exemplary="" allowing="" executed="" inference="" new,="" unseen="" requires="" some="" discipline="" whoever="" creates="" (arguably="" voiding="" eager="" execution),="" results="" torchscript="" format.="" remarkably="" similar.="" serving="" journey="" deploying="" reflects="" discussion.="" started="" out="" parameter="" checkpoints="" custom="" docker="" image="" exposing="" grpc="" service="" interface.="" soon="" noticed="" error-prone="" replicate="" exact="" environment="" moreover,="" approach="" prevented="" us="" leveraging="" high-performance="" frameworks="" nvidia’s="" triton,="" which="" written="" c++="" interpreter.="" stage,="" facing="" choice="" attempting="" export="" onnx="" open="" specification="" representing="" increasingly="" finds="" adoption.="" powered="" runtime="" developed="" microsoft="" (onnx="" runtime).="" able="" achieve="" performance="" acceleration="" bert-based="" using="" runtime,="" time="" one="" required="" operators="" weren’t="" yet="" supported="" onnx.="" implement="" these="" operators,="" decided="" being.="" maturing="" ecosystem="" roses?="" no,="" rockier="" expected.="" encountered="" memory="" leak="" mkl="" libraries="" directly.="" deadlocks="" trying="" threads.="" difficulties="" exporting="" formats.="" would="" out-of-the-box="" hardware="" gpus,="" they="" always="" accessed="" gpu="" device="" exported.="" excessive="" usage="" triton="" server="" found="" due="" differentiation="" accidentally="" enabled="" pass.="" keeps="" improving,="" helpful="" vibrant="" open-source="" community="" mitigate="" issues.="" go="" here?="" those="" require="" directly,="" going="" step="" worth="" pointing="" torchserve="" project="" provides="" way="" bundling="" together="" single="" servable="" archive,="" greatly="" reducing="" risk="" running="" apart.="" us,="" proven="" beneficial.="" clear="" interface="" teams,="" further="" reduces="" latency="" via="" just-in-time="" compilation="" engine.="" scaling="" large="" future="" finally,="" efficient="" cloud="" about="" just="" computing="" response="" instance="" efficiently.="" needed="" managing,="" versioning="" updating="" models.="" high-level="" scalability="" must="" achieved="" techniques="" load-balancing,="" horizontal="" vertical="" scaling.="" many="" involved,="" scale-to-zero="" quickly="" becomes="" topic="" unacceptable="" pay="" do="" any="" requests.="" providing="" functionality="" top="" low-level="" job="" orchestration="" framework.="" after="" gaining="" experience="" kubeflow,="" end,="" turn="" attention="" azure="" ml,="" similar="" integrates="" deeply="" platform,="" crucially="" rely="" parts="" technology="" stack="" already.="" begun.="" conclusion="" recognized="" “standing="" shoulders="" giants.”="" artificial="" intelligence="" scientific="" technology,="" same="" spirit="" collaboration="" originally="" fueled="" foundation="" carried="" over="" world="" software="" engineering.="" enthusiasts="" join="" companies="" worldwide="" ecosystems="" allow="" angles="" solving="" pressing="" challenges="" modern="" society.="" article,="" we’ve="" taken="" nuance’s="" dragon="" ambient="" experience,="" ai-powered,="" voice-enabled="" automatically="" documents="" patient="" care,="" healthcare="" providers’="" administrative="" burdens.="" dax="" improves="" patient-provider="" physician="" burnout,="" financial="" outcomes.="" brings="" trust,="" joy,="" humanity="" delivery="" healthcare.="" incredible="" powering="" ai="" turn,="" innovations="" space.="" reading,="" invite="" acl="" publication="" “what’s="" next”="" blog.="">
 
-  <meta property="og:image" content="http://localhost:4000/">
-  <meta name="twitter:image" content="http://localhost:4000/">
+  <meta property="og:image" content="https://maskerprc.github.io/">
+  <meta name="twitter:image" content="https://maskerprc.github.io/">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -352,7 +352,7 @@ cat train.src train.tgt |
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -360,7 +360,7 @@ cat train.src train.tgt |
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -369,27 +369,27 @@ cat train.src train.tgt |
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -400,21 +400,27 @@ cat train.src train.tgt |
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -422,18 +428,20 @@ cat train.src train.tgt |
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -444,12 +452,12 @@ cat train.src train.tgt |
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -460,28 +468,28 @@ cat train.src train.tgt |
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -495,7 +503,7 @@ cat train.src train.tgt |
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -531,7 +539,7 @@ cat train.src train.tgt |
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2022年5月12日</p>
+            <p class="featured-post">2022 年 5 月 12 日</p>
             <h1>
                 <a class="blog-title">环境临床智能：使用 PyTorch 生成医疗报告</a>
             </h1>
@@ -543,28 +551,28 @@ cat train.src train.tgt |
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">由米格尔·德尔阿瓜（Miguel Del-Agua），Nuance 公司首席研究科学家，以及杰里米·扬查里（Jeremy Jancsary），Nuance 公司高级首席研究科学家共同撰写</p>
-                    <h2 id="introduction">简介</h2>
+                    <p class="author">由米格尔·德尔阿瓜（Miguel Del-Agua）和杰里米·扬卡斯里（Jeremy Jancsary）共同撰写，米格尔·德尔阿瓜是 Nuance 的首席研究科学家，杰里米·扬卡斯里是 Nuance 的高级首席研究科学家</p>
+                    <h2 id="introduction">引言</h2>
 
-<p>完整准确的临床文档是跟踪患者护理的必要工具。它允许治疗计划在护理团队之间共享，以帮助护理连续性，并确保报销过程的透明和有效。</p>
+<p>完整准确的临床文档是跟踪患者护理的重要工具。它允许治疗计划在护理团队之间共享，以帮助护理连续性，并确保报销过程的透明和有效。</p>
 
-<p>医生负责记录患者护理。传统的临床记录方法导致了患者-医生体验不佳，与患者互动时间减少，以及工作与生活平衡的下降。医生的大量时间都花在电脑前的行政工作上。因此，患者对整体体验的满意度降低，经过多年医学学习的医生无法在其执照范围内进行实践，并且感到疲惫不堪。医生每提供一小时直接的临床面对面时间，就会在诊所日中花费近两小时的时间在电子健康记录和桌面工作上。在办公时间之外，医生每晚还要花1到2个小时的个人时间进行额外的电脑和其他文书工作。</p>
+<p>医生负责记录患者护理情况。传统的临床记录方法导致了患者与医生之间的体验不佳，与患者互动时间减少，以及工作与生活平衡的下降。医生的大量时间都花在电脑前处理行政任务。因此，患者对整体体验的满意度降低，经过多年医学学习准备的专业医生无法在其执照范围内进行最佳实践，并且感到疲惫不堪。医生每小时直接与患者面对面交流的时间，会导致在诊所当天额外花费近两小时的时间在电子健康记录和桌面工作上。在办公时间之外，医生每晚还要额外花费 1 到 2 小时的个人时间进行额外的电脑和其他文书工作。</p>
 
 <ul>
   <li><a href="https://www.medscape.com/slideshow/2020-lifestyle-burnout-6012460">42%的医生报告称有倦怠感。 —— Medscape</a></li>
-  <li><a href="https://www.aafp.org/journals/fpm/blogs/inpractice/entry/covid_burnout_survey.html#:~:text=Physician%20burnout%20was%20already%20a,5%2C000%20%E2%80%94%20practice%20in%20the%20U.S.">由于疫情，这个问题变得更加严重，现在 64%的美国医生报告有倦怠感。 - AAFP</a></li>
-  <li><a href="https://login.medscape.com/login/sso/getlogin?urlCache=aHR0cHM6Ly93d3cubWVkc2NhcGUuY29tL3NsaWRlc2hvdy8yMDIwLWxpZmVzdHlsZS1idXJub3V0LTYwMTI0NjA%3D&amp;ac=401">“过多的官僚任务，例如记录和文书工作”是导致倦怠的主要原因，计算机化程度的提高排名第四。</a> - Medscape</li>
-  <li><a href="https://www.businesswire.com/news/home/20200218005006/en/75-of-U.S.-Consumers-Wish-Their-Healthcare-Experiences-Were-More-Personalized-Redpoint-Global-Survey-Reveals">75%的美国消费者希望他们的医疗体验更加个性化，</a>- Business Wire</li>
-  <li><a href="https://www.businesswire.com/news/home/20200218005006/en/75-of-U.S.-Consumers-Wish-Their-Healthcare-Experiences-Were-More-Personalized-Redpoint-Global-Survey-Reveals">61%的患者如果与医疗保健提供者的沟通体验更加个性化，他们就会更频繁地就诊。</a> —— 商业通讯社</li>
+  <li><a href="https://www.aafp.org/journals/fpm/blogs/inpractice/entry/covid_burnout_survey.html#:~:text=Physician%20burnout%20was%20already%20a,5%2C000%20%E2%80%94%20practice%20in%20the%20U.S.">由于疫情，这个问题变得更加严重，现在 64%的美国医生报告称有倦怠感。 —— AAFP</a></li>
+  <li>“过多的官僚主义任务，例如制图和文书工作”是导致倦怠的主要原因，计算机化程度提高排名第四。- Medscape</li>
+  <li>75%的美国消费者希望他们的医疗体验更加个性化。- 商业通讯社</li>
+  <li>61%的患者表示，如果沟通体验更加个性化，他们会更频繁地访问医疗服务提供者。- 商业通讯社</li>
 </ul>
 
-<p>医师倦怠是导致医疗错误、医疗事故诉讼、人员流动和医疗服务可及性下降的主要原因之一。倦怠会导致医疗保健成本增加，整体患者满意度下降。 <a href="https://www.nejm.org/doi/full/10.1056/NEJMp2003149"> 倦怠每年给美国造成 46 亿美元的经济损失。</a></p>
+<p>医师倦怠是导致医疗错误增加、医疗事故诉讼、人员流动和医疗服务可及性下降的主要原因之一。倦怠导致医疗成本增加，整体患者满意度下降。倦怠每年给美国造成 46 亿美元的经济损失。</p>
 
-<p>我们如何才能让医疗保健的提供恢复信任、喜悦和人性？大量行政工作包括将患者数据输入电子健康记录（EHR）和创建临床文档。临床文档是根据 EHR 中的信息以及患者与提供者的交流对话创建的。</p>
+<p>我们可以做些什么来恢复医疗保健中的信任、喜悦和人性？行政工作中很大一部分是录入患者数据到电子健康记录（EHR）和创建临床文档。临床文档是从 EHR 中已有的信息以及患者与医生的交流中创建的。</p>
 
-<p>本文将展示 Nuance Dragon Ambient eXperience (DAX)——一个由人工智能驱动的、语音激活的环境临床智能解决方案，如何自动在护理点准确高效地记录患者交流，以及支持它的技术。</p>
+<p>本文将展示 Nuance Dragon Ambient eXperience (DAX)这一人工智能驱动的、语音激活的环境临床智能解决方案，如何自动、准确、高效地在护理点记录患者接触，以及支持它的技术。</p>
 
-<p>DAX 微调提升医疗服务质量和患者体验，提高医疗服务提供者的效率和满意度，并改善财务成果。它可用于所有门诊专科的办公室和远程医疗设置，包括初级和紧急护理。</p>
+<p>Nuance DAX 提升了护理质量和患者体验，增加了提供者的效率和满意度，并改善了财务结果。它可用于所有门诊专业，包括初级和紧急护理的办公室和远程医疗环境中。</p>
 
 <p align="center">
   <img src="/assets/images/nuance-dragon-ambient-experience.png" width="60%">
@@ -572,30 +580,30 @@ cat train.src train.tgt |
 
 <h2 id="natural-language-processing">自然语言处理</h2>
 
-<p>自然语言处理（NLP）是人工智能（AI）中最具挑战性的领域之一。它包含一系列算法，使计算机能够理解或生成人类使用的语言。这些算法可以处理和分析来自不同来源（声音或文本）的大量自然语言数据，以构建可以理解、分类或甚至像人类一样生成自然语言的模型。像人工智能的其他领域一样，NLP 得益于深度学习（DL）的出现，这使得模型在某些任务上能够获得与人类相当的结果。</p>
+<p>自然语言处理（NLP）是人工智能（AI）中最具挑战性的领域之一。它包含一系列算法，使计算机能够理解或生成人类使用的语言。这些算法可以处理和分析来自不同来源（无论是声音还是文本）的大量自然语言数据，以构建能够理解、分类甚至像人类一样生成自然语言模型的模型。与其他人工智能领域一样，自然语言处理得益于深度学习（DL）的出现，这使得模型在某些任务上能够获得与人类相当的结果。</p>
 
-<p>这些先进的自然语言处理技术正在医疗保健领域得到应用。在典型的医患互动中，医生通过提问和回答构建一个按时间顺序描述患者病情或症状发展的对话。医生检查患者并做出临床决策，以确定诊断和治疗方案。这次对话和电子健康记录（EHR）中的数据为医生生成临床文档，即医疗报告提供了所需信息。</p>
+<p>这些高级 NLP 技术正在应用于医疗保健领域。在典型的患者-医生互动中，医生通过提问和回答构建一个按时间顺序描述患者病情或症状发展的对话。医生检查患者并做出临床决策，以确定诊断和治疗方案。这次对话和电子健康记录（EHR）中的数据为医生生成临床文档，即医疗报告提供了所需信息。</p>
 
-<p>两个主要的自然语言处理组件在自动化临床文档创建中发挥作用。第一个组件是自动语音识别（ASR），用于将语音转换为文本。它将互动的音频记录转换为对话转录本（参见图 2）。第二个组件是自动文本摘要，它有助于从大量文本文档中生成摘要。该组件负责理解并捕捉转录对话中的细微差别和最关键的内容，最终以叙述形式、结构化形式或两者的结合形式生成报告（参见图 3）。</p>
+<p>两个主要自然语言处理组件在自动化创建临床文档中发挥着作用。第一个组件，自动语音识别（ASR），用于将语音转换为文本。它将遭遇的音频录音生成对话转录（参见图 2）。第二个组件，自动文本摘要，有助于从大量文本文档中生成摘要。该组件负责理解并捕捉转录对话中的细微差别和最基本的内容，以叙事形式、结构化形式或两者的结合形式生成最终报告（参见图 3）。</p>
 
-<p>我们将重点关注这个第二个组件，即自动文本摘要，这是一个充满挑战的难题：</p>
+<p>我们将重点关注这个第二个组件，即自动文本摘要，这是一个具有许多挑战的困难任务：</p>
 
 <ul>
-  <li>其性能与多个说话人的语音识别（噪声输入）质量相关。</li>
-  <li>输入具有对话性质，包含通俗易懂的术语。</li>
-  <li>保密健康信息（PHI）法规限制了医疗数据访问。</li>
+  <li>其性能与多个说话人的 ASR 质量（噪声输入）相关。</li>
+  <li>输入具有对话性质，包含非专业术语。</li>
+  <li>保护性健康信息（PHI）法规限制了医疗数据的访问。</li>
   <li>一个输出句子的信息可能分布在多个对话回合中。</li>
   <li>输入和输出之间没有明确的句子对齐。</li>
   <li>不同的医学专业、就诊类型和电子健康记录系统构成了一个广泛且复杂的输出空间。</li>
-  <li>医生的交流风格不同，对医疗报告的偏好也不尽相同，没有统一标准。</li>
-  <li>标准的摘要指标可能与人对质量的判断不同。</li>
+  <li>医生在开展诊疗过程中有不同的风格，对病历报告也有自己的偏好；没有统一标准。</li>
+  <li>标准的摘要度量指标可能与人类对质量的判断不同。</li>
 </ul>
 
 <p align="center">
  <img src="/assets/images/ambient_clinical_intel_fig2.png" width="60%">
 </p>
 
-<p align="center">图2：患者-医生对话记录</p>
+<p align="center">图 2：患者-医生对话记录</p>
 
 <p align="center">
  <img src="/assets/images/ambient_clinical_intel_fig3.png" width="60%">
@@ -607,7 +615,7 @@ cat train.src train.tgt |
 
 <p>PyTorch 是由 Facebook 开发的开源机器学习框架，它帮助研究人员原型化深度学习模型。Fairseq 工具包建立在 PyTorch 之上，专注于序列生成任务，如神经机器翻译（NMT）或文本摘要。Fairseq 拥有一个活跃的社区，持续提供最先进模型的参考实现。它包含许多内置组件（模型架构、模块、损失函数和优化器），并且可以通过插件轻松扩展。</p>
 
-<p>文本摘要构成了 NLP 中的一个重大挑战。我们需要能够生成文档简短版本的同时保留关键点并避免无信息内容的模型。这些挑战可以通过不同的方法来解决。1）面向训练能够以叙述形式生成摘要的模型的抽象文本摘要。2）提取方法，其中模型被训练以从输入文本中选择最重要的部分。3）两种方法的结合，其中从输入中选择关键部分，然后以抽象方式总结。因此，摘要可以通过单个端到端网络或作为提取和抽象组件的管道来完成。为此，Fairseq 提供了所有必要的工具，以帮助我们成功。它具有端到端模型，如经典的 Transformer、不同类型的语言模型和预训练版本，使研究人员能够专注于最重要的事情——构建最先进的模型，生成有价值的报告。</p>
+<p>文本摘要构成了 NLP 中的一个重大挑战。我们需要能够生成文档简短版本的同时保留关键点并避免无关内容的模型。这些挑战可以通过不同的方法来解决。1）面向训练能够以叙述形式生成摘要的模型的抽象文本摘要。2）提取方法，其中模型被训练以从输入文本中选择最重要的部分。3）两种方法的结合，其中从输入中选择关键部分，然后以抽象方式总结。因此，摘要可以通过单个端到端网络或作为提取和抽象组件的管道来完成。为此，Fairseq 提供了所有必要的工具，以帮助我们成功。它具有端到端模型，如经典的 Transformer、不同类型的语言模型和预训练版本，使研究人员能够专注于最重要的事情——构建最先进的模型，生成有价值的报告。</p>
 
 <p>然而，我们不仅仅是总结转录的对话；我们生成高质量的医疗报告，这需要考虑很多因素。</p>
 
@@ -618,9 +626,9 @@ cat train.src train.tgt |
   <li>病患与医生的对话通常比最终报告要长得多。</li>
 </ul>
 
-<p>所有这些挑战都需要我们的研究人员进行一系列广泛的实验。多亏了 PyTorch 和 Fairseq 的灵活性，他们的生产力得到了极大的提高。此外，该生态系统提供了一个从构思、实施、实验到最终投入生产的简单路径。使用多个 GPU 或 CPU 就像提供一个额外的参数给工具一样简单，而且由于与 Python 的紧密集成，PyTorch 代码可以轻松调试。</p>
+<p>所有这些挑战都需要我们的研究人员进行一系列广泛的实验。多亏了 PyTorch 和 Fairseq 的灵活性，他们的生产力得到了极大的提高。此外，该生态系统提供了一个从构思、实施、实验到最终推向生产的简单路径。使用多个 GPU 或 CPU 就像提供一个额外的参数给工具一样简单，而且由于与 Python 的紧密集成，PyTorch 代码可以轻松调试。</p>
 
-<p>在我们持续努力为开源社区做出贡献的过程中，Nuance 开发了一些功能并推送到 Fairseq 的 GitHub 仓库。这些功能试图克服一些提到的挑战，例如，促进从输入到摘要的复制，特别是罕见或未见过的单词，通过改进 Tensor Core 利用率来提高训练速度，并确保不同 Transformer 配置的 TorchScript 兼容性。接下来，我们将展示如何使用具有指针生成机制（Transformer-PG）的 Transformer 模型进行训练的示例，该模型可以从输入中复制单词。</p>
+<p>在我们持续努力为开源社区做出贡献的过程中，Nuance 开发了一些功能，并将其推送到 Fairseq 的 GitHub 仓库。这些功能试图克服一些提到的挑战，例如，促进从输入到摘要的复制，特别是罕见或未见过的单词，通过改进 Tensor Core 利用率来提高训练速度，并确保不同 Transformer 配置的 TorchScript 兼容性。接下来，我们将展示如何使用具有指针生成机制（Transformer-PG）的 Transformer 模型进行训练的示例，该模型可以从输入中复制单词。</p>
 
 <h2 id="how-to-build-a-transformer-model-with-a-pointer-generator-mechanism">如何使用指针生成器机制构建 Transformer 模型</h2>
 
@@ -643,23 +651,23 @@ cat train.src train.tgt |
 <span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s">"[print('&lt;unk-{}&gt; 0'.format(n)) for n in range($position_markers)]"</span> <span class="o">&gt;&gt;</span> <span class="nb">dict</span><span class="p">.</span><span class="n">pg</span><span class="p">.</span><span class="n">txt</span>
 </code></pre></div></div>
 
-<p>这将创建一个名为“dict.pg.txt”的文件，其中包含&lt;vocab_size&gt; 个最频繁的单词，后面跟着从“&lt;unk-0&gt;”到“&lt;unk-511&gt;”命名的 512 个位置标记。</p>
+<p>这将创建一个名为“dict.pg.txt”的文件，其中包含最频繁出现的  个单词，后面跟着从“<unk-0>”到“<unk-511>”命名的 512 个位置标记。</unk-511></unk-0></p>
 
 <p>如果我们有一个类似这样的输入</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">src</span> <span class="o">=</span> <span class="s">"Hello, I'm The Dogtor"</span>
 </code></pre></div></div>
 
-<p>可能会发生我们的模型在词汇中没有训练“Dogtor”这个词的情况。因此，当我们将这个序列输入到模型中时，它应该被转换成：</p>
+<p>可能会发生我们的模型在词汇中没有训练过“Dogtor”这个词的情况。因此，当我们将这个序列输入到模型中时，它应该被转换为：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">src</span> <span class="o">=</span> <span class="s">"Hello, I'm The &lt;unk-3&gt;"</span>
 </code></pre></div></div>
 
-<p>现在，“&lt;unk-3&gt;”是我们的词汇表的一部分，可以被模型预测（这就是指针生成器发挥作用的地方）。在这种情况下，我们只需要后处理输出，将“&lt;unk-3&gt;”替换为输入位置 3 的单词。</p>
+<p>现在，“<unk-3>”是我们的词汇表的一部分，可以被模型预测（这就是指针生成器发挥作用的地方）。在这种情况下，我们只需要后处理输出，将“<unk-3>”替换为输入位置 3 的单词。</unk-3></unk-3></p>
 
 <h3 id="2-preprocess-the-text-data-to-replace-unknown-words-by-its-positional-markers">2. 预处理文本数据，将未知单词替换为其位置标记：</h3>
 
-<p>我们可以使用来自 <a href="https://github.com/pytorch/fairseq/tree/master/examples/pointer_generator">https://github.com/pytorch/fairseq/tree/master/examples/pointer_generator</a> 的脚本。</p>
+<p>我们可以使用来自 https://github.com/pytorch/fairseq/tree/master/examples/pointer_generator 的脚本。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Considering we have our data in:
 # train_src = /path/to/train.src
@@ -696,7 +704,7 @@ cat train.src train.tgt |
                    <span class="o">--</span><span class="n">destdir</span> <span class="o">&lt;</span><span class="n">data_dir</span><span class="o">&gt;</span>
 </code></pre></div></div>
 
-<p>你可能会注意到任务类型是“翻译”。这是因为没有“摘要”任务可用；我们可以将其理解为一种 NMT 任务，其中输入和输出语言相同，输出（摘要）的长度短于输入。</p>
+<p>你可能会注意到任务类型是“翻译”。这是因为没有“摘要”任务可用；我们可以将其理解为一种 NMT 任务，其中输入和输出语言是相同的，并且输出（摘要）比输入短。</p>
 
 <h3 id="4-now-we-can-train-the-model">4. 现在我们可以训练模型：</h3>
 
@@ -730,7 +738,7 @@ cat train.src train.tgt |
 
 <ul>
   <li>带有指针生成器机制的 Transformer，以方便从输入中复制单词。</li>
-  <li>序列长度填充到8的倍数，以更好地使用张量核心并减少训练时间。</li>
+  <li>序列长度填充到 8 的倍数，以更好地使用张量核心并减少训练时间。</li>
 </ul>
 
 <h3 id="5-now-lets-take-a-look-at-how-to-generate-a-summary-with-our-new-medical-report-generation-system">5. 现在让我们看看如何使用我们新的医疗报告生成系统生成摘要：</h3>
@@ -753,7 +761,7 @@ cat train.src train.tgt |
 <span class="n">Ms</span><span class="p">.</span> <span class="o">&lt;</span><span class="n">unk</span><span class="o">-</span><span class="mi">2</span><span class="o">&gt;</span> <span class="ow">is</span> <span class="n">a</span> <span class="mi">36</span><span class="o">-</span><span class="n">year</span><span class="o">-</span><span class="n">old</span> <span class="n">female</span> <span class="n">who</span> <span class="n">presents</span> <span class="n">to</span> <span class="n">the</span> <span class="n">clinic</span> <span class="n">today</span> <span class="k">for</span> <span class="n">evaluation</span> <span class="n">of</span> <span class="n">her</span> <span class="n">right</span> <span class="n">wrist</span><span class="p">.</span>
 </code></pre></div></div>
 
-<h3 id="6-alternatively-we-can-use-fairseq-interactive-and-a-postprocessing-tool-to-substitute-positional-unknown-tokens-by-its-words-from-the-input">6. 或者，我们可以使用 fairseq-interactive 和一个后处理工具，用输入中的单词替换位置未知标记：</h3>
+<h3 id="6-alternatively-we-can-use-fairseq-interactive-and-a-postprocessing-tool-to-substitute-positional-unknown-tokens-by-its-words-from-the-input">6. 或者，我们可以使用 fairseq-interactive 和一个后处理工具来用输入中的单词替换位置未知标记：</h3>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">fairseq</span><span class="o">-</span><span class="n">interactive</span> <span class="o">&lt;</span><span class="n">data_dir</span><span class="o">&gt;</span> \
               <span class="o">--</span><span class="n">batch</span><span class="o">-</span><span class="n">size</span> <span class="o">&lt;</span><span class="n">batch_size</span><span class="o">&gt;</span> \
@@ -776,27 +784,27 @@ cat train.src train.tgt |
 	<span class="o">--</span><span class="n">target</span><span class="o">-</span><span class="n">out</span> <span class="n">generate</span><span class="p">.</span><span class="n">hyp</span><span class="p">.</span><span class="n">processed</span>
 </code></pre></div></div>
 
-<p>现在我们有了最终的报告集，在“generate.hyp.processed”中，“&lt;unk-N&gt;”已被替换为输入序列中的原始单词。</p>
+<p>现在我们有了最终的报告集，在“generate.hyp.processed”中，“”已被替换为输入序列中的原始单词。</p>
 
 <h2 id="model-deployment">模型部署</h2>
 
 <p>PyTorch 在建模方面提供了极大的灵活性，并拥有丰富的周边生态系统。然而，尽管最近有几篇文章建议 PyTorch 在研究和学术界的使用可能接近超越 TensorFlow，但总体上 TensorFlow 似乎仍然是部署到生产环境的首选平台。在 2021 年，这种情况是否仍然如此？希望在生产环境中部署 PyTorch 模型的团队有几个选择。</p>
 
-<p>在描述我们的旅程之前，让我们先简要定义一下“模型”这个术语。</p>
+<p>在描述我们的旅程之前，让我们先简要地定义一下“模型”这个术语。</p>
 
 <h3 id="models-as-computation-graphs">模型作为计算图</h3>
 
-<p>几年前，机器学习工具箱通常只支持特定类别的模型，这些模型结构相对固定和僵化，自由度有限（如支持向量机的核或神经网络的隐藏层数量）。受到 Theano 基础工作的启发，像微软的 CNTK 或谷歌的 TensorFlow 这样的工具箱是第一批普及更灵活模型视图的，即具有相关参数的计算图，这些参数可以从数据中估计出来。这种观点模糊了流行类型模型（如 DNN 或 SVM）之间的界限，因为将每个模型的特点混合到你的图中变得很容易。然而，在估计其参数之前，必须预先定义这样的图，而且它相当静态。这使得将模型保存到自包含的包（如 TensorFlow SavedModel）变得容易，这样的包仅包含图的结构以及估计参数的具体值。然而，调试这样的模型可能很困难，因为构建图的 Python 代码中的语句与执行它的语句在逻辑上是分开的。 研究人员也渴望有更简单的方式来表达动态行为，例如模型前向传播的计算步骤有条件地依赖于其输入数据（或其之前的输出）。</p>
+<p>几年前，机器学习工具箱通常只支持特定类别的模型，这些模型结构相对固定和僵化，自由度有限（如支持向量机的核或神经网络的隐藏层数量）。受到 Theano 基础工作的启发，像微软的 CNTK 或谷歌的 TensorFlow 这样的工具箱是第一批普及更灵活模型视图的，即具有相关参数的计算图，这些参数可以从数据中估计出来。这种观点模糊了流行类型模型（如 DNN 或 SVM）之间的界限，因为将每个模型的特点混合到你的图中变得很容易。然而，在估计其参数之前，必须预先定义这样的图，而且它相当静态。这使得将模型保存到自包含的包（如 TensorFlow SavedModel）变得容易，这样的包仅包含图的结构以及估计参数的具体值。然而，调试这样的模型可能很困难，因为构建图的 Python 代码中的语句与执行它的语句在逻辑上是分开的。 研究人员也渴望有更简单的方式来表达动态行为，例如模型前向传播的计算步骤有条件地依赖于其输入数据（或其之前的输出）。 </p>
 
-<p>最近，上述限制导致了由 PyTorch 和 TensorFlow 2.0 引领的第二次革命。计算图不再显式定义。相反，它将在 Python 代码执行操作时隐式填充。推动这一发展的关键技术是自动微分。在执行前向传播步骤的同时隐式构建计算图，将跟踪所有必要的数据，以便稍后计算关于模型参数的梯度。这为训练模型提供了极大的灵活性，但也提出了一个重要问题。如果模型内部发生的计算仅通过 Python 代码的执行步骤隐式定义，那么我们想要保存什么作为模型？答案——至少最初——是包含所有依赖关系的 Python 代码及其估计参数。出于实际原因，这是不可取的。例如，存在风险，即负责模型部署的团队没有完全复制训练期间使用的 Python 代码依赖项，从而导致行为上的微妙差异。 该解决方案通常包括结合两种技术，即脚本和跟踪，即在您的 Python 代码中添加额外的注释并在示例输入数据上执行您的代码，使 PyTorch 能够定义并保存应在后续推理过程中执行的新、未见过的数据的图。这要求创建模型代码的人有一定的纪律性（这可能会削弱原始的即时执行灵活性），但最终会得到一个包含在 TorchScript 格式的自包含模型包。TensorFlow 2 中的解决方案与此非常相似。</p>
+<p>最近，上述限制导致了由 PyTorch 和 TensorFlow 2.0 引领的第二次革命。计算图不再显式定义。相反，它将在 Python 代码执行张量参数上的操作时隐式填充。推动这一发展的关键技术是自动微分。在执行前向传播步骤的同时隐式构建计算图，将跟踪所有必要的数据，以便稍后计算关于模型参数的梯度。这为训练模型提供了极大的灵活性，但也提出了一个重要问题。如果模型内部发生的计算仅通过 Python 代码的执行步骤隐式定义，那么我们想要保存什么作为模型？答案——至少最初——是包含所有依赖关系的 Python 代码及其估计参数。出于实际原因，这是不可取的。例如，存在风险，即负责模型部署的团队没有完全复制训练期间使用的 Python 代码依赖项，从而导致行为微妙地偏离。 该解决方案通常包括结合两种技术，即脚本和跟踪，即在您的 Python 代码中添加额外的注释并在示例输入数据上执行您的代码，使 PyTorch 能够定义并保存应在后续推理过程中执行的新、未见过的数据的图。这要求创建模型代码的人有一定的纪律性（这可能会削弱一些原始的即时执行灵活性），但最终会得到一个包含在 TorchScript 格式的自包含模型包。TensorFlow 2 中的解决方案与此非常相似。 </p>
 
-<h3 id="serving-our-report-generation-models">提供我们的报告生成模型服务</h3>
+<h3 id="serving-our-report-generation-models">服务器报告生成模型</h3>
 
-<p>我们的部署报告生成模型的旅程反映了上述讨论。我们最初通过部署模型代码及其依赖项，以及参数检查点，在一个自定义 Docker 镜像中暴露 gRPC 服务接口来提供服务我们的模型。然而，我们很快注意到，在估计参数时复制建模团队使用的确切代码和环境变得容易出错。此外，这种方法阻止了我们利用像 NVIDIA 的 Triton 这样的高性能模型服务框架，Triton 是用 C++编写的，需要自包含的模型，可以在没有 Python 解释器的情况下使用。在这个阶段，我们面临着尝试将我们的 PyTorch 模型导出为 ONNX 或 TorchScript 格式的选择。ONNX 是一个用于表示机器学习模型的开放规范，它越来越多地被采用。它由微软开发的高性能运行时（ONNX 运行时）提供支持。虽然我们能够使用 ONNX 运行时为我们的基于 TensorFlow BERT 的模型实现性能加速，但当时我们的一些 PyTorch 模型需要一些 ONNX 尚未支持的运算符。 我们决定暂时不使用自定义运算符来实现这些功能，而是研究 TorchScript。</p>
+<p>我们的报告生成模型部署之旅反映了上述讨论。我们最初通过部署模型代码及其依赖项，以及参数检查点，在一个自定义 Docker 镜像中暴露 gRPC 服务接口来提供服务我们的模型。然而，我们很快注意到，在估计参数时复制建模团队使用的确切代码和环境变得容易出错。此外，这种方法阻止了我们利用像 NVIDIA 的 Triton 这样的高性能模型服务框架，Triton 是用 C++编写的，需要自包含的模型，可以在没有 Python 解释器的情况下使用。在这个阶段，我们面临着尝试将我们的 PyTorch 模型导出为 ONNX 或 TorchScript 格式的选择。ONNX 是一个用于表示机器学习模型的开放规范，其采用率越来越高。它由微软开发的高性能运行时（ONNX 运行时）提供支持。虽然我们能够使用 ONNX 运行时为我们的基于 TensorFlow BERT 的模型实现性能加速，但当时我们的一些 PyTorch 模型需要一些 ONNX 尚未支持的运算符。 宁可使用自定义运算符来实现这些功能，我们决定暂时探索 TorchScript。 </p>
 
 <h3 id="a-maturing-ecosystem">一个日益成熟的生态系统</h3>
 
-<p>这一切都是玫瑰色吗？不，这比我们预期的道路要坎坷。我们在直接运行 PyTorch 代码时遇到了 PyTorch 使用的 MKL 库似乎存在的内存泄漏问题。我们在尝试从多个线程加载多个模型时遇到了死锁。我们在将模型导出为 ONNX 和 TorchScript 格式时遇到了困难。在具有多个 GPU 的硬件上，模型无法直接使用，它们总是访问它们被导出的特定 GPU 设备。在运行 TorchScript 模型时，我们在 Triton 推理服务器上遇到了过度的内存使用，我们发现这是因为在正向传递过程中意外启用了自动微分。然而，生态系统仍在不断改进，有一个友好而充满活力的开源社区愿意与我们合作，共同解决这些问题。</p>
+<p>这一切都是玫瑰色吗？不，这比我们预期的道路要坎坷。我们在直接运行 PyTorch 代码时遇到了似乎是由 PyTorch 使用的 MKL 库引起的内存泄漏。我们在尝试从多个线程加载多个模型时遇到了死锁。我们在将模型导出到 ONNX 和 TorchScript 格式时遇到了困难。在具有多个 GPU 的硬件上，模型无法直接使用，它们总是访问它们被导出的特定 GPU 设备。在运行 TorchScript 模型时，我们在 Triton 推理服务器上遇到了过度的内存使用，我们发现这是因为在正向传递过程中意外启用了自动微分。然而，生态系统仍在不断改进，有一个友好而充满活力的开源社区愿意与我们合作，共同解决这些问题。</p>
 
 <p>从这里去哪里？对于那些需要直接服务 PyTorch 代码，而不需要通过导出自包含模型这一额外步骤的人来说，值得注意的是，TorchServe 项目现在提供了一种将代码与参数检查点捆绑在一起的方法，从而大大降低了代码和参数运行分离的风险。然而，对我们来说，将模型导出为 TorchScript 已被证明是有益的。它为建模团队和部署团队之间提供了一个清晰的接口，并且 TorchScript 通过其即时编译引擎进一步降低了在 GPU 上服务模型时的延迟。</p>
 
@@ -806,7 +814,7 @@ cat train.src train.tgt |
 
 <h2 id="conclusion">结论</h2>
 
-<p>学术界长期以来都认识到我们是在“站在巨人的肩膀上”。随着人工智能从一门科学学科成熟为技术，最初推动其科学基础的协作精神也延续到了软件工程领域。开源爱好者们加入全球科技公司，共同构建开放软件生态系统，以解决现代社会一些最紧迫的挑战。在本文中，我们探讨了 Nuance 的 Dragon Ambient eXperience，这是一个由人工智能驱动、语音激活的解决方案，可自动记录患者护理，减轻医疗提供者的行政负担。Nuance DAX 改善了患者与提供者之间的体验，减少了医生的职业倦怠，并改善了财务结果。它将信任、喜悦和人性带回医疗保健的提供。Fairseq 和 PyTorch 已被证明是推动这项 AI 技术的惊人平台，而 Nuance 也在此领域贡献了一些创新。欲了解更多信息，请参阅我们最近的 ACL 出版物和 Nuance 的“未来展望”博客。</p>
+<p>学术界长期以来都认识到我们是在“站在巨人的肩膀上”。随着人工智能从一门科学学科成熟为技术，最初推动其科学基础的协作精神也延续到了软件工程领域。开源爱好者与全球科技公司携手共建开放软件生态系统，允许从新的角度解决现代社会面临的一些最紧迫的挑战。在本文中，我们探讨了 Nuance 的 Dragon Ambient eXperience，这是一款由人工智能驱动、具备语音功能的解决方案，可自动记录患者护理情况，减轻医疗提供者的行政负担。Nuance DAX 改善了患者与提供者之间的体验，减少了医生的职业倦怠，并改善了财务结果。它为医疗保健的提供带来了信任、喜悦和人性。Fairseq 和 PyTorch 已被证明是推动这项人工智能技术的强大平台，而 Nuance 也在此领域贡献了一些创新。欲了解更多信息，请参阅我们最近的 ACL 出版物和 Nuance 的“未来展望”博客。</p>
 
                 </article>
             </div>
@@ -822,14 +830,14 @@ cat train.src train.tgt |
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -846,7 +854,7 @@ cat train.src train.tgt |
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -859,7 +867,7 @@ cat train.src train.tgt |
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -867,7 +875,7 @@ cat train.src train.tgt |
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -896,9 +904,7 @@ cat train.src train.tgt |
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -908,7 +914,7 @@ cat train.src train.tgt |
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -930,22 +936,22 @@ cat train.src train.tgt |
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -972,17 +978,17 @@ cat train.src train.tgt |
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1017,7 +1023,7 @@ cat train.src train.tgt |
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1031,7 +1037,7 @@ cat train.src train.tgt |
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1099,7 +1105,7 @@ cat train.src train.tgt |
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

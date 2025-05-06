@@ -220,8 +220,8 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
     // accumulate its inputs into the grad property of the variable. These
     // nodes get suppressed in some situations, see " suppress="" gradient="" accumulation"="" below.="" note="" that="" only="" variables="" which="" have="" `requires_grad="//" true`="" can="" accumulators.="" if="" (const="" auto&amp;="" {="" return="" edge(gradient,="" self.output_nr());="" }="" else="" edge(grad_accumulator(self),="" 0);="" to="" understand="" how="" edges="" work,="" let’s="" assume="" an="" early="" executed="" function="" produced="" two="" output="" tensors,="" both="" with="" their="" grad_fn="" set,="" each="" tensor="" also="" has="" output_nr="" property="" the="" order="" in="" they="" were="" returned.="" when="" creating="" for="" current="" grad_fn,="" edge="" object="" per="" input="" variable="" will="" be="" created.="" point="" variable’s="" and="" track="" establish="" ids="" used="" traversing="" graph.="" case="" are="" “leaf”,="" i.e.="" not="" by="" any="" differentiable="" function,="" don’t="" a="" attribute="" set.="" special="" called="" accumulator="" is="" set="" default="" as="" seen="" above="" code="" snippet.="" after="" created,="" graph="" node="" being="" currently="" created="" hold="" them="" using="" set_next_edges="" function.="" this="" what="" connects="" grad_fns="" together,="" producing="" computational="" void="" set_next_edges(edge_list&amp;&amp;="" next_edges)="" next_edges_="std::move(next_edges);" for(const="" next_edge="" :="" next_edges_)="" update_topological_nr(next_edge);="" now,="" forward="" pass="" of="" execute,="" execution="" set_history="" connect="" tensors="" node.="" inline="" set_history(="" at::tensor&amp;="" variable,="" const="" std::shared_ptr&lt;node&gt;&amp;="" grad_fn)="" at_assert(grad_fn);="" (variable.defined())="" codegen="" triggers="" this,="" you="" most="" likely="" want="" add="" your="" newly="" added="" dont_require_derivative="" list="" tools="" autograd="" gen_variable_type.py="" torch_internal_assert(isdifferentiabletype(variable.scalar_type()));="" auto="" impl::set_gradient_edge(variable,="" {grad_fn,="" output_nr});="" grad_fn-&gt;add_input_metadata(node::undefined_input());="" calls="" set_gradient_edge,="" just="" copies="" autogradmeta="" has.="" set_gradient_edge(const="" variable&amp;="" self,="" edge)="" auto*="" meta="materialize_autograd_meta(self);" meta-&gt;grad_fn_="std::move(edge.function);" meta-&gt;output_nr_="edge.input_nr;" views,="" make="" sure="" new="" grad_fn_="" overwritten="" unless="" it="" necessary="" variablehooks::grad_fn="" logic="" relevant="" custom="" functions="" multiple="" operations="" happen="" on="" given="" before="" its="" exiting="" diff_view_meta="get_view_autograd_meta(self);" (diff_view_meta="" &amp;&amp;="" diff_view_meta-&gt;has_bw_view())="" diff_view_meta-&gt;set_attr_version(self._version());="" now="" another="" steps="" all="" repeated.="" check="" animation="" below="" see="" figure="" 2:="" shows="" creation="" registering="" python="" we="" creates="" included="" aten.="" however,="" define="" our="" python,="" graph!="" defined="" looks="" like="" following:="" class="" exp(torch.autograd.function):="" @staticmethod="" def="" forward(ctx,="" i):="" result="i.exp()" ctx.save_for_backward(result)="" backward(ctx,="" grad_output):="" result,="ctx.saved_tensors" grad_output="" *="" #="" call="" exp.apply(torch.tensor(0.5,="" requires_grad="True))" outputs:="" tensor(1.6487,="" snippet="" detected="" possible="" thanks="" class.="" take="" look="" at="" happens="" apply.="" apply="" torch._c._functionbase="" class,="" but="" present="" source.="" _functionbase="" c++="" c="" api="" hook="" together="" into="" single="" looking="" named="" thpfunction_apply.="" pyobject="" *thpfunction_apply(pyobject="" *cls,="" *inputs)="" generates="" thpobjectptr="" backward_cls(pyobject_getattrstring(cls,="" "_backward_cls"));="" (!backward_cls)="" nullptr;="" ctx_obj(pyobject_callfunctionobjargs(backward_cls,="" nullptr));="" (!ctx_obj)="" thpfunction*="" ctx="(THPFunction*)ctx_obj.get();" cdata="std::shared_ptr<PyNode>(new" pynode(std::move(ctx_obj)),="" deletenode);="" ctx-&gt;cdata="cdata;" prepare="" inputs="" allocate="" context="" (grad="" fn)="" unpack="" collect="" info_pair="unpack_input<false>(inputs);" unpackedinput&amp;="" unpacked_input="info_pair.first;" inputflags&amp;="" input_info="info_pair.second;" initialize="" backward="" (and="" ctx)="" bool="" is_executable="input_info.is_executable;" cdata-&gt;set_next_edges(std::move(input_info.next_edges));="" ctx-&gt;needs_input_grad="input_info.needs_input_grad.release();" ctx-&gt;is_variable_input="std::move(input_info.is_variable_input);" prepend="" input_tuple,="" preparation="" static="" method="" num_args="PyTuple_GET_SIZE(inputs);" ctx_input_tuple(pytuple_new(num_args="" +="" 1));="" (!ctx_input_tuple)="" py_incref(ctx);="" pytuple_set_item(ctx_input_tuple.get(),="" 0,="" (pyobject*)ctx);="" (int="" i="0;" &lt;="" num_args;="" ++i)="" *arg="PyTuple_GET_ITEM(unpacked_input.input_tuple.get()," i);="" py_incref(arg);="" 1,="" arg);="" tensor_outputs;="" autogradmode="" grad_mode(false);="" forward_fn(pyobject_getattrstring(cls,="" "forward"));="" (!forward_fn)="" tensor_outputs="PyObject_CallObject(forward_fn," ctx_input_tuple);="" (!tensor_outputs)="" here="" where="" outputs="" gets="" tracked="" process_outputs(cls,="" cdata,="" ctx,="" unpacked_input,="" inputs,="" std::move(tensor_outputs),="" is_executable,="" node);="" end_handle_th_errors="" although="" hard="" read="" first="" due="" calls,="" essentially="" does="" same="" thing="" auto-generated="" saw="" aten:="" create="" object.="" link="" one.="" execute="" forward.="" assign="" metadata.="" in:="" basically,="" asks="" get="" pointer="" user-written="" then="" wraps="" pynode="" specialized="" interpreter="" provided="" during="" pass.="" actual="" part="" passed="" store="" related="" information="" both,="" user’s="" pytorch.="" regular="" collect_next_edges="" objects,="" done="" unpack_input:="" template&lt;bool="" enforce_variables&gt;="" std::pair&lt;unpackedinput,="" inputflags&gt;="" unpack_input(pyobject="" *args)="" ...="" flags.next_edges="(flags.is_executable" ?="" collect_next_edges(unpacked.input_vars)="" edge_list());="" std::make_pair(std::move(unpacked),="" std::move(flags));="" assigned="" doing="" through="" api.="" once="" returned="" from="" pass,="" processed="" converted="" inside="" process_outputs="" pyobject*="" process_outputs(pyobject="" *op_obj,="" std::shared_ptr&lt;pynode&gt;&amp;="" unpacked,="" *inputs,="" thpobjectptr&amp;&amp;="" raw_output,="" torch::jit::node*="" node)="" _wrap_outputs(cdata,="" unpacked.input_vars,="" outputs,="" is_executable);="" _trace_post_record(node,="" op_obj,="" is_inplace,="" unpack_output);="" (is_executable)="" _save_variables(cdata,="" grad_fn);="" outputs.release();="" here,="" _wrap_outputs="" charge="" setting="" different="" file,="" so="" process="" little="" confusing.="" _wrap_outputs(const="" thpfunction="" *self,="" variable_list="" &amp;input_vars,="" *raw_output,="" *outputs,="" is_executable)="" cdata_if_executable="is_executable" wrap="" outputs.="" csrc="" custom_function.cpp="" wrapped_outputs="_wrap_outputs(input_vars," non_differentiable,="" dirty_inputs,="" raw_output_vars,="" cdata_if_executable);="" one="" metadata="" tensors:="" std::vector&lt;c10::optional&lt;variable&gt;&gt;="" std::unordered_set&lt;at::tensorimpl*&gt;="" &amp;non_differentiable,="" &amp;dirty_inputs,="" at::arrayref&lt;c10::optional&lt;variable&gt;&gt;="" raw_outputs,="" std::shared_ptr&lt;node&gt;="" &amp;cdata)="" inputs;="" …="" sets="" variable.="" var,="" uint32_t="" output_nr,="" is_input,="" is_modified,="" is_differentiable)="" lots="" checks="" (!is_differentiable)="" (is_input)="" been="" returned,="" wasn't="" modified.="" view="" attach="" run="" no_grad="" mode="" mimic="" behavior="" var="var.view_as(var);" impl::set_gradient_edge(var,="" {cdata,="" (cdata)="" };="" set_gradient_edge="" was="" associated="" function!="" closing="" remarks="" blog="" post="" intended="" overview="" pytorch="" constructs="" graphs="" discussed="" previous="" post.="" next="" entry="" deal="" engine="" executes="" these="" graphs.="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/augmented_computational_graph.png">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/augmented_computational_graph.png">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/augmented_computational_graph.png">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/augmented_computational_graph.png">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -655,7 +655,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -663,7 +663,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -672,27 +672,27 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -703,21 +703,27 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -725,18 +731,20 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -747,12 +755,12 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -763,28 +771,28 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -798,7 +806,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -834,7 +842,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2021年8月31日</p>
+            <p class="featured-post">2021 年 8 月 31 日</p>
             <h1>
                 <a class="blog-title">PyTorch 中计算图是如何构建的</a>
             </h1>
@@ -847,32 +855,32 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由 Preferred Networks 提供</p>
-                    <p>在上一<a href="https://maskerprc.github.io/blog/overview-of-pytorch-autograd-engine/">篇文章</a>中，我们讨论了自动微分的理论基础，并回顾了 PyTorch 中的实现。在本篇文章中，我们将展示 PyTorch 中创建图和执行图的各个部分。为了理解以下内容，请阅读@ezyang 关于 PyTorch 内部机制的精彩<a href="http://blog.ezyang.com/2019/05/pytorch-internals/">博客文章 </a>。</p>
+                    <p>在上一篇文章中，我们讨论了自动微分的理论基础，并回顾了 PyTorch 中的实现。在本篇文章中，我们将展示 PyTorch 中创建图和执行图的各个部分。为了理解以下内容，请阅读@ezyang 关于 PyTorch 内部机制的精彩博客文章。</p>
 
 <h1 id="autograd-components">Autograd 组件</h1>
 
 <p>首先让我们看看 autograd 的不同组件位于何处：</p>
 
-<p><a href="https://github.com/pytorch/pytorch/tree/release/1.9/tools/autograd">tools/autograd</a>：在这里我们可以找到之前文章中提到的导数定义 <a href="https://github.com/pytorch/pytorch/blob/release/1.9/tools/autograd/derivatives.yaml">derivatives.yaml</a>，一些 Python 脚本和一个名为 <a href="https://github.com/pytorch/pytorch/tree/release/1.9/tools/autograd/templates">templates</a> 的文件夹。这些脚本和模板在构建时用于生成根据 yaml 文件指定的导数的 C++代码。此外，这里的脚本还生成 ATen 函数的包装器，以便构建计算图。</p>
+<p>tools/autograd：在这里我们可以找到之前在 derivatives.yaml 中看到的导数定义，几个 Python 脚本和一个名为 templates 的文件夹。这些脚本和模板在构建时用于生成根据 yaml 文件指定的导数的 C++ 代码。此外，这里的脚本还生成常规 ATen 函数的包装器，以便构建计算图。</p>
 
-<p><a href="https://github.com/pytorch/pytorch/tree/release/1.9/torch/autograd">torch/autograd</a>：这个文件夹包含了可以直接从 Python 使用的 autograd 组件。在 <a href="https://github.com/pytorch/pytorch/blob/release/1.9/torch/autograd/function.py">function.py</a> 中我们可以找到实际的 <code class="language-plaintext highlighter-rouge">torch.autograd.Function</code> 定义，这是一个用户用来在 Python 中编写自己的可微分函数的类，具体请参考文档。《a id=3&gt;functional.py 包含了用于计算给定函数的雅可比向量积、海森矩阵以及其他梯度相关计算的组件。其余的文件包含了梯度检查器、异常检测和 autograd 分析器等附加组件。</p>
+<p>torch/autograd：这个文件夹包含了可以直接从 Python 中使用的 autograd 组件。在 function.py 中我们可以找到实际的 <code class="language-plaintext highlighter-rouge">torch.autograd.Function</code> 定义，这是一个用户用来在 Python 中编写自己的可微分函数的类，如文档中所述。functional.py 包含用于计算给定函数的雅可比向量积、海森矩阵和其他梯度相关计算的组件。其余的文件包含额外的组件，如梯度检查器、异常检测和 autograd 分析器。</p>
 
-<p><a href="https://github.com/pytorch/pytorch/tree/release/1.9/torch/csrc/autograd">torch/csrc/autograd</a>：这是图形创建和执行相关代码的存放地。所有这些代码都是用 C++编写的，因为它是一个需要极高性能的关键部分。在这里，我们有一些实现引擎、元数据存储和所有所需组件的文件。此外，还有一些以 <code class="language-plaintext highlighter-rouge">python_</code> 开头的文件，它们的主要职责是允许在 autograd 引擎中使用 Python 对象。</p>
+<p>torch/csrc/autograd：这是图形创建和执行相关代码的存放位置。所有这些代码都是用 C++编写的，因为它是需要极高性能的关键部分。在这里，我们有一些实现引擎、元数据存储和所有所需组件的文件。此外，还有一些以 <code class="language-plaintext highlighter-rouge">python_</code> 开头的文件，它们的主要职责是允许在 autograd 引擎中使用 Python 对象。</p>
 
 <h1 id="graph-creation">图形创建</h1>
 
-<p><a href="https://maskerprc.github.io/blog/overview-of-pytorch-autograd-engine/">之前 </a>，我们描述了计算图的创建。现在，我们将看到 PyTorch 如何通过引用实际代码库来创建这些图。</p>
+<p>之前，我们描述了计算图的创建。现在，我们将看到 PyTorch 如何通过引用实际代码库来创建这些图。</p>
 
 <p align="center">
-<img src="http://localhost:4000/assets/images/augmented_computational_graph.png" width="100%">
-<br>图1：增强计算图的示例</p>
+<img src="https://maskerprc.github.io/assets/images/augmented_computational_graph.png" width="100%">
+<br>图 1：增强计算图的示例</p>
 
-<p>所有操作都始于我们的 Python 代码中，我们请求一个需要梯度的张量。</p>
+<p>所有操作都始于我们的 Python 代码中，请求一个需要梯度的张量。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.75</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>当在张量创建时设置 <code class="language-plaintext highlighter-rouge">required_grad</code> 标志，c10 将<a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/c10/core/TensorImpl.cpp#L382-L406">分配</a>一个用于存储图信息的 <code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象。</p>
+<p>当在张量创建时设置 <code class="language-plaintext highlighter-rouge">required_grad</code> 标志，c10 将分配一个 <code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象来保存图信息。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
 <span class="kt">void</span> <span class="n">TensorImpl</span><span class="o">::</span><span class="n">set_requires_grad</span><span class="p">(</span><span class="kt">bool</span> <span class="n">requires_grad</span><span class="p">)</span> <span class="p">{</span>
@@ -883,7 +891,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p><code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象在 <a href="https://github.com/pytorch/pytorch/blob/release/1.9/torch/csrc/autograd/variable.h#L190-L286">torch/csrc/autograd/variable.h</a> 中定义如下：</p>
+<p> <code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象在 torch/csrc/autograd/variable.h 中定义如下：</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
 <span class="k">struct</span> <span class="nc">TORCH_API</span> <span class="n">AutogradMeta</span> <span class="o">:</span> <span class="k">public</span> <span class="n">c10</span><span class="o">::</span><span class="n">AutogradMetaInterface</span> <span class="p">{</span>
@@ -897,11 +905,11 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">};</span>
 </code></pre></div></div>
 
-<p>该结构体中最重要的字段是计算出的梯度 <code class="language-plaintext highlighter-rouge">grad_</code> 以及指向将被引擎调用来生成实际梯度的函数 <code class="language-plaintext highlighter-rouge">grad_fn</code> 的指针。此外，还有一个梯度累加器对象，用于将所有涉及此张量的不同梯度累加起来，我们将在图执行中看到。</p>
+<p>该结构体中最重要的字段是 <code class="language-plaintext highlighter-rouge">grad_</code> 中的计算梯度以及一个指向函数 <code class="language-plaintext highlighter-rouge">grad_fn</code> 的指针，该函数将由引擎调用以生成实际的梯度。此外，还有一个梯度累加器对象，用于将所有不同的梯度累加起来，其中这个张量有所涉及，我们将在图执行中看到。</p>
 
 <h3 id="graphs-nodes-and-edges">图、节点和边。</h3>
 
-<p>现在，当我们调用一个接受此张量作为参数的可微函数时，将填充相关元数据。假设我们调用一个在 ATen 中实现的常规 torch 函数。让我们以我们之前博客文章中的例子中的乘法为例。结果张量有一个名为 <code class="language-plaintext highlighter-rouge">grad_fn</code> 的字段，它本质上是指向将用于计算该操作梯度的函数的指针。</p>
+<p>现在，当我们调用一个接受此张量作为参数的可微函数时，将填充相关元数据。假设我们调用一个在 ATen 中实现的常规 torch 函数。让我们以我们之前的博客文章中的例子为例，即乘法。结果张量有一个名为 <code class="language-plaintext highlighter-rouge">grad_fn</code> 的字段，它本质上是指向将用于计算该操作梯度的函数的指针。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.75</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">v</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
@@ -909,7 +917,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="n">tensor</span><span class="p">(</span><span class="mf">0.3750</span><span class="p">,</span> <span class="n">grad_fn</span><span class="o">=&lt;</span><span class="n">MulBackward0</span><span class="o">&gt;</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>我们可以看到张量的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 具有 <code class="language-plaintext highlighter-rouge">MulBackward0</code> 值。这个函数与在 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/tools/autograd/derivatives.yaml#L840-L843">derivatives.yaml 文件中编写的函数相同，其 C++代码是由 <code class="language-plaintext highlighter-rouge">tools/autograd</code> 中的所有脚本自动生成的。它自动生成的源代码可以在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/Functions.cpp</code> 中看到。</a></p>
+<p>我们可以看到张量的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 具有 <code class="language-plaintext highlighter-rouge">MulBackward0</code> 值。这个函数与在 derivatives.yaml 文件中编写的函数相同，其 C++代码由 <code class="language-plaintext highlighter-rouge">tools/autograd</code> 中的所有脚本自动生成。自动生成的源代码可以在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/Functions.cpp</code> 中看到。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">variable_list</span> <span class="n">MulBackward0</span><span class="o">::</span><span class="n">apply</span><span class="p">(</span><span class="n">variable_list</span><span class="o">&amp;&amp;</span> <span class="n">grads</span><span class="p">)</span> <span class="p">{</span>
   <span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">lock</span><span class="p">(</span><span class="n">mutex_</span><span class="p">);</span>
@@ -934,9 +942,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>《grad_fn》对象继承自 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/function.h#L535-L541"><code class="language-plaintext highlighter-rouge">TraceableFunction</code></a> 类，它是 <code class="language-plaintext highlighter-rouge">Node</code> 的一个子类，仅有一个属性用于启用跟踪，以便进行调试和优化。根据定义，图由节点和边组成，因此这些函数确实是计算图的节点，通过使用 <code class="language-plaintext highlighter-rouge">Edge</code> 对象连接在一起，以便稍后进行图遍历。</p>
+<p> <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象继承自 <code class="language-plaintext highlighter-rouge">TraceableFunction</code> 类，它是 <code class="language-plaintext highlighter-rouge">Node</code> 的后代，仅设置一个属性以启用跟踪，用于调试和优化目的。根据定义，图具有节点和边，因此这些函数确实是计算图的节点，通过使用 <code class="language-plaintext highlighter-rouge">Edge</code> 对象链接在一起，以便稍后进行图遍历。</p>
 
-<p>《Node》的定义可以在 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/function.h#L50-L533">torch/csrc/autograd/function.h</a> 文件中找到。</p>
+<p> <code class="language-plaintext highlighter-rouge">Node</code> 的定义可以在 torch/csrc/autograd/function.h 文件中找到。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">TORCH_API</span> <span class="n">Node</span> <span class="o">:</span> <span class="n">std</span><span class="o">::</span><span class="n">enable_shared_from_this</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span> <span class="p">{</span>
  <span class="p">...</span>
@@ -953,9 +961,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <span class="n">edge_list</span> <span class="n">next_edges_</span><span class="p">;</span>
 </code></pre></div></div>
 
-<p>实质上，我们看到它重写了 <code class="language-plaintext highlighter-rouge">operator ()</code>，该操作调用实际函数，还有一个名为 <code class="language-plaintext highlighter-rouge">apply</code> 的纯虚函数。正如我们在上面的 <code class="language-plaintext highlighter-rouge">MulBackward0</code> 示例中看到的那样，自动生成的函数会重写这个 <code class="language-plaintext highlighter-rouge">apply</code> 方法。最后，节点还有一个边列表，以实现图连接。</p>
+<p>实质上我们看到它有一个覆盖了 <code class="language-plaintext highlighter-rouge">operator ()</code> 的重载，该重载调用了实际函数，还有一个名为 <code class="language-plaintext highlighter-rouge">apply</code> 的纯虚函数。自动生成的函数覆盖了我们在上面的 <code class="language-plaintext highlighter-rouge">MulBackward0</code> 示例中看到的这个 <code class="language-plaintext highlighter-rouge">apply</code> 方法。最后，节点还有一个边列表以实现图连接性。</p>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/edge.h#L14-L39">Edge</a> 对象用于将 <code class="language-plaintext highlighter-rouge">Node</code> 连接起来，其实现简单明了。</p>
+<p>Edge 对象用于将 <code class="language-plaintext highlighter-rouge">Node</code> 连接起来，其实现方式简单直接。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">Edge</span> <span class="p">{</span>
   <span class="p">...</span>
@@ -966,15 +974,15 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">};</span>
 </code></pre></div></div>
 
-<p>仅需要一个函数指针（实际连接边的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象），以及一个作为边标识符的输入数字。</p>
+<p>它只需要一个函数指针（边连接的实际 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象），以及一个作为边 id 的输入数字。</p>
 
-<h3 id="linking-nodes-together">连接节点</h3>
+<h3 id="linking-nodes-together">将节点链接在一起</h3>
 
-<p>当我们调用两个张量的乘积操作时，我们进入了自动生成代码的领域。我们在 <code class="language-plaintext highlighter-rouge">tools/autograd</code> 中看到的所有脚本都填充了一系列模板，这些模板将 ATen 中的可微分函数包装起来。这些函数在正向传递期间具有构建反向图的代码。</p>
+<p>当我们调用两个张量的产品操作时，我们进入了自动生成代码的领域。我们之前看到的 <code class="language-plaintext highlighter-rouge">tools/autograd</code> 中的所有脚本都填充了一系列模板，这些模板将 ATen 中的可微函数包装起来。这些函数在正向传递期间具有构建反向图的代码。</p>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/release/1.9/tools/autograd/gen_variable_type.py">gen_variable_type.py</a> 脚本负责编写所有这些包装代码。在 PyTorch 构建过程中，该脚本从 <a href="https://github.com/pytorch/pytorch/blob/release/1.9/tools/autograd/gen_autograd.py">tools/autograd/gen_autograd.py</a> 调用，并将自动生成的函数包装器输出到 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/</code> 。</p>
+<p>gen_variable_type.py 脚本负责编写所有这些包装代码。在 pytorch 构建过程中，该脚本从 tools/autograd/gen_autograd.py 调用，并将自动生成的函数包装器输出到 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/</code> 。</p>
 
-<p>让我们看看张量乘法生成函数的样子。代码已经简化，但可以在编译 PyTorch 源码时在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/VariableType_4.cpp</code> 文件中找到。</p>
+<p>让我们看看生成的张量乘法函数是什么样的。代码已经简化，但可以在从源代码编译 pytorch 时找到的 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/generated/VariableType_4.cpp</code> 文件中找到。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">at</span><span class="o">::</span><span class="n">Tensor</span> <span class="nf">mul_Tensor</span><span class="p">(</span><span class="n">c10</span><span class="o">::</span><span class="n">DispatchKeySet</span> <span class="n">ks</span><span class="p">,</span> <span class="k">const</span> <span class="n">at</span><span class="o">::</span><span class="n">Tensor</span> <span class="o">&amp;</span> <span class="n">self</span><span class="p">,</span> <span class="k">const</span> <span class="n">at</span><span class="o">::</span><span class="n">Tensor</span> <span class="o">&amp;</span> <span class="n">other</span><span class="p">)</span> <span class="p">{</span>
   <span class="p">...</span>
@@ -1003,9 +1011,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>让我们逐行分析这段代码。首先，使用以下代码创建 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象：`grad_fn = std::shared_ptr<mulbackward0>(new MulBackward0(), deleteNode);`。</mulbackward0></p>
+<p>让我们逐行分析这段代码最重要的部分。首先，使用以下方式创建了 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象：`grad_fn = std::shared_ptr(new MulBackward0(), deleteNode);`。</p>
 
-<p>在创建 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象之后，通过使用 <code class="language-plaintext highlighter-rouge">grad_fn-&gt;set_next_edges(collect_next_edges( self, other ));</code> 调用创建用于连接节点的边。</p>
+<p> <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象创建后，通过使用 <code class="language-plaintext highlighter-rouge">grad_fn-&gt;set_next_edges(collect_next_edges( self, other ));</code> 调用创建了用于连接节点的边。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">MakeNextFunctionList</span> <span class="o">:</span> <span class="n">IterArgs</span><span class="o">&lt;</span><span class="n">MakeNextFunctionList</span><span class="o">&gt;</span> <span class="p">{</span>
   <span class="n">edge_list</span> <span class="n">next_edges</span><span class="p">;</span>
@@ -1034,8 +1042,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">给定一个输入变量（它只是一个常规张量），<a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/function.h#L597-L603"><code class="language-plaintext highlighter-rouge">collect_next_edges</code></a>
-通过调用 <code class="language-plaintext highlighter-rouge">impl::gradient_edge</code> 创建一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象</font></font></font></p>
+<p>给定一个输入变量（它只是一个常规张量）， <code class="language-plaintext highlighter-rouge">collect_next_edges</code> 将通过调用 <code class="language-plaintext highlighter-rouge">impl::gradient_edge</code> 创建一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">Edge</span> <span class="nf">gradient_edge</span><span class="p">(</span><span class="k">const</span> <span class="n">Variable</span><span class="o">&amp;</span> <span class="n">self</span><span class="p">)</span> <span class="p">{</span>
     <span class="c1">// If grad_fn is null (as is the case for a leaf node), we instead</span>
@@ -1052,9 +1059,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <span class="p">}</span>
 </code></pre></div></div>
 
-<p>为了理解边的工作原理，让我们假设一个早期执行的功能生成了两个输出张量，这两个张量都设置了它们的 <code class="language-plaintext highlighter-rouge">grad_fn</code>，每个张量还有一个 <code class="language-plaintext highlighter-rouge">output_nr</code> 属性，表示它们返回的顺序。在创建当前 <code class="language-plaintext highlighter-rouge">grad_fn</code> 的边时，将为每个输入变量创建一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象。这些边将指向变量的 grad_fn，并跟踪 <code class="language-plaintext highlighter-rouge">output_nr</code> 以建立用于遍历图时使用的 id。如果输入变量是“叶子”，即它们不是由任何可微函数产生的，它们没有设置 <code class="language-plaintext highlighter-rouge">grad_fn</code> 属性。默认情况下，会设置一个名为梯度累加器的特殊函数，如上述代码片段所示。</p>
+<p>为了理解边的工作原理，让我们假设一个早期执行的功能生成了两个输出张量，这两个张量都设置了 <code class="language-plaintext highlighter-rouge">grad_fn</code> ，每个张量还有一个 <code class="language-plaintext highlighter-rouge">output_nr</code> 属性，表示它们返回的顺序。在为当前的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 创建边时，将为每个输入变量创建一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象。边将指向变量的 grad_fn，并跟踪 <code class="language-plaintext highlighter-rouge">output_nr</code> 以在遍历图时建立 id。如果输入变量是“叶子”，即它们不是由任何可微函数产生的，则它们没有设置 <code class="language-plaintext highlighter-rouge">grad_fn</code> 属性。默认情况下，设置了一个特殊的函数，称为梯度累加器，如上述代码片段所示。</p>
 
-<p>边创建完成后，正在创建的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 图节点对象将使用 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/function.h#L258-L263"><code class="language-plaintext highlighter-rouge">set_next_edges</code></a> 函数持有它们。这是将 <code class="language-plaintext highlighter-rouge">grad_fn</code> 连接起来，生成计算图的方式。</p>
+<p>在创建边之后，当前正在创建的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 图节点对象将使用 <code class="language-plaintext highlighter-rouge">set_next_edges</code> 函数来保存它们。这就是连接 <code class="language-plaintext highlighter-rouge">grad_fn</code> 项的方式，从而生成计算图。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="kt">void</span> <span class="nf">set_next_edges</span><span class="p">(</span><span class="n">edge_list</span><span class="o">&amp;&amp;</span> <span class="n">next_edges</span><span class="p">)</span> <span class="p">{</span>
     <span class="n">next_edges_</span> <span class="o">=</span> <span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">next_edges</span><span class="p">);</span>
@@ -1083,7 +1090,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/functions/utils.h#L58-L72"><code class="language-plaintext highlighter-rouge">set_history</code></a> 调用 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/variable.cpp#L242-L255"><code class="language-plaintext highlighter-rouge">set_gradient_edge</code></a>，它只是将 grad_fn 和 <code class="language-plaintext highlighter-rouge">output_nr</code> 复制到张量所拥有的 <code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象中。</p>
+<p> <code class="language-plaintext highlighter-rouge">set_history</code> 调用 <code class="language-plaintext highlighter-rouge">set_gradient_edge</code> ，这仅仅是将 grad_fn 和 <code class="language-plaintext highlighter-rouge">output_nr</code> 复制到张量所拥有的 <code class="language-plaintext highlighter-rouge">AutogradMeta</code> 对象中。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="kt">void</span> <span class="nf">set_gradient_edge</span><span class="p">(</span><span class="k">const</span> <span class="n">Variable</span><span class="o">&amp;</span> <span class="n">self</span><span class="p">,</span> <span class="n">Edge</span> <span class="n">edge</span><span class="p">)</span> <span class="p">{</span>
     <span class="k">auto</span><span class="o">*</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">materialize_autograd_meta</span><span class="p">(</span><span class="n">self</span><span class="p">);</span>
@@ -1101,15 +1108,15 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <span class="p">}</span>
 </code></pre></div></div>
 
-<p>此张量现在将成为另一个函数的输入，上述步骤将全部重复。请查看下面的动画，以了解图是如何创建的。</p>
+<p>这个张量现在将成为另一个函数的输入，上述步骤将全部重复。请查看下面的动画，以了解图是如何创建的。</p>
 
 <p align="center">
-<img src="http://localhost:4000/assets/images/computational_graph_creation.gif" width="100%">
-<br>图2：展示图创建的动画</p>
+<img src="https://maskerprc.github.io/assets/images/computational_graph_creation.gif" width="100%">
+<br>图 2：展示图创建的动画</p>
 
 <h3 id="registering-python-functions-in-the-graph">在图中注册 Python 函数</h3>
 
-<p>我们已经看到 autograd 如何为 ATen 中包含的函数创建图。然而，当我们用 Python 定义我们的可微分函数时，它们也会被包含在图中！</p>
+<p>我们已经看到 autograd 如何为包含在 ATen 中的函数创建图。然而，当我们用 Python 定义我们的可微函数时，它们也被包含在图中！</p>
 
 <p>一个 autograd Python 定义的函数看起来如下：</p>
 
@@ -1130,9 +1137,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="c1"># Outputs: tensor(1.6487, grad_fn=&lt;ExpBackward&gt;)
 </span></code></pre></div></div>
 
-<p>在上面的代码片段中，autograd 在创建图时检测到了我们的 Python 函数。所有这一切都得益于 <a href="https://github.com/pytorch/pytorch/blob/release/1.9/torch/autograd/function.py#L106"><code class="language-plaintext highlighter-rouge">Function</code></a> 类。让我们看看当我们调用 <code class="language-plaintext highlighter-rouge">apply</code> 时会发生什么。</p>
+<p>在上面的代码片段中，autograd 在创建图时检测到了我们的 Python 函数。这一切都得益于 <code class="language-plaintext highlighter-rouge">Function</code> 类。让我们看看当我们调用 <code class="language-plaintext highlighter-rouge">apply</code> 时会发生什么。</p>
 
-<p>`<code class="language-plaintext highlighter-rouge">apply</code> 函数定义在 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/python_function.cpp#L859-L908"><code class="language-plaintext highlighter-rouge">torch._C._FunctionBase</code></a> 类中，但这个类并不在 Python 源代码中出现。使用 Python C API 将 C 函数连接成一个单一的 Python 类，<code class="language-plaintext highlighter-rouge">_FunctionBase</code> 在 C++ 中被定义。我们正在寻找名为 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/python_function.cpp#L577-L633"><code class="language-plaintext highlighter-rouge">THPFunction_apply</code></a> 的函数。</p>
+<p> <code class="language-plaintext highlighter-rouge">apply</code> 定义在 <code class="language-plaintext highlighter-rouge">torch._C._FunctionBase</code> 类中，但这个类并不在 Python 源代码中。 <code class="language-plaintext highlighter-rouge">_FunctionBase</code> 通过使用 Python C API 在 C++中定义，将 C 函数钩织成一个单一的 Python 类。我们正在寻找一个名为 <code class="language-plaintext highlighter-rouge">THPFunction_apply</code> 的函数。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
 <span class="n">PyObject</span> <span class="o">*</span><span class="nf">THPFunction_apply</span><span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">cls</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">inputs</span><span class="p">)</span>
@@ -1189,11 +1196,11 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>虽然一开始由于所有的 Python API 调用，这段代码很难读懂，但它本质上与我们在 ATen 中看到的自动生成的 forward 函数做的是同样的事情。</p>
+<p>虽然一开始由于所有的 Python API 调用，这段代码很难读懂，但它本质上与我们在 ATen 中看到的自动生成的正向函数做的是同样的事情：</p>
 
-<p>创建一个 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象。收集边以将当前的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 与输入张量连接起来。执行 <code class="language-plaintext highlighter-rouge">forward</code> 函数。将创建的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 分配给输出张量的元数据。</p>
+<p>创建一个 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象。收集边以将当前的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 与输入张量链接起来。执行 <code class="language-plaintext highlighter-rouge">forward</code> 函数。将创建的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 分配给输出张量的元数据。</p>
 
-<p><code class="language-plaintext highlighter-rouge">grad_fn</code> 对象是在以下位置创建的：</p>
+<p> <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象是在以下位置创建的：</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="c1">// Generates the graph node</span>
   <span class="n">THPObjectPtr</span> <span class="nf">backward_cls</span><span class="p">(</span><span class="n">PyObject_GetAttrString</span><span class="p">(</span><span class="n">cls</span><span class="p">,</span> <span class="s">"_backward_cls"</span><span class="p">));</span>
@@ -1206,9 +1213,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <span class="n">ctx</span><span class="o">-&gt;</span><span class="n">cdata</span> <span class="o">=</span> <span class="n">cdata</span><span class="p">;</span>
 </code></pre></div></div>
 
-<p>基本上，它要求 Python API 获取一个指向可以执行用户编写的函数的 Python 对象的指针。然后，它将该对象包装成一个 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/python_function.h#L24-L58"><code class="language-plaintext highlighter-rouge">PyNode</code></a> 对象，这是一个专门的 <code class="language-plaintext highlighter-rouge">Node</code> 对象，在执行正向传递过程中的 <code class="language-plaintext highlighter-rouge">apply</code> 时，会通过提供的 Python 函数调用 Python 解释器。注意，在代码中，<code class="language-plaintext highlighter-rouge">cdata</code> 是实际作为图一部分的 <code class="language-plaintext highlighter-rouge">Node</code> 对象。<code class="language-plaintext highlighter-rouge">ctx</code> 是传递给 Python 的 <code class="language-plaintext highlighter-rouge">forward</code>/<code class="language-plaintext highlighter-rouge">backward</code> 函数的对象，它被用户函数和 PyTorch 用来存储与自动微分相关的信息。</p>
+<p>基本上，它会调用 Python API 获取可以执行用户编写的函数的 Python 对象的指针。然后，它将这个指针封装成 <code class="language-plaintext highlighter-rouge">PyNode</code> 对象，这是一个特殊的 <code class="language-plaintext highlighter-rouge">Node</code> 对象，当在正向传播过程中执行 <code class="language-plaintext highlighter-rouge">apply</code> 时，它会调用 Python 解释器执行提供的 Python 函数。请注意，在代码中， <code class="language-plaintext highlighter-rouge">cdata</code> 是实际属于图中的 <code class="language-plaintext highlighter-rouge">Node</code> 对象。 <code class="language-plaintext highlighter-rouge">ctx</code> 是传递给 Python <code class="language-plaintext highlighter-rouge">forward</code> / <code class="language-plaintext highlighter-rouge">backward</code> 函数的对象，它被用户函数和 PyTorch 都用来存储与自动微分相关的信息。</p>
 
-<p>正如常规的 C++函数一样，我们也在 <code class="language-plaintext highlighter-rouge">collect_next_edges</code> 中调用以跟踪输入的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 对象，但这是在 <code class="language-plaintext highlighter-rouge">unpack_input</code> 中完成的：</p>
+<p>正如常规的 C++ 函数一样，我们也会在 <code class="language-plaintext highlighter-rouge">collect_next_edges</code> 中调用 <code class="language-plaintext highlighter-rouge">grad_fn</code> 来跟踪输入的 <code class="language-plaintext highlighter-rouge">unpack_input</code> 对象，但这是在 @3# 中完成的：</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">template</span><span class="o">&lt;</span><span class="kt">bool</span> <span class="n">enforce_variables</span><span class="p">&gt;</span>
 <span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="n">UnpackedInput</span><span class="p">,</span> <span class="n">InputFlags</span><span class="o">&gt;</span> <span class="n">unpack_input</span><span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="p">{</span>
@@ -1218,9 +1225,9 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>此后，通过 <code class="language-plaintext highlighter-rouge">cdata-&gt;set_next_edges(std::move(input_info.next_edges));</code> 直接将边分配给 <code class="language-plaintext highlighter-rouge">grad_fn</code>，并通过 Python 解释器 C API 调用正向函数。</p>
+<p>之后，通过执行 <code class="language-plaintext highlighter-rouge">cdata-&gt;set_next_edges(std::move(input_info.next_edges));</code> 将边分配给 <code class="language-plaintext highlighter-rouge">grad_fn</code> ，然后通过 Python 解释器 C API 调用正向函数。</p>
 
-<p>前向传播返回输出张量后，它们在 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/python_function.cpp#L519-L562"><code class="language-plaintext highlighter-rouge">process_outputs</code></a> 函数中被处理并转换为变量。</p>
+<p>前向传播返回输出张量后，它们在 <code class="language-plaintext highlighter-rouge">process_outputs</code> 函数中被处理并转换为变量。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">PyObject</span><span class="o">*</span> <span class="nf">process_outputs</span><span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">op_obj</span><span class="p">,</span> <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">PyNode</span><span class="o">&gt;&amp;</span> <span class="n">cdata</span><span class="p">,</span>
                           <span class="n">THPFunction</span><span class="o">*</span> <span class="n">grad_fn</span><span class="p">,</span> <span class="k">const</span> <span class="n">UnpackedInput</span><span class="o">&amp;</span> <span class="n">unpacked</span><span class="p">,</span>
@@ -1236,7 +1243,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>在这里，<a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/python_function.cpp#L302-L346"><code class="language-plaintext highlighter-rouge">_wrap_outputs</code></a> 负责将前向输出 <code class="language-plaintext highlighter-rouge">grad_fn</code> 设置为新建的实例。为此，它调用另一个定义在不同 <a href="https://github.com/pytorch/pytorch/blob/e7cd59c7a061c78d8d0265e4308b5933e44f9176/torch/csrc/autograd/custom_function.cpp#L28-L105"> 文件 </a> 中的 <code class="language-plaintext highlighter-rouge">_wrap_outputs</code> 函数，因此这个过程变得有些令人困惑。</p>
+<p>在这里， <code class="language-plaintext highlighter-rouge">_wrap_outputs</code> 负责将前向输出 <code class="language-plaintext highlighter-rouge">grad_fn</code> 设置到新创建的变量中。为此，它调用另一个定义在不同文件中的 <code class="language-plaintext highlighter-rouge">_wrap_outputs</code> 函数，因此这里的流程有些令人困惑。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="kt">void</span> <span class="nf">_wrap_outputs</span><span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">PyNode</span><span class="o">&gt;&amp;</span> <span class="n">cdata</span><span class="p">,</span> <span class="n">THPFunction</span> <span class="o">*</span><span class="n">self</span><span class="p">,</span>
     <span class="k">const</span> <span class="n">variable_list</span> <span class="o">&amp;</span><span class="n">input_vars</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">raw_output</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">outputs</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">is_executable</span><span class="p">)</span>
@@ -1251,7 +1258,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>被调用的 <code class="language-plaintext highlighter-rouge">_wrap_outputs</code> 负责在输出张量中设置自动微分元数据：</p>
+<p>被调用的 <code class="language-plaintext highlighter-rouge">_wrap_outputs</code> 负责在输出张量中设置 autograd 元数据：</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">c10</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">Variable</span><span class="o">&gt;&gt;</span> <span class="n">_wrap_outputs</span><span class="p">(</span><span class="k">const</span> <span class="n">variable_list</span> <span class="o">&amp;</span><span class="n">input_vars</span><span class="p">,</span>
   <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">unordered_set</span><span class="o">&lt;</span><span class="n">at</span><span class="o">::</span><span class="n">TensorImpl</span><span class="o">*&gt;</span> <span class="o">&amp;</span><span class="n">non_differentiable</span><span class="p">,</span>
@@ -1283,7 +1290,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <span class="p">};</span>
 </code></pre></div></div>
 
-<p>正是在这里调用了 <code class="language-plaintext highlighter-rouge">set_gradient_edge</code>，这是用户编写的 Python 函数如何与其关联的逆函数一起包含在计算图中的！</p>
+<p>正是在这里调用了 <code class="language-plaintext highlighter-rouge">set_gradient_edge</code> ，这就是用户编写的 Python 函数如何与其关联的逆函数一起包含在计算图中！</p>
 
 <h1 id="closing-remarks">结束语</h1>
 
@@ -1303,14 +1310,14 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -1327,7 +1334,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -1340,7 +1347,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -1348,7 +1355,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -1377,9 +1384,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -1389,7 +1394,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -1411,22 +1416,22 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1453,17 +1458,17 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1498,7 +1503,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1512,7 +1517,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1580,7 +1585,7 @@ Given an input variable (it’s just a regular tensor), collect_next_edges
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

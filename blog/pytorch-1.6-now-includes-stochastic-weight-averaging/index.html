@@ -109,8 +109,8 @@ SWALR is a learning rate scheduler that anneals the learning rate to a fixed val
 swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, 
 anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" implement="" cosine="" annealing="" to="" a="" fixed="" value="" (anneal_strategy="cos" ).="" in="" practice,="" typically="" switch="" swalr="" at="" epoch="" swa_start="" (e.g.="" after="" 75%="" of="" the="" training="" epochs),="" and="" simultaneously="" start="" compute="" running="" averages="" weights:="" scheduler="torch.optim.lr_scheduler.CosineAnnealingLR(optimizer," t_max="100)" for="" range(100):="" #="" &lt;train="" epoch&gt;="" if="" i="" &gt;="" swa_start:="" swa_model.update_parameters(model)="" swa_scheduler.step()="" else:="" scheduler.step()="" finally,="" update_bn="" is="" utility="" function="" that="" computes="" batchnorm="" statistics="" swa="" model="" on="" given="" dataloader="" loader:="" torch.optim.swa_utils.update_bn(loader,="" swa_model)="" applies="" swa_model="" every="" element="" activation="" each="" batch="" normalization="" layer="" model.="" once="" you="" computed="" updated="" layers,="" can="" apply="" make="" predictions="" test="" data.="" why="" does="" it="" work?="" there="" are="" large="" flat="" regions="" loss="" surface="" [9].="" figure="" 3="" below,="" show="" visualization="" subspace="" parameter="" space="" containing="" path="" connecting="" two="" independently="" trained="" sgd="" solutions,="" such="" similarly="" low="" point="" along="" path.="" converges="" near="" boundary="" these="" because="" isn’t="" much="" gradient="" signal="" move="" inside,="" as="" points="" region="" all="" have="" values="" loss.="" by="" increasing="" learning="" rate,="" spins="" around="" this="" region,="" then="" averaging="" iterates,="" moves="" towards="" center="" region.="" 3:="" mode="" connectivity="" resnet-20="" with="" no="" skip="" connections="" cifar-10="" dataset.="" created="" collaboration="" javier="" ideami="" (https:="" losslandscape.com="" more="" details,="" see="" blogpost.="" expect="" solutions="" centered="" generalize="" better="" than="" those="" boundary.="" indeed,="" train="" error="" surfaces="" not="" perfectly="" aligned="" weight="" space.="" susceptible="" shifts="" between="" 4="" direction="" solutions.="" see,="" while="" solution="" has="" higher="" compared="" solution,="" substantially="" error.="" 4.="" line="" (circle)="" (square).="" wide="" loss,="" lies="" shift="" surfaces,="" leads="" generalization.="" what="" results="" achieved="" swa?="" release="" github="" repo="" examples="" using="" pytorch="" implementation="" dnns.="" example,="" be="" used="" achieve="" following="" cifar-100:=""  ="" vgg-16="" resnet-164="" wideresnet-28x10="" 72.8="" ±="" 0.3="" 78.4="" 81.0="" 74.4="" 79.8="" 0.4="" 82.5="" 0.2="" semi-supervised="" follow-up="" paper="" was="" applied="" learning,="" where="" improved="" best="" reported="" multiple="" settings="" [2].="" get="" 95%="" accuracy="" only="" labels="" 4k="" data="" (the="" previous="" result="" problem="" 93.7%).="" explores="" times="" within="" epochs,="" which="" accelerate="" convergence="" find="" still="" flatter="" time.="" 5.="" performance="" fast-swa="" cifar-10.="" achieves="" record="" setting="" considered.="" reinforcement="" another="" shown="" improve="" policy="" methods="" a2c="" ddpg="" several="" atari="" games="" mujoco="" environments="" [3].="" application="" an="" instance="" adam.="" recall="" specific="" benefit="" essentially="" any="" optimizer.="" environment="" +="" breakout="" 522="" 34="" 703="" 60="" qbert="" 18777="" 778="" 21272="" 655="" spaceinvaders="" 7727="" 1121="" 21676="" 8897="" seaquest="" 1779="" 1795="" beamrider="" 9999="" 402="" 11321="" 1065="" crazyclimber="" 147030="" 10239="" 139752="" 11618="" precision="" filter="" through="" quantization="" noise="" combining="" weights="" been="" rounded="" down="" up.="" moreover,="" surface,="" perturbations="" will="" affect="" quality="" (figures="" 9="" 10).="" recent="" work="" shows="" adapting="" setting,="" method="" called="" swalp,="" one="" match="" full-precision="" even="" 8="" bits="" [5].="" quite="" practically="" important="" result,="" (1)="" performs="" notably="" worse="" full="" sgd,="" (2)="" significantly="" harder="" usual="" setting).="" cifar-100="" float="" (16-bit)="" 22.2%="" error,="" 8-bit="" 24.0%="" contrast,="" swalp="" bit="" 21.8%="" 9.="" quantizing="" perturbation="" greater="" effect="" sharp="" (left)="" (right).="" 10.="" difference="" standard="" swalp.="" work,="" sqwa,="" presents="" approach="" fine-tuning="" neural="" networks="" [12].="" particular,="" sqwa="" state-of-the-art="" dnns="" quantized="" 2="" imagenet.="" calibration="" uncertainty="" estimates="" finding="" centred="" representation.="" viewed="" approximation="" ensemble,="" resembling="" bayesian="" average,="" but="" single="" [1].="" taking="" first="" moment="" iterates="" modified="" rate="" schedule.="" directly="" second="" form="" gaussian="" approximate="" posterior="" over="" weights,="" further="" characterizing="" geometry="" iterates.="" approach,swa-gaussian="" (swag)="" simple,="" scalable="" convenient="" estimation="" deep="" [4].="" swag="" distribution="" approximates="" shape="" true="" posterior:="" 6="" below="" log-density="" 6.="" without="" skip-connections="" formed="" largest="" eigenvalues="" covariance="" matrix.="" peaks="" distributions="" coincide,="" both="" wider="" orthogonal="" direction.="" ideami.="" empirically,="" par="" or="" popular="" alternatives="" including="" mc="" dropout,="" kfac="" laplace,="" temperature="" scaling="" quantification,="" out-of-distribution="" detection,="" transfer="" computer="" vision="" tasks.="" code="" available="" here.="" 7.="" multiswag="" generalizes="" ensembles,="" perform="" basins="" attraction,="" leading="" performance.="" here,="" ensembles="" select="" different="" modes,="" variational="" inference="" (vi)="" marginalizes="" (model="" averages)="" basin.="" [9]="" uses="" independent="" models="" mixture="" gaussians="" distribution.="" attraction="" contain="" highly="" complementary="" explanations="" accordingly,="" marginalizing="" provides="" significant="" boost="" generalization="" improvements.="" entirely="" mitigates="" double="" descent="" –="" flexible="" monotonically="" improving="" sgd.="" when="" resnet-18="" layers="" width="" 20,="" multi-swag="" under="" 30%="" whereas="" 45%,="" 15%="" gap!="" 8.="" swag,="" varying="" widths.="" particular="" improvements="" reference="" [10]="" considers="" multi-swa,="" providing="" additional="" computational="" cost.="" multiswa="" method,="" inference,="" constructs="" low-dimensional="" average="" from="" construct="" subspace.="" strong="" terms="" prediction="" classification="" regression="" problems.="" try="" out!="" greatest="" open="" questions="" manages="" good="" objectives="" multimodal,="" many="" parameters="" poor="" understanding="" geometric="" features="" flatness,="" relate="" generalization,="" begin="" resolve="" build="" optimizers="" provide="" other="" useful="" features,="" presented="" swa,="" simple="" drop-in="" replacement="" adam,="" principle,="" anyone="" network.="" demonstrated="" areas,="" vision,="" representation,="" calibration,="" averaging,="" training.="" encourage="" out="" swa!="" now="" easy="" pytorch.="" already="" your="" model,="" use="" small="" number="" epochs="" pre-trained="" [1]="" optima="" generalization;="" pavel="" izmailov,="" dmitry="" podoprikhin,="" timur="" garipov,="" vetrov,="" andrew="" gordon="" wilson;="" artificial="" intelligence="" (uai),="" 2018.="" [2]="" consistent="" unlabeled="" data:="" should="" average;="" ben="" athiwaratkun,="" marc="" finzi,="" international="" conference="" representations="" (iclr),="" 2019.="" [3]="" stability="" averaging;="" evgenii="" nikishin,="" dmitrii="" shvechikov,="" uai="" 2018="" workshop:="" [4]="" baseline="" wesley="" maddox,="" information="" processing="" systems="" (neurips),="" [5]="" polina="" kirichenko,="" wilson="" [6]="" :="" stochastic="" guandao="" yang,="" tianyi="" zhang,="" junwen="" bai,="" wilson,="" christopher="" de="" sa;="" machine="" (icml),="" [7]="" david="" ruppert.="" efficient="" estimations="" slowly="" convergent="" robbins-monro="" process;="" technical="" report,="" cornell="" university="" operations="" research="" industrial="" engineering,="" 1988.="" [8]="" acceleration="" averaging.="" boris="" t="" polyak="" anatoli="" b="" juditsky;="" siam="" journal="" control="" optimization,="" 30(4):838–855,="" 1992.="" connectivity,="" fast="" ensembling="" wilson.="" probabilistic="" perspective="" izmailov.="" arxiv="" preprint,="" 2020.="" [11]="" parallel:="" large-batch="" well="" gupta,="" vipul,="" santiago="" akle="" serrano,="" dennis="" decoste;="" (iclr).="" [12]="" sqwa:="" capability="" low-precision="" shin,="" sungho,="" yoonho="" boo,="" wonyong="" sung;="" preprint="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -322,7 +322,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -330,7 +330,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -342,24 +342,24 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -370,10 +370,16 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
@@ -383,8 +389,8 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -397,15 +403,15 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -416,12 +422,12 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -432,28 +438,28 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -467,7 +473,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -503,9 +509,9 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2020年8月18日</p>
+            <p class="featured-post">2020 年 8 月 18 日</p>
             <h1>
-                <a class="blog-title">PyTorch 1.6 现已包含随机权重平均化</a>
+                <a class="blog-title">PyTorch 1.6 现在包括随机权重平均</a>
             </h1>
         </div>
     </div>
@@ -516,7 +522,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由帕维尔·伊兹梅洛夫、安德鲁·戈登·威尔逊和文森特·昆内维尔-贝尔瓦尔所著</p>
-                    <p>您使用随机梯度下降（SGD）还是 Adam？无论您使用什么方法来训练您的神经网络，您都可以通过一种简单的新技术显著提高泛化能力，而几乎无需额外成本，这种技术现在在 PyTorch 1.6 中原生支持，称为随机权重平均（SWA）[1]。即使您已经训练了您的模型，也可以通过从预训练模型开始运行 SWA 几个 epoch 来轻松实现 SWA 的好处。[再次](#0) [再次](#1)，研究人员发现，SWA 在几乎无需额外成本或努力的情况下，可以显著提高各种实际应用中良好调优模型的性能！</p>
+                    <p>您使用随机梯度下降（SGD）还是 Adam？无论您使用什么方法来训练您的神经网络，您都可以通过一种简单的新技术显著提高泛化能力，而几乎无需额外成本。这种新技术现在在 PyTorch 1.6 中原生支持，称为随机权重平均（SWA）[1]。即使您已经训练了您的模型，也可以通过从预训练模型开始运行 SWA 几个 epoch 来轻松实现 SWA 的好处。一次又一次，研究人员发现，SWA 在几乎无需额外成本或努力的情况下，可以显著提高各种实际应用中调优良好的模型的性能！</p>
 
 <p>SWA 具有广泛的应用和功能：</p>
 <ul>
@@ -524,45 +530,45 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
   <li>SWA 在半监督学习和领域自适应的关键基准测试中提供了最先进的性能[2]。</li>
   <li>SWA 已被证明可以提高语言模型（例如，AWD-LSTM 在 WikiText-2[4]上）和深度强化学习中的策略梯度方法的表现[3]。</li>
   <li>SWA 的扩展 SWAG 可以在贝叶斯深度学习中近似贝叶斯模型平均，并在各种设置中实现了最先进的不确定性校准结果。此外，其最近推广的 MultiSWAG 提供了显著的额外性能提升，并缓解了双重下降[4, 10]。另一种方法，子空间推理，在 SWA 解附近的参数空间的小子空间中近似贝叶斯后验[5]。</li>
-  <li>SWA 用于低精度训练的 SWALP，可以匹配全精度 SGD 训练的性能，即使所有数字量化到 8 位，包括梯度累加器[6]。</li>
+  <li>SWA 用于低精度训练的 SWALP 可以匹配全精度 SGD 训练的性能，即使所有数字都量化到 8 位，包括梯度累加器[6]。</li>
   <li>SWA 并行，SWAP，通过使用大批量训练显著加速了神经网络的训练，特别是在 CIFAR-10 上训练神经网络达到 94%的准确率，创下了 27 秒的记录[11]。</li>
 </ul>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch1.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch1.png" width="100%">
 </div>
 
-<p><strong>图 1</strong>. <em>SWA 和 SGD 在 CIFAR-100 上的 Preactivation ResNet-164 的示意图[1]。 <strong> 左 </strong>：三个 FGE 样本的测试误差表面和相应的 SWA 解（在权重空间中平均）。 <strong> 中</strong>和<strong>右 </strong>：测试误差和训练损失表面，显示了从 SGD 相同的初始化开始，经过 125 个训练周期后，SGD 和 SWA 提出的权重。请参阅[1]了解这些图是如何构建的 </em>。</p>
+<p>图 1. SWA 和 SGD 在 CIFAR-100 上的 Preactivation ResNet-164 的示意图[1]。左：三个 FGE 样本的测试误差表面和相应的 SWA 解（在权重空间中平均）。中间和右：测试误差和训练损失表面，显示了 SGD（在收敛时）和 SWA 的权重，它们从 SGD 相同的初始化开始，经过 125 个训练周期。请参阅[1]了解这些图是如何构建的。</p>
 
-<p>简而言之，SWA 对 SGD（或任何随机优化器）遍历的权重进行平均，并使用修改后的学习率计划（参见图 1 左面板）。SWA 解最终位于损失广泛的平坦区域的中心，而 SGD 往往收敛到低损失区域的边界，这使得它容易受到训练和测试误差表面之间变化的影响（参见图 1 中间和右面板）。我们强调，SWA <strong> 可以与任何优化器一起使用，例如 Adam，并且不仅限于 SGD</strong>。</p>
+<p>简而言之，SWA 通过修改学习率计划（见图 1 的左侧面板）对 SGD（或任何随机优化器）遍历的权重进行等平均。SWA 解最终位于损失宽平区域的中心，而 SGD 倾向于收敛到低损失区域的边界，这使得它容易受到训练和测试误差表面之间的偏移的影响（见图 1 的中间和右面板）。我们强调，SWA 可以与任何优化器一起使用，如 Adam，并且不特定于 SGD。</p>
 
-<p>之前，SWA 位于 PyTorch contrib 中。在 PyTorch 1.6 中，我们提供了 SWA 的新便捷实现，位于 <a href="https://pytorch.org/docs/stable/optim.html#stochastic-weight-averaging">torch.optim.swa_utils</a>。</p>
+<p>之前，SWA 位于 PyTorch contrib 中。在 PyTorch 1.6 版本中，我们提供了一个新的便捷的 SWA 实现，位于 torch.optim.swa_utils 中。</p>
 
 <h2 id="is-this-just-averaged-sgd">这只是平均 SGD 吗？</h2>
 
-<p>从高层次来看，平均 SGD 迭代可以追溯到几十年的凸优化[7, 8]，有时也被称为 Polyak-Ruppert 平均或平均 SGD。<strong> 但细节很重要 </strong>。平均 SGD 通常与递减的学习率和指数移动平均（EMA）结合使用，通常用于凸优化。在凸优化中，重点是提高收敛速度。在深度学习中，这种形式的平均 SGD 可以平滑 SGD 迭代的轨迹，但与 SGD 并没有太大的区别。</p>
+<p>从高层次来看，平均 SGD 迭代的历史可以追溯到几十年前的凸优化[7, 8]，有时也被称为 Polyak-Ruppert 平均或平均 SGD。但细节很重要。平均 SGD 通常与递减的学习率以及指数移动平均（EMA）结合使用，通常用于凸优化。在凸优化中，重点是提高收敛速度。在深度学习中，这种形式的平均 SGD 平滑了 SGD 迭代的轨迹，但与 SGD 并没有太大的区别。</p>
 
-<p>相比之下，SWA 使用一个<strong>相等的平均 </strong>，结合修改后的<strong>周期性或高常量学习率 </strong>，并利用特定于<strong>深度学习</strong>的训练目标[8]的平坦性，以实现<strong>更好的泛化 </strong>。</p>
+<p>相比之下，SWA 使用等权重的 SGD 迭代平均值，并采用修改后的周期性或高常量学习率，利用深度学习特有的训练目标平坦性[8]，以改善泛化能力。</p>
 
-<h2 id="how-does-stochastic-weight-averaging-work">随机权重平均是如何工作的？</h2>
+<h2 id="how-does-stochastic-weight-averaging-work">随机权重平均化是如何工作的？</h2>
 
-<p>SWA 工作有两个重要因素。首先，SWA 使用一个修改后的学习率计划，以便 SGD（或如 Adam 等其他优化器）继续在最优解周围弹跳并探索不同的模型，而不是简单地收敛到单个解。例如，我们可以在训练时间的 75%内使用标准的衰减学习率策略，然后为剩余的 25%时间设置一个合理的高常数值（见图 2）。第二个因素是对 SGD 遍历的网络的权重取平均（通常是等权平均）。例如，我们可以在训练时间的最后 25%内，在每个 epoch 结束时维护权重的运行平均值（见图 2）。训练完成后，我们将网络的权重设置为计算出的 SWA 平均值。</p>
+<p>使 SWA 工作有两个重要的因素。首先，SWA 使用修改后的学习率计划，使得 SGD（或 Adam 等其他优化器）继续在最优解周围弹跳并探索不同的模型，而不是简单地收敛到单个解。例如，我们可以在前 75%的训练时间内使用标准的衰减学习率策略，然后为剩余的 25%时间设置一个合理的高常数值（见图 2）。第二个因素是对 SGD 遍历的网络的权重（通常是等权重的平均）进行平均。例如，我们可以在训练的最后 25%时间内，在每个 epoch 结束时维护一个权重的运行平均值（见图 2）。训练完成后，我们将网络的权重设置为计算出的 SWA 平均值。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/nswapytorch2.jpg" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/nswapytorch2.jpg" width="100%">
 </div>
 
-<p><strong>图 2</strong>. <em>SWA 采用的学习率调度图示。在前 75%的训练中采用标准衰减调度，然后剩余 25%使用高恒定值。SWA 平均在训练的最后 25%形成 </em>.</p>
+<p>图 2. SWA 采用的学习率计划的示意图。前 75%的训练使用标准衰减计划，然后剩余 25%使用高常数值。SWA 平均值在训练的最后 25%时间内形成。</p>
 
-<p>一个重要的细节是批量归一化。批量归一化层在训练期间计算激活的运行统计量。请注意，SWA 权重的平均值在训练期间从未用于预测。因此，批量归一化层在训练结束时没有计算激活统计量。我们可以通过使用 SWA 模型在训练数据上执行单个前向传递来计算这些统计量。</p>
+<p>一个重要的细节是批量归一化。批量归一化层在训练过程中计算激活的运行统计。请注意，SWA 权重的平均值在训练过程中永远不会用于预测。因此，批量归一化层在训练结束时没有计算激活统计。我们可以通过使用 SWA 模型在训练数据上执行单个前向传递来计算这些统计信息。</p>
 
-<p>虽然我们在上面的描述中关注 SGD 以简化说明，但 SWA 可以与任何优化器结合使用。您还可以使用周期性学习率而不是高恒定值（例如，参见[2]）。</p>
+<p>虽然我们在上面的描述中为了简单起见关注了 SGD，但 SWA 可以与任何优化器结合使用。您还可以使用周期性学习率而不是高常数值（例如，参见[2]）。</p>
 
 <h2 id="how-to-use-swa-in-pytorch">如何在 PyTorch 中使用 SWA？</h2>
 
-<p>在 <code class="language-plaintext highlighter-rouge">torch.optim.swa_utils</code> 中，我们实现了所有 SWA 组件，以便方便地将 SWA 与任何模型一起使用。特别是，我们实现了用于 SWA 模型的 <code class="language-plaintext highlighter-rouge">AveragedModel</code> 类，<code class="language-plaintext highlighter-rouge">SWALR</code> 学习率调度器，以及 <code class="language-plaintext highlighter-rouge">update_bn</code> 工具函数，用于在训练结束时更新 SWA 批归一化统计信息。</p>
+<p>在 <code class="language-plaintext highlighter-rouge">torch.optim.swa_utils</code> 中，我们实现了所有 SWA 组件，以便方便地将 SWA 与任何模型一起使用。特别是，我们实现了 <code class="language-plaintext highlighter-rouge">AveragedModel</code> SWA 模型类、 <code class="language-plaintext highlighter-rouge">SWALR</code> 学习率调度器和 <code class="language-plaintext highlighter-rouge">update_bn</code> 更新 SWA 批量归一化统计信息的实用函数。</p>
 
-<p>在下面的示例中，<code class="language-plaintext highlighter-rouge">swa_model</code> 是累积权重平均值的 SWA 模型。我们总共训练该模型 300 个 epoch，并在第 160 个 epoch 切换到 SWA 学习率调度器，并开始收集 SWA 参数的平均值。</p>
+<p>在下面的示例中， <code class="language-plaintext highlighter-rouge">swa_model</code> 是一个累积权重平均值的 SWA 模型。我们总共训练该模型 300 个 epoch，并在第 160 个 epoch 切换到 SWA 学习率计划，并开始收集 SWA 参数的平均值。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.optim.swa_utils</span> <span class="kn">import</span> <span class="n">AveragedModel</span><span class="p">,</span> <span class="n">SWALR</span>
 <span class="kn">from</span> <span class="nn">torch.optim.lr_scheduler</span> <span class="kn">import</span> <span class="n">CosineAnnealingLR</span>
@@ -592,22 +598,22 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
 <p>接下来，我们将详细解释 <code class="language-plaintext highlighter-rouge">torch.optim.swa_utils</code> 的每个组件。</p>
 
-<p><code class="language-plaintext highlighter-rouge">AveragedModel</code> 类用于计算 SWA 模型的权重。您可以通过运行 <code class="language-plaintext highlighter-rouge">swa_model = AveragedModel(model)</code> 创建一个平均模型。然后，您可以通过 <code class="language-plaintext highlighter-rouge">swa_model.update_parameters(model)</code> 更新平均模型的参数。默认情况下，<code class="language-plaintext highlighter-rouge">AveragedModel</code> 会计算您提供的参数的运行等平均值，但您也可以使用 <code class="language-plaintext highlighter-rouge">avg_fn</code> 参数自定义平均函数。在以下示例中，<code class="language-plaintext highlighter-rouge">ema_model</code> 计算指数移动平均。</p>
+<p> <code class="language-plaintext highlighter-rouge">AveragedModel</code> 类用于计算 SWA 模型的权重。您可以通过运行 <code class="language-plaintext highlighter-rouge">swa_model = AveragedModel(model)</code> 创建一个平均模型。然后，您可以通过 <code class="language-plaintext highlighter-rouge">swa_model.update_parameters(model)</code> 更新平均模型的参数。默认情况下， <code class="language-plaintext highlighter-rouge">AveragedModel</code> 计算您提供的参数的运行等平均值，但您也可以使用自定义平均函数通过 <code class="language-plaintext highlighter-rouge">avg_fn</code> 参数。在以下示例中， <code class="language-plaintext highlighter-rouge">ema_model</code> 计算指数移动平均值。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">ema_avg</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">averaged_model_parameter</span><span class="p">,</span> <span class="n">model_parameter</span><span class="p">,</span> <span class="n">num_averaged</span><span class="p">:</span>\
 <span class="mf">0.1</span> <span class="o">*</span> <span class="n">averaged_model_parameter</span> <span class="o">+</span> <span class="mf">0.9</span> <span class="o">*</span> <span class="n">model_parameter</span>
 <span class="n">ema_model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">swa_utils</span><span class="p">.</span><span class="n">AveragedModel</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">avg_fn</span><span class="o">=</span><span class="n">ema_avg</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>在实践中，我们发现图 2 中的修改后的学习率调度方案提供了最佳性能。</p>
+<p>在实践中，我们发现与图 2 中修改后的学习率计划一起使用的等平均值提供了最佳性能。</p>
 
-<p><code class="language-plaintext highlighter-rouge">SWALR</code> 是一个学习率调度器，它将学习率衰减到固定值，然后保持不变。例如，以下代码创建了一个调度器，该调度器将学习率从初始值线性衰减到 <code class="language-plaintext highlighter-rouge">0.05</code>，在 <code class="language-plaintext highlighter-rouge">5</code> 个周期内对每个参数组进行衰减。</p>
+<p> <code class="language-plaintext highlighter-rouge">SWALR</code> 是一个学习率调度器，将学习率逐渐降低到一个固定值，然后保持不变。例如，以下代码创建了一个调度器，将学习率从初始值线性降低到 <code class="language-plaintext highlighter-rouge">0.05</code> ，在 <code class="language-plaintext highlighter-rouge">5</code> 个 epochs 内对每个参数组进行操作。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">swa_scheduler</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">swa_utils</span><span class="p">.</span><span class="n">SWALR</span><span class="p">(</span><span class="n">optimizer</span><span class="p">,</span> 
 <span class="n">anneal_strategy</span><span class="o">=</span><span class="s">"linear"</span><span class="p">,</span> <span class="n">anneal_epochs</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">swa_lr</span><span class="o">=</span><span class="mf">0.05</span><span class="p">)</span>
 
 </code></pre></div></div>
-<p>我们还实现了将余弦退火应用于固定值（<code class="language-plaintext highlighter-rouge">anneal_strategy="cos"</code>）。在实践中，我们通常在 <code class="language-plaintext highlighter-rouge">swa_start</code>（例如训练轮次的 75%之后）切换到 <code class="language-plaintext highlighter-rouge">SWALR</code>，并同时开始计算权重的运行平均值：</p>
+<p>我们还实现了将学习率逐渐降低到一个固定值（ <code class="language-plaintext highlighter-rouge">anneal_strategy="cos"</code> ）的余弦衰减。在实践中，我们通常在 <code class="language-plaintext highlighter-rouge">swa_start</code> 个 epochs 时切换到 <code class="language-plaintext highlighter-rouge">SWALR</code> （例如，在训练 epochs 的 75%之后），并同时开始计算权重的运行平均值：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">scheduler</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">optim</span><span class="p">.</span><span class="n">lr_scheduler</span><span class="p">.</span><span class="n">CosineAnnealingLR</span><span class="p">(</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">T_max</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
 <span class="n">swa_start</span> <span class="o">=</span> <span class="mi">75</span>
@@ -620,34 +626,34 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
           <span class="n">scheduler</span><span class="p">.</span><span class="n">step</span><span class="p">()</span>
 </code></pre></div></div>
 
-<p>最后，<code class="language-plaintext highlighter-rouge">update_bn</code> 是一个实用函数，用于计算给定数据加载器 <code class="language-plaintext highlighter-rouge">loader</code> 上 SWA 模型的批归一化统计信息：</p>
+<p>最后， <code class="language-plaintext highlighter-rouge">update_bn</code> 是一个计算给定数据加载器 <code class="language-plaintext highlighter-rouge">loader</code> 上 SWA 模型批归一化统计信息的工具函数：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch.optim.swa_utils.update_bn(loader, swa_model) 
 </code></pre></div></div>
-<p><code class="language-plaintext highlighter-rouge">update_bn</code> 将 <code class="language-plaintext highlighter-rouge">swa_model</code> 应用于数据加载器中的每个元素，并计算模型中每个批归一化层的激活统计信息。</p>
+<p> <code class="language-plaintext highlighter-rouge">update_bn</code> 将 <code class="language-plaintext highlighter-rouge">swa_model</code> 应用于数据加载器中的每个元素，并计算模型中每个批归一化层的激活统计信息。</p>
 
-<p>一旦计算了 SWA 平均值并更新了批归一化层，您就可以使用 <code class="language-plaintext highlighter-rouge">swa_model</code> 对测试数据进行预测。</p>
+<p>一旦计算了 SWA 平均值并更新了批量归一化层，您就可以应用 <code class="language-plaintext highlighter-rouge">swa_model</code> 来对测试数据进行预测。</p>
 
-<h2 id="why-does-it-work">为什么它有效？</h2>
+<h2 id="why-does-it-work">为什么它会起作用？</h2>
 
-<p>损失表面的损失区域很大且平坦[9]。如图 3 所示，我们展示了参数空间子空间中连接两个独立训练的 SGD 解的路径的损失表面可视化。由于该区域内的点损失值都相对较低，因此 SGD 在区域边界附近收敛，因为内部几乎没有梯度信号可以移动。通过增加学习率，SWA 在这个平坦区域周围旋转，然后通过平均迭代值，向平坦区域的中心移动。</p>
-
-<div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch3.jpg" width="100%">
-</div>
-
-<p><strong>图 3</strong>：<em>ResNet-20 在 CIFAR-10 数据集上无跳跃连接的模式连通性可视化。该可视化与 Javier Ideami 合作完成 <a href="https://losslandscape.com/">(https://losslandscape.com/)</a>。更多详情请见<a href="https://izmailovpavel.github.io/curves_blogpost/">这篇博客文章 </a></em>。</p>
-
-<p>我们期望位于损失平坦区域的解决方案比那些接近边界的解决方案泛化能力更好。事实上，训练和测试误差曲面在权重空间中并不完全对齐。位于平坦区域的解决方案不像接近边界的解决方案那样容易受到训练和测试误差曲面之间变化的影响。如图 4 所示，我们展示了连接 SWA 和 SGD 解决方案方向的训练损失和测试误差曲面。如图所示，虽然 SWA 解决方案的训练损失比 SGD 解决方案高，但它位于一个低损失的区域，并且测试误差显著更好。</p>
+<p>损失表面存在大面积的平坦区域[9]。如图 3 所示，我们在参数空间的一个子空间中展示了损失表面的可视化，该子空间包含连接两个独立训练的 SGD 解的路径，路径上的每个点损失都相对较低。SGD 在这些区域的边界附近收敛，因为内部几乎没有梯度信号可以移动，因为该区域的所有点都具有相似的损失值。通过增加学习率，SWA 在这个平坦区域周围旋转，然后通过平均迭代值，向平坦区域的中心移动。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch4.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch3.jpg" width="100%">
 </div>
 
-<p><strong>图 4</strong>. <em> 连接 SWA 解决方案（圆圈）和 SGD 解决方案（正方形）的线上的训练损失和测试误差。SWA 解决方案位于一个宽泛的低训练损失区域，而 SGD 解决方案位于边界附近。由于训练损失和测试误差曲面之间的偏移，SWA 解决方案导致更好的泛化。</em></p>
+<p>图 3：ResNet-20 在 CIFAR-10 数据集上无跳跃连接的模式连通性可视化。该可视化与 Javier Ideami（https://losslandscape.com/）合作完成。更多详情请参阅这篇博客文章。</p>
 
-<h2 id="what-are-the-results-achieved-with-swa">SWA 取得了哪些结果？</h2>
+<p>我们期望位于损失平坦区域的解决方案比靠近边界的解决方案泛化能力更好。事实上，训练和测试误差曲面在权重空间中并不完全对齐。位于平坦区域的解决方案不像靠近边界的解决方案那样容易受到训练和测试误差曲面之间差异的影响。如图 4 所示，我们展示了连接 SWA 和 SGD 解决方案方向的训练损失和测试误差曲面。如图所示，虽然 SWA 解决方案的训练损失比 SGD 解决方案高，但它位于一个低损失的区域，并且测试误差显著更好。</p>
 
-<p>我们发布了一个 GitHub <a href="https://github.com/izmailovpavel/torch_swa_examples"> 仓库 </a>，其中包含使用 PyTorch 实现 SWA 训练 DNN 的示例。例如，这些示例可以用于在 CIFAR-100 上实现以下结果：</p>
+<div class="text-center">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch4.png" width="100%">
+</div>
+
+<p>图 4. 连接 SWA 解决方案（圆圈）和 SGD 解决方案（正方形）的线上的训练损失和测试误差。SWA 解决方案位于一个宽泛的低训练损失区域，而 SGD 解决方案位于边界附近。由于训练损失和测试误差曲面之间的差异，SWA 解决方案导致更好的泛化。</p>
+
+<h2 id="what-are-the-results-achieved-with-swa">SWA 取得了哪些成果？</h2>
+
+<p>我们发布了一个包含使用 PyTorch 实现 SWA 训练 DNNs 示例的 GitHub 仓库。例如，这些示例可以用于在 CIFAR-100 上实现以下结果：</p>
 
 <table class="table table-striped table-bordered">
   <thead>
@@ -676,16 +682,16 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
 <h2 id="semi-supervised-learning">半监督学习</h2>
 
-<p>在后续的<a href="https://arxiv.org/abs/1806.05594">论文</a>中，SWA 被应用于半监督学习，在多个设置中提高了最佳报道结果[2]。例如，使用 SWA，如果您只有 4k 个训练数据点的训练标签，您可以在 CIFAR-10 上获得 95%的准确率（在此问题上的先前最佳报道结果是 93.7%）。本文还探讨了在 epochs 内多次平均，这可以加速收敛并在给定时间内找到更平缓的解。</p>
+<p>在后续论文中，SWA 被应用于半监督学习，在多个设置中提高了最佳报道结果[2]。例如，如果您只有 4k 个训练数据点的训练标签，使用 SWA 可以在 CIFAR-10 上获得 95%的准确率（该问题的先前最佳报道结果是 93.7%）。本文还探讨了在 epochs 内多次平均，这可以加速收敛并在给定时间内找到更平缓的解。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch5.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch5.png" width="100%">
 </div>
-<p><strong>图 5</strong>. fast-SWA 在 CIFAR-10 半监督学习中的性能。fast-SWA 在考虑的每个设置中都实现了创纪录的结果。</p>
+<p>图 5. fast-SWA 在 CIFAR-10 半监督学习中的性能。fast-SWA 在考虑的每个设置中都实现了创纪录的结果。</p>
 
 <h2 id="reinforcement-learning">强化学习</h2>
 
-<p>在另一篇后续 <a href="http://www.gatsby.ucl.ac.uk/~balaji/udl-camera-ready/UDL-24.pdf"> 论文 </a> 中，SWA 被证明可以提高策略梯度方法 A2C 和 DDPG 在多个 Atari 游戏和 MuJoCo 环境中的性能 [3]。此应用也是 SWA 与 Adam 一起使用的实例。回想一下，SWA 并不特定于 SGD，并且几乎可以惠及任何优化器。</p>
+<p>在另一篇后续论文中，SWA 被证明可以改善策略梯度方法 A2C 和 DDPG 在多个 Atari 游戏和 MuJoCo 环境中的性能[3]。这种应用也是 SWA 与 Adam 一起使用的实例。回想一下，SWA 并不特定于 SGD，几乎可以给任何优化器带来好处。</p>
 
 <table class="table table-striped table-bordered">
   <thead>
@@ -712,7 +718,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
       <td>21676 ± 8897</td>
     </tr>
     <tr>
-      <td>海洋探险号</td>
+      <td>海神</td>
       <td>1779 ± 4</td>
       <td>1795 ± 4</td>
     </tr>
@@ -731,56 +737,56 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
 <h2 id="low-precision-training">低精度训练</h2>
 
-<p>我们可以通过结合向下取整的权重和向上取整的权重来过滤量化噪声。此外，通过平均权重以找到损失表面的平坦区域，权重的较大扰动不会影响解的质量（见图 9 和图 10）。最近的研究表明，通过将 SWA 应用于低精度设置，在一种称为 SWALP 的方法中，即使所有训练都在 8 位进行，也可以匹配全精度 SGD 的性能[5]。这是一个相当重要的实际结果，因为（1）8 位 SGD 训练的性能明显低于全精度 SGD，并且（2）低精度训练比训练后的低精度预测（通常设置）要困难得多。例如，使用浮点（16 位）SGD 在 CIFAR-100 上训练的 ResNet-164 达到 22.2%的错误率，而 8 位 SGD 达到 24.0%的错误率。相比之下，使用 8 位训练的 SWALP 达到 21.8%的错误率。</p>
+<p>我们可以通过结合向下舍入的权重和向上舍入的权重来过滤量化噪声。此外，通过平均权重以找到损失表面的平坦区域，权重的较大扰动不会影响解的质量（见图 9 和图 10）。最近的研究表明，通过将 SWA 应用于低精度设置，在一种称为 SWALP 的方法中，即使所有训练都在 8 位进行，也可以匹配全精度 SGD 的性能[5]。这是一个相当重要的实际结果，因为（1）8 位 SGD 训练的性能明显低于全精度 SGD，并且（2）低精度训练比训练后的低精度预测（通常设置）要困难得多。例如，使用浮点（16 位）SGD 在 CIFAR-100 上训练的 ResNet-164 达到 22.2%的错误率，而 8 位 SGD 达到 24.0%的错误率。相比之下，8 位训练的 SWALP 达到 21.8%的错误率。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/nswapytorch6.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/nswapytorch6.png" width="100%">
 </div>
-<p><strong>图 9</strong>. <em> 量化解决方案会导致权重扰动，对锐利解（左）的质量影响大于对宽解（右）的质量</em></p>
+<p>图 9.对解决方案进行量化会导致权重的扰动，与宽解决方案（右侧）相比，对锐利解决方案（左侧）的质量影响更大。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch7.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch7.png" width="100%">
 </div>
-<p><strong>图 10</strong>. <em> 标准低精度训练与 SWALP 之间的差异</em></p>
+<p>图 10.标准低精度训练与 SWALP 之间的差异。</p>
 
-<p>另一项<a href="https://arxiv.org/abs/2002.00343">工作 </a>，SQWA，提出了一种在低精度下对神经网络进行量化和微调的方法 [12]。特别是，SQWA 在将 DNN 量化为 2 位后，在 CIFAR-100 和 ImageNet 上实现了最先进的成果。</p>
+<p>另一项工作，SQWA，提出了一种用于低精度神经网络量化和微调的方法[12]。特别是，SQWA 在 CIFAR-100 和 ImageNet 上对量化为 2 位的 DNN 实现了最先进的结果。</p>
 
 <h2 id="calibration-and-uncertainty-estimates">校准和不确定性估计</h2>
 
-<p>通过在损失函数中找到一个中心化的解，SWA 还可以提高校准和不确定性表示。事实上，SWA 可以看作是对集成的一种近似，类似于贝叶斯模型平均，但只有一个模型[1]。</p>
+<p>通过在损失函数中找到一个中心解，SWA 还可以提高校准和不确定性表示。事实上，SWA 可以看作是对集成的一种近似，类似于贝叶斯模型平均，但只有一个模型[1]。</p>
 
-<p>SWA 可以看作是使用修改后的学习率计划对 SGD 迭代的第一矩进行操作。我们可以通过也取迭代量的第二矩来形成关于权重的高斯近似后验，进一步用 SGD 迭代来表征损失几何。这种方法，<a href="https://arxiv.org/abs/1902.02476">SWA-Gaussian (SWAG)</a>，是一种简单、可扩展且方便的不确定性估计和贝叶斯深度学习中的校准方法[4]。SWAG 分布近似了真实后验的形状：图 6 显示了 SWAG 分布和 ResNet-20 在 CIFAR-10 上的后验对数密度。</p>
-
-<div class="text-center">
-  <img src="http://localhost:4000/assets/images/nswapytorch8.png" width="100%">
-</div>
-<p><strong>图 6</strong>. <em>SWAG 后验近似以及 ResNet-20（无跳跃连接）在 CIFAR-10 数据集上训练得到的 SWAG 协方差矩阵前两个最大特征值构成的子空间中的损失表面。SWAG 分布的形状与后验分布对齐：两个分布的峰值重合，且两个分布在一个方向上的宽度大于垂直方向。可视化与 Javier Ideami 合作完成。</em><a href="https://losslandscape.com/"> 贾维尔·伊代米 </a>.</p>
-
-<p>从经验上看，SWAG 在不确定性量化、异常值检测、校准和计算机视觉任务中的迁移学习方面，与 MC dropout、KFAC Laplace 和温度缩放等流行方法相比，表现相当或更好。SWAG 的代码可在<a href="https://github.com/wjmaddox/swa_gaussian">此处</a>找到。</p>
+<p>SWA 可以看作是使用修改后的学习率计划对 SGD 迭代的首次矩进行操作。我们可以通过也取迭代的二次矩来形成关于权重的高斯近似后验，进一步用 SGD 迭代来表征损失几何。这种方法，SWA-Gaussian（SWAG）是一种简单、可扩展且方便的不确定性估计和贝叶斯深度学习中的校准方法[4]。SWAG 分布近似了真实后验的形状：图 6 显示了 SWAG 分布和 ResNet-20 在 CIFAR-10 上的后验对数密度。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch9.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/nswapytorch8.png" width="100%">
 </div>
-<p><strong>图 7</strong>. <em>MultiSWAG 扩展了 SWAG 和深度集成，以在多个吸引子中进行贝叶斯模型平均，从而显著提高性能。相比之下，如图所示，深度集成选择不同的模式，而标准变分推断（VI）在单个吸引子内进行（模型平均）。</em></p>
+<p>图 6. SWAG 后验近似和 ResNet-20（无跳跃连接）在 CIFAR-10 数据集上训练的损失表面，该训练在 SWAG 协方差矩阵的两个最大特征值形成的子空间中进行。SWAG 分布的形状与后验对齐：两个分布的峰值重合，且两个分布在一个方向上的宽度大于正交方向。可视化与 Javier Ideami 合作完成。</p>
 
-<p>MultiSWAG [9] 使用多个独立的 SWAG 模型来形成一个高斯混合的近似后验分布。不同的吸引子包含对数据高度互补的解释。因此，对这些多个吸引子进行边缘化可以显著提高准确性和不确定性表示。MultiSWAG 可以被视为深度集成的推广，但性能有所提升。</p>
-
-<p>事实上，我们在图 8 中看到 MultiSWAG 完全缓解了双重下降——更灵活的模型性能单调提高——并且比 SGD 提供了显著更好的泛化能力。例如，当 ResNet-18 的宽度为 20 层时，Multi-SWAG 实现的错误率低于 30%，而 SGD 实现的错误率超过 45%，差距超过 15%！</p>
+<p>从经验上看，SWAG 在不确定性量化、分布外检测、校准和计算机视觉任务中的迁移学习方面，与 MC dropout、KFAC Laplace 和温度缩放等流行方法相比，表现相当或更好。SWAG 的代码在此处可用。</p>
 
 <div class="text-center">
-  <img src="http://localhost:4000/assets/images/swapytorch10.png" width="100%">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch9.png" width="100%">
 </div>
-<p><strong>图 8</strong>。 <em>SGD、SWAG 和 Multi-SWAG 在 CIFAR-100 上针对不同宽度的 ResNet-18。我们看到 MultiSWAG 特别缓解了双重下降，并在 SGD 上提供了显著的准确度提升 </em>。</p>
+<p>图 7. MultiSWAG 扩展了 SWAG 和深度集成，以在多个吸引子中进行贝叶斯模型平均，从而显著提高性能。相比之下，如图所示，深度集成选择不同的模式，而标准变分推断（VI）在单个吸引子内进行边缘化（模型平均）。</p>
 
-<p>参考文献编号 [10] 还考虑了多-SWA，它使用多个独立训练的 SWA 解决方案进行集成，在没有任何额外计算成本的情况下，提供了比深度集成更好的性能。MultiSWA 和 MultiSWAG 的代码可在<a href="https://github.com/izmailovpavel/understandingbdl">此处</a>找到。</p>
+<p>MultiSWAG [9] 使用多个独立的 SWAG 模型来形成高斯混合作为近似后验分布。不同的吸引子包含对数据高度互补的解释。因此，对这些多个吸引子进行边缘化可以显著提高准确性和不确定性表示。MultiSWAG 可以被视为深度集成的推广，但性能有所提升。</p>
 
-<p>另一种<a href="https://arxiv.org/abs/1907.07504">方法 </a>，子空间推理，在 SWA 解周围构建一个低维子空间，并消去该子空间中的权重来近似贝叶斯模型平均[5]。子空间推理使用 SGD 迭代的统计信息来构建 SWA 解和子空间。该方法在分类和回归问题中的预测精度和不确定性校准方面都取得了优异的性能。代码可在<a href="https://github.com/wjmaddox/drbayes">此处</a>找到。</p>
+<p>事实上，我们在图 8 中看到，MultiSWAG 完全缓解了双重下降——更灵活的模型性能单调提高——并且比 SGD 提供了显著改进的泛化能力。例如，当 ResNet-18 的宽度为 20 层时，Multi-SWAG 实现的错误率低于 30%，而 SGD 实现的错误率超过 45%，差距超过 15%！</p>
+
+<div class="text-center">
+  <img src="https://maskerprc.github.io/assets/images/swapytorch10.png" width="100%">
+</div>
+<p>图 8. SGD、SWAG 和 MultiSWAG 在 CIFAR-100 上对 ResNet-18 不同宽度的比较。我们看到 MultiSWAG 特别缓解了双重下降，并在 SGD 上提供了显著的准确度提升。</p>
+
+<p>参考文献编号[10]也考虑了多 SWA，该算法在集成中使用多个独立训练的 SWA 解决方案，在没有任何额外计算成本的情况下，提供了比深度集成更好的性能。MultiSWA 和 MultiSWAG 的代码在此处可用。</p>
+
+<p>另一种方法，子空间推理，在 SWA 解周围构建一个低维子空间，并消去该子空间中的权重来近似贝叶斯模型平均[5]。子空间推理使用 SGD 迭代的统计信息来构建 SWA 解和子空间。该方法在分类和回归问题中的预测精度和不确定性校准方面都取得了优异的性能。代码在此处可用。</p>
 
 <h2 id="try-it-out">尝试一下！</h2>
 
-<p>深度学习中一个最大的未解之谜之一是为什么 SGD 能够在训练目标高度多模态的情况下找到良好的解，因为有许多参数设置可以实现无训练损失但泛化能力差。通过理解与泛化相关的几何特征，如平坦度，我们可以开始解决这些问题，并构建提供更好泛化以及其他许多有用特性的优化器，例如不确定性表示。我们提出了 SWA，这是一种简单的标准优化器（如 SGD 和 Adam）的替代品，原则上可以惠及任何正在训练深度神经网络的用户。SWA 已在多个领域表现出强大的性能，包括计算机视觉、半监督学习、强化学习、不确定性表示、校准、贝叶斯模型平均和低精度训练。</p>
+<p>深度学习中一个最大的未解之谜之一是为什么 SGD 能够在训练目标高度多模态的情况下找到良好的解，因为有许多参数设置可以实现无训练损失但泛化能力差。通过理解与泛化相关的几何特征，如平坦度，我们可以开始解决这些问题，并构建提供更好泛化能力以及许多其他有用特性的优化器，例如不确定性表示。我们提出了 SWA，这是一种简单的标准优化器（如 SGD 和 Adam）的替代品，原则上可以惠及任何正在训练深度神经网络的用户。SWA 已在多个领域显示出强大的性能，包括计算机视觉、半监督学习、强化学习、不确定性表示、校准、贝叶斯模型平均和低精度训练。</p>
 
-<p>我们鼓励您尝试 SWA！现在使用 SWA 与任何标准的 PyTorch 训练一样简单。即使您已经训练了模型，您也可以通过从预训练模型运行少量 epoch 来使用 SWA 显著提高性能。</p>
+<p>我们鼓励您尝试 SWA！现在使用 SWA 与 PyTorch 中的任何标准训练一样简单。即使您已经训练了模型，您也可以通过从预训练模型运行少量 epoch 来使用 SWA 显著提高性能。</p>
 
 <p>[1] 平均权重导致更宽的优化范围和更好的泛化能力；Pavel Izmailov, Dmitry Podoprikhin, Timur Garipov, Dmitry Vetrov, Andrew Gordon Wilson；人工智能中的不确定性（UAI），2018。</p>
 
@@ -796,7 +802,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
 <p>[7] 大卫·鲁珀特。从缓慢收敛的罗宾斯-莫诺过程中进行有效估计 技术报告，康奈尔大学运筹学与工业工程系，1988。</p>
 
-<p>[8] 通过平均加速随机逼近 博里斯·波利亚克和安纳托利·尤迪茨基；美国工业与应用数学学会控制与优化杂志，第30卷第4期：838–855，1992。</p>
+<p>[8] 通过平均加速随机逼近 博里斯·波利亚克和阿纳托利·尤迪茨基；美国工业与应用数学学会控制与优化杂志，第 30 卷第 4 期：838–855，1992。</p>
 
 <p>[9] 深度神经网络快速集成中的损失曲面、模式连通性 Timur Garipov, Pavel Izmailov, Dmitrii Podoprikhin, Dmitry Vetrov, Andrew Gordon Wilson. 神经信息处理系统（NeurIPS），2018。</p>
 
@@ -821,14 +827,14 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -845,7 +851,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -858,7 +864,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -866,7 +872,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -895,9 +901,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -907,7 +911,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -932,19 +936,19 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -967,7 +971,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -981,7 +985,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1016,7 +1020,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1030,7 +1034,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1098,7 +1102,7 @@ anneal_strategy=" linear",="" anneal_epochs="5," swa_lr="0.05)" we="" also="" im
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

@@ -164,8 +164,8 @@ Although bidirectional attention is the simplest, the original Attention is All 
 def causal_mask(score, b, h, q_idx, kv_idx):
     return torch.where(q_idx >= kv_idx, score, -float(" inf"))="" basically,="" if="" the="" query="" token="" is="" “after”="" key="" token,="" we="" keep="" score.="" otherwise,="" mask="" it="" out="" by="" setting="" to="" -inf,="" thus="" ensuring="" won’t="" participate="" in="" softmax="" calculation.="" however,="" masking="" special="" compared="" other="" modifications="" -="" something="" masked="" out,="" can="" completely="" skip="" its="" computation!="" this="" case,="" a="" causal="" has="" about="" 50%="" sparsity,="" so="" not="" taking="" advantage="" of="" sparsity="" would="" result="" 2x="" slowdown.="" although="" score_mod="" sufficient="" implement="" correctly,="" getting="" performance="" benefits="" requires="" another="" concept="" mask_mod.="" mods="" take="" from="" masking,="" need="" do="" some="" more="" work.="" specifically,="" passing="" mask_mod="" create_block_mask,="" create="" blockmask.="" flexattention="" then="" use="" blockmask="" sparsity!="" signature="" very="" similar="" just="" without="" particular="" #="" returns="" true="" position="" should="" computation="" mask_mod(b,="" h,="" q_idx,="" kv_idx)=">" bool="" note="" that="" strictly="" expressive="" than="" for="" it’s="" recommended="" and="" as="" performant.="" see="" faq="" on="" why="" are="" separate.="" now,="" let’s="" look="" at="" how="" might="" with="" torch.nn.attention.flex_attention="" import="" create_block_mask="" def="" causal(b,="" kv_idx):="" return="" q_idx="" &gt;="kv_idx" because="" pattern="" independent="" batch="" heads,="" we'll="" set="" them="" none="" (which="" broadcasts="" them)="" block_mask="create_block_mask(causal," b="None," h="None," q_len="1024," kv_len="1024)" don't="" score_mod,="" won't="" pass="" any="" in.="" still="" be="" combined="" you="" additional="" flexibility.="" flex_attention(query,="" key,="" value,="" relatively="" expensive="" operation!="" will="" recompile="" when="" changes,="" aren’t="" careful="" caching="" it,="" lead="" significant="" slowdowns="" (check="" suggestions="" best="" practices).="" while="" tflops="" roughly="" same,="" execution="" time="" faster="" version!="" demonstrates="" leverage="" provides="" us="" losing="" hardware="" efficiency.="" sliding="" window="" +="" source:="" mistral="" 7b="" popularized="" mistral,="" attention="" (also="" known="" local="" attention)="" takes="" intuition="" most="" recent="" tokens="" useful.="" particular,="" allows="" only="" attend="" to,="" say,="" 1024="" tokens.="" often="" used="" together="" attention.="" sliding_window="1024" sliding_window_causal(b,="" causal_mask="q_idx" window_mask="q_idx" kv_idx="" &lt;="SLIDING_WINDOW" &amp;="" want="" cute...="" torch.nn.attention="" and_masks="" sliding_window(b,="" sliding_window_causal="and_masks(causal_mask," sliding_window)="" benchmark="" against="" f.scaled_dot_product_attention="" well="" fa2="" (as="" reference="" point="" performance).="" significantly="" f.scaled_dot_product_attention,="" we’re="" also="" sparsity.="" prefixlm="" paligemma:="" versatile="" 3b="" vlm="" transfer="" t5="" architecture,="" proposed="" exploring="" limits="" learning="" unified="" text-to-text="" transformer,="" describes="" an="" variant="" performs="" full="" bidirectional="" “prefix”,="" rest.="" again="" compose="" two="" functions="" accomplish="" this,="" one="" based="" off="" prefix="" length.="" prefix_length:="" [b]="" prefix_mask(b,="" prefix_lm_causal="or_masks(prefix_mask," causal_mask)="" our="" different="" per="" sequence="" equal="" size="" s,="" s)="" like="" refer="" tensors="" explicitly="" input="" function!="" prefixlm,="" changes="" input.="" means="" each="" new="" batch,="" we’ll="" recompute="" common="" call="" beginning="" your="" model="" reuse="" all="" calls="" model.="" recomputing="" block="" masks="" vs.="" recompilation.="" exchange="" that,="" able="" have="" efficient="" kernel="" however="" much="" exists="" input!="" dynamically="" adjust="" data,="" needing="" kernel.="" document="" jagged="" sequences="" sequences.="" imagine="" number="" varying="" train="" together,="" but="" unfortunately,="" operators="" accept="" rectangular="" tensors.="" through="" blockmask,="" support="" efficiently="" well!="" first,="" flatten="" into="" single="" sum(sequence="" lengths)="" then,="" compute="" document_id="" belongs="" to.="" finally,="" mask_mod,="" simply="" whether="" kv="" belong="" same="" document!="" e.g.="" [0,="" 0,="" 1,="" 2,="" 2]="" corresponds="" lengths="" 3,="" 6.="" document_id:="" [seq_len]="" document_masking(b,="" document_id[q_idx]="=" document_id[kv_idx]="" that’s="" it!="" end="" up="" blockdiagonal="" mask.="" interesting="" aspect="" easy="" combine="" arbitrary="" combination="" .="" example,="" already="" defined="" prefixlm_mask="" previous="" section.="" now="" define="" prefixlm_document_mask="" function="" well?="" these="" cases,="" we’ve="" found="" quite="" useful="" what="" “higher="" level="" modification”.="" existing="" automatically="" transform="" works="" sequences!="" generate_doc_mask_mod(mask_mod,="" document_id):="" get="" unique="" ids="" their="" counts="" _,="" return_counts="True)" cumulative="" (offsets)="" offsets="torch.cat([torch.tensor([0]," device="document_id.device)," counts.cumsum(0)[:-1]])="" doc_mask_wrapper(b,="" same_doc="document_id[q_idx]" =="document_id[kv_idx]" q_logical="q_idx" offsets[document_id[q_idx]]="" kv_logical="kv_idx" offsets[document_id[kv_idx]]="" inner_mask="mask_mod(b," q_logical,="" kv_logical)="" doc_mask_wrapper="" given="" above,="" packed="" documents="" so:="" prefix_length="torch.tensor(2," dtype="torch.int32," )="" doc_prefix_lm_causal_mask="generate_doc_mask_mod(prefix_lm_causal," document_id)="" “block-prefixlm-diagonal”="" shaped.="" :)="" examples!="" there="" far="" variants="" space="" list,="" check="" gym="" examples.="" hope="" community="" contribute="" favorite="" applications="" well.="" q:="" does="" recompile?="" leverages="" torch.compile="" graph="" capture,="" actually="" avoid="" recompilation="" broad="" spectrum="" cases.="" notably,="" even="" captured="" change="" values!="" flex_attention="torch.compile(flex_attention)" create_bias_mod(bias)="" bias_mod(score,="" b,="" score="" bias="" bias_mod="" bias_mod1="create_bias_mod(torch.tensor(0))" flex_attention(...,="" compiles="" here="" bias_mod2="create_bias_mod(torch.tensor(2))" doesn't="" recompile!="" changing="" block-sparsity="" doesn’t="" require="" recompile.="" blockmask?="" whenever="" changes.="" computing="" cheaper="" (on="" order="" hundreds="" microseconds="" opposed="" seconds),="" care="" excessively="" patterns="" recommendations="" approach="" them.="" never="" (e.g.="" mask)="" precompute="" cache="" globally,="" reusing="" calls.="" s,s)="" causal_attention="functools.partial(flex_attention," every="" masking)="" suggest="" threading="" layers.="" forward(self,="" x,="" doc_mask):="" forwards="" none,="" x="self.layer1(x," block_mask)="" ...="" amortize="" construction="" cost="" across="" layers="" layer="" data-dependent="" sparsity)="" hardest="" setting,="" since="" unable="" multiple="" invocations.="" certainly="" benefit="" actual="" depend="" sparse="" fast="" construct="" leads="" to…="" quicker?="" unfortunately="" fairly="" expensive,="" both="" memory="" perspective,="" determining="" evaluating="" block.="" couple="" ways="" address="" this:="" or="" make="" sure="" you’re="" broadcasting="" over="" those="" (i.e.="" create_block_mask).="" compile="" create_block_mask.="" today,="" work="" directly="" due="" unfortunate="" limitations.="" _compile="True," which="" reduce="" peak="" runtime="" (often="" magnitude="" testing).="" write="" custom="" constructor="" metadata="" simple="" (see="" documentation).="" essentially="" a.="" num_blocks:="" blocks="" computed="" b.="" indices:="" positions="" here’s="" causal_mask.="" create_causal_mask(s):="" block_size="128" first="" computes="" block,="" second="" 2="" blocks,="" etc.="" num_blocks="torch.arange(S" block_size,="" 1="" we're="" always="" left="" right,="" indices="" ...]="" ).expand(="" s="" :]="" blockmask(num_blocks,="" indices,="" different?="" isn’t="" case="" score_mod?="" astute="" question,="" hypothetical="" audience="" member!="" fact,="" easily="" converted="" (we="" recommend="" using="" practice!)="" mask_mod_as_score_mod(b,="" torch.where(mask_mod(b,="" kv_idx),="" score,="" -float("inf"))="" so,="" everything="" can,="" what’s="" having="" mask_mod?="" immediate="" challenge:="" value="" input,="" precomputing="" don’t="" value.="" perhaps="" fake="" values="" zeros,="" consider="" (in="" originally="" did="" this!).="" issues.="" hacky="" user’s="" returned="" -inf="" 0?="" large="" negative="" instead="" -inf?="" seems="" trying="" cram="" round="" peg="" square="" hole.="" there’s="" important="" reason="" separate="" fundamentally="" efficient!.="" turns="" applying="" element="" benchmarks="" 15-20%="" degradation="" performance!="" speedups="" skipping="" half="" computation,="" lose="" meaningful="" part="" speedup="" element!="" luckily,="" visualize="" mask,="" notice="" vast="" majority="" “causal="" mask”="" they’re="" fully="" computed!="" diagonal,="" partially="" masked,="" applied.="" previously="" told="" skip.="" further="" augment="" data="" structure="" tell="" “fully="" computed”="" skipped)="" “partially="" needs="" applied).="" note,="" skipped="" score_mods="" relative="" positional="" embeddings="" no="" sound="" way="" parts="" “masking”.="" hence,="" user="" must="" themselves="" need?="" [batch_size,="" num_heads,="" query_len="" block_size].="" heads="" dimension="" broadcasted="" save="" memory.="" default="" 128,="" expect="" usage="" negligible="" length="" million,="" 60mb="" problem,="" increase="" size:="" create_block_mask(...,="" increasing="" dropping="" under="" megabyte.="" numerics="" compare?="" results="" bitwise="" identical,="" confident="" numerically="" accurate="" flashattention.="" generate="" following="" distribution="" differences="" comparing="" flashattention="" versus="" range="" inputs="" non="" variants.="" errors="" nearly="" identical.="" generally="" speaking,="" performant="" handwritten="" triton="" kernel,="" unsurprising,="" heavily="" generality,="" incur="" small="" penalty.="" latency="" determine="" next.="" provide="" options="" affect="" behavior.="" they="" here:="" knobs="" study,="" explore="" compare="" flashattentionv2="" a100.="" script="" here.="" achieves="" 90%="" flashattention2’s="" forward="" 85%="" backward="" pass.="" currently="" utilizing="" deterministic="" algorithm="" recomputes="" intermediates="" fav2,="" plans="" improve="" flexattention’s="" close="" gap!="" conclusion="" fun="" developing="" working="" ended="" finding="" api="" could="" expected.="" seen="" accelerate="" torchtune’s="" sample="" packing="" throughput="" 71%,="" replace="" researcher="" spend="" week="" writing="" own="" deliver="" competitive="" final="" thing="" made="" implementing="" were="" lot="" pytorch="" infra="" way.="" aspects="" torchdynamo="" (torch.compile’s="" frontend)="" compiled="" passed="" inputs.="" accessing="" global="" variables="" where="" change!="" 1024)="" score_mod(score,="" bias[q_idx][kv_idx]="" tensor="" furthermore,="" fact="" generic="" graph-capture="" mechanism="" “advanced”="" transformations,="" such="" higher="" transforms="" torchinductor="" backend)="" infrastructure="" templates.="" codegening="" gave="" dynamic="" shapes="" epilogue="" fusion="" fusing="" operator="" onto="" attention)!="" future,="" plan="" extending="" allow="" quantized="" versions="" things="" radixattention="" addition,="" leveraged="" ops,="" pytorch’s="" autograd="" backwards="" pass,="" vmap="" apply="" creating="" and,="" course,="" project="" wouldn’t="" been="" possible="" torchinductor’s="" ability="" code.="" leveraging="" future!="" limitations="" future="" available="" nightly="" releases,="" release="" prototype="" feature="" 2.5.0="" cover="" inference="" (or="" pagedattention)="" later="" post.="" match="" flashattention3="" h100="" gpus.="" 128="" addressed="" soon.="" adding="" gqa="" soon="" replicate="" heads.="" acknowledgements="" highlight="" prior="" (and="" people)="" inspired="" flexattention.="" tri="" dao’s="" francisco="" massa="" xformers="" team="" blocksparseattention="" jax="" team’s="" splashattention="" philippe="" tillet="" keren="" zhou="" helping="" ali="" hassani="" discussions="" neighborhood="" everybody="" who’s="" complained="" kernels="" supporting="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -487,7 +487,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -495,7 +495,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -504,27 +504,27 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 食谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -535,21 +535,27 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -557,18 +563,20 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -579,12 +587,12 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -595,28 +603,28 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -630,7 +638,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -666,7 +674,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2024年8月7日</p>
+            <p class="featured-post">2024 年 8 月 7 日</p>
             <h1>
                 <a class="blog-title">FlexAttention：PyTorch 的灵活性加上 FlashAttention 的性能</a>
             </h1>
@@ -678,31 +686,31 @@ def causal_mask(score, b, h, q_idx, kv_idx):
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">由 PyTorch 团队：Driss Guessous、Yanbo Liang、Joy Dong、Horace He</p>
+                    <p class="author">由 PyTorch 团队：Driss Guessous、Yanbo Liang、Joy Dong、Horace He 完成</p>
                     <p><img src="/assets/images/flexattention/fg1.jpg" alt="a cartoon chart flexing his muscles" style="width:100%"></p>
 
-<p>理论上，注意力即是所需。然而在实践中，我们还需要像 FlashAttention 这样的优化注意力实现。</p>
+<p>理论上，注意力就是一切。然而在实践中，我们还需要像 FlashAttention 这样的优化注意力实现。</p>
 
-<p>尽管这些融合的注意力实现显著提高了性能并实现了长上下文，但这种效率是以灵活性为代价的。您不能再通过编写几个 PyTorch 操作符来尝试新的注意力变体了——您通常需要编写一个新的自定义内核！这就像是一种“软件彩票”对机器学习研究人员来说——如果您的注意力变体不适合现有的优化内核，您将注定于缓慢的运行时间和 CUDA OOMs。</p>
+<p>尽管这些融合的注意力实现显著提高了性能并实现了长上下文，但这种效率是以灵活性为代价的。您不能再通过编写几个 PyTorch 操作符来尝试新的注意力变体了——您通常需要编写一个新的自定义内核！这就像是一种“软件彩票”对机器学习研究人员来说——如果您的注意力变体不适合现有的优化内核，您将注定面临缓慢的运行时间和 CUDA OOMs。</p>
 
-<p>一些注意力变体的例子包括：因果注意力、<a href="https://paperswithcode.com/method/relative-position-encodings"> 相对位置编码 </a>、<a href="https://paperswithcode.com/method/alibi">Alibi</a>、<a href="https://mistral.ai/news/announcing-mistral-7b/"> 滑动窗口注意力 </a>、<a href="https://twitter.com/andersonbcdefg/status/1800907703688339569">PrefixLM</a>、<a href="https://github.com/pytorch/torchtune/pull/875"> 文档掩码/样本打包/锯齿形张量 </a>、<a href="https://twitter.com/LysandreJik/status/1807779471891538199">Tanh 软上限 </a>、<a href="https://arxiv.org/abs/2309.06180">PagedAttention</a> 等。更糟糕的是，人们经常想要这些的组合！滑动窗口注意力 + 文档掩码 + 因果注意力 + 上下文并行？或者，PagedAttention + 滑动窗口 + Tanh 软上限呢？</p>
+<p>一些注意力变体的例子包括因果注意力、相对位置嵌入、Alibi、滑动窗口注意力、PrefixLM、文档掩码/样本打包/锯齿形张量、Tanh 软上限、分页注意力等。更糟糕的是，人们经常想要这些的组合！滑动窗口注意力 + 文档掩码 + 因果 + 上下文并行？或者，PagedAttention + 滑动窗口 + Tanh 软上限呢？</p>
 
-<p>下方的左侧图片展示了当今世界的状态——一些组合的口罩+偏差+设置已经实现了现有的内核。但是，各种选项导致设置数量呈指数级增长，因此总体上我们得到的支持相当零散。更糟糕的是，研究人员提出的新注意力变体将没有<em>支持 </em>。</p>
+<p>下方左侧的图片展示了当今世界的状态——一些组合的口罩+偏差+设置已经实现了现有的内核。但是，各种选项导致设置数量呈指数级增长，因此总体上我们得到的支持相当零散。更糟糕的是，研究人员提出的新注意力变体将没有任何支持。</p>
 
 <p><img src="/assets/images/flexattention/fg2.jpg" alt="Attention variant support diagram" style="max-width:600px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p>为了彻底解决这个问题，我们引入了 <strong>FlexAttention</strong>，一个新的 PyTorch API。</p>
+<p>为了一劳永逸地解决这个问题，我们引入了 FlexAttention，一个新的 PyTorch API。</p>
 
 <ol>
-  <li>我们提供灵活的 API，允许用几行惯用的 PyTorch 代码实现许多注意力变体（包括到目前为止博客文章中提到的所有变体）。</li>
-  <li>我们通过 <code class="language-plaintext highlighter-rouge">torch.compile</code> 将其降低到融合的 FlashAttention 内核，生成一个不产生额外内存且性能与手写内核相媲美的 FlashAttention 内核。</li>
+  <li>我们提供了一个灵活的 API，允许通过几行惯用的 PyTorch 代码实现许多注意力变体（包括到目前为止博客文章中提到的所有变体）。</li>
+  <li>我们通过 <code class="language-plaintext highlighter-rouge">torch.compile</code> 将其降低为融合的 FlashAttention 内核，生成一个不产生额外内存且性能与手写内核相媲美的 FlashAttention 内核。</li>
   <li>我们还自动生成反向传播，利用 PyTorch 的 autograd 机制。</li>
   <li>最后，我们还可以利用注意力掩码的稀疏性，在标准注意力实现上取得显著改进。</li>
 </ol>
 
 <p>在 FlexAttention 中，我们希望尝试新的注意力变体只受限于你的想象力。</p>
 
-<p>你可以在 Attention Gym 找到许多 FlexAttention 示例：[https://github.com/pytorch-labs/attention-gym](https://github.com/pytorch-labs/attention-gym)。如果你有任何酷炫的应用，欢迎提交示例！</p>
+<p>你可以在 Attention Gym 找到许多 FlexAttention 的示例：https://github.com/pytorch-labs/attention-gym。如果你有任何酷炫的应用，欢迎提交示例！</p>
 
 <p>PS：我们也觉得这个 API 非常有趣，因为它以有趣的方式利用了大量的现有 PyTorch 基础设施——更多内容将在最后介绍。</p>
 
@@ -720,7 +728,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 <span class="n">output</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">[</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">sequence_length</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">]</span> <span class="o">=</span> <span class="n">probabilities</span> <span class="o">@</span> <span class="n">V</span>
 </code></pre></div></div>
 
-<p>FlexAttention 允许用户定义一个函数 <code class="language-plaintext highlighter-rouge">score_mod:</code></p>
+<p>FlexAttention 允许用户定义一个函数 <code class="language-plaintext highlighter-rouge">score_mod:</code> </p>
 
 <p><img src="/assets/images/flexattention/fg4.png" alt="math equation" style="width:100%"></p>
 
@@ -733,15 +741,15 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 <span class="n">output</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">[</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">sequence_length</span><span class="p">,</span> <span class="n">head_dim</span><span class="p">]</span> <span class="o">=</span> <span class="n">probabilities</span> <span class="o">@</span> <span class="n">V</span>
 </code></pre></div></div>
 
-<p>此函数允许您 <em> 修改 </em> 在 softmax 之前的注意力分数。令人惊讶的是，这足以满足绝大多数注意力变体（以下为示例）！</p>
+<p>此函数允许您在 softmax 之前修改注意力分数。令人惊讶的是，这足以满足绝大多数注意力变体（以下为示例）！</p>
 
-<p>具体来说，<code class="language-plaintext highlighter-rouge">score_mod</code> 的预期签名有些独特。</p>
+<p>具体来说， <code class="language-plaintext highlighter-rouge">score_mod</code> 的预期签名有些独特。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">score_mod</span><span class="p">(</span><span class="n">score</span><span class="p">:</span> <span class="n">f32</span><span class="p">[],</span> <span class="n">b</span><span class="p">:</span> <span class="n">i32</span><span class="p">[],</span> <span class="n">h</span><span class="p">:</span> <span class="n">i32</span><span class="p">[],</span> <span class="n">q_idx</span><span class="p">:</span> <span class="n">i32</span><span class="p">[],</span> <span class="n">kv_idx</span><span class="p">:</span> <span class="n">i32</span><span class="p">[])</span>
     <span class="k">return</span> <span class="n">score</span> <span class="c1"># noop - standard attention
 </span></code></pre></div></div>
 
-<p>换句话说，<code class="language-plaintext highlighter-rouge"> 得分</code>是一个表示查询标记和键标记点积的标量 PyTorch 张量。其余的参数告诉你当前正在计算哪个点积 - <code class="language-plaintext highlighter-rouge">b</code>（批处理中的当前元素），<code class="language-plaintext highlighter-rouge">h</code>（当前头），<code class="language-plaintext highlighter-rouge">q_idx</code>（查询中的位置），<code class="language-plaintext highlighter-rouge">kv_idx</code>（键/值张量中的位置）。</p>
+<p>换句话说， <code class="language-plaintext highlighter-rouge">score</code> 是一个标量 PyTorch 张量，表示查询标记和键标记的点积。其余的参数告诉你当前正在计算哪个点积 - <code class="language-plaintext highlighter-rouge">b</code> （批处理中的当前元素）、 <code class="language-plaintext highlighter-rouge">h</code> （当前头）、 <code class="language-plaintext highlighter-rouge">q_idx</code> （查询中的位置）、 <code class="language-plaintext highlighter-rouge">kv_idx</code> （键/值张量中的位置）。</p>
 
 <p>要应用此函数，我们可以将其实现为</p>
 
@@ -752,7 +760,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
                 <span class="n">modified_scores</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">score_mod</span><span class="p">(</span><span class="n">scores</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">],</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>当然，FlexAttention 在底层并不是这样实现的。利用 <code class="language-plaintext highlighter-rouge">torch.compile</code>，我们自动将你的函数降低为单个<em>融合</em>的 FlexAttention 内核 - 保证或退款！</p>
+<p>当然，这并不是 FlexAttention 在底层实现的真正方式。利用 <code class="language-plaintext highlighter-rouge">torch.compile</code> ，我们自动将你的函数降低到单个融合的 FlexAttention 内核 - 保证或退款！</p>
 
 <p>这个 API 最终表现得非常灵活。让我们看看一些例子。</p>
 
@@ -760,13 +768,13 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
 <h3 id="full-attention">全注意力机制</h3>
 
-<p>首先我们来做“全注意力机制”，或者标准的双向注意力机制。在这种情况下，<code class="language-plaintext highlighter-rouge">score_mod</code> 是一个空操作 - 它接收分数作为输入，然后原样返回。</p>
+<p>首先我们来做“全注意力机制”，或者标准的双向注意力。在这种情况下， <code class="language-plaintext highlighter-rouge">score_mod</code> 是一个空操作 - 它接收分数作为输入，然后原样返回。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">noop</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">score</span>
 </code></pre></div></div>
 
-<p>然后从头到尾使用它（包括正向和反向）：</p>
+<p>然后将其端到端使用（包括正向和反向）：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.nn.attention.flex_attention</span> <span class="kn">import</span> <span class="n">flex_attention</span>
 
@@ -775,24 +783,24 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
 <h3 id="relative-position-encodings">相对位置编码</h3>
 
-<p>一种常见的注意力变体是 <a href="https://paperswithcode.com/method/relative-position-encodings">“相对位置编码”</a>。与在查询和键中编码绝对距离不同，相对位置编码根据查询和键之间的“距离”调整分数。</p>
+<p>一种常见的注意力变体是“相对位置编码”。与在查询和键中编码绝对距离不同，相对位置编码根据查询和键之间的“距离”调整分数。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">relative_positional</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">score</span> <span class="o">+</span> <span class="p">(</span><span class="n">q_idx</span> <span class="o">-</span> <span class="n">kv_idx</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>注意，与典型实现不同，这<em>不需要</em>实例化一个 SxS 张量。相反，FlexAttention 在内核中“实时”计算偏置值，从而带来显著的内存和性能提升。</p>
+<p>注意，与典型实现不同，这不需要实例化一个 SxS 张量。相反，FlexAttention 在内核中“实时”计算偏置值，从而带来显著的内存和性能提升。</p>
 
 <p><img src="/assets/images/flexattention/fg5.png" alt="relative position encoding" style="width:100%"></p>
 
 <h3 id="alibi-bias">ALiBi 偏置</h3>
 
 <p><img src="/assets/images/flexattention/fg6.png" alt="alibi bias" style="max-width:600px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
-<p style="text-align: center;"><em>来源：<a href="https://arxiv.org/abs/2108.12409">Train Short, Test Long：带有线性偏置的注意力机制实现输入长度外推</a></em></p>
+<p style="text-align: center;"><em>来源：训练短，测试长：带有线性偏置的注意力实现输入长度外推</em></p>
 
-<p>ALiBi 在 <a href="https://arxiv.org/abs/2108.12409">Train Short, Test Long：带有线性偏置的注意力机制实现输入长度外推 </a> 中被引入，并声称在推理阶段的长度外推具有有益的特性。值得注意的是，MosaicML 指出 <a href="https://twitter.com/jefrankle/status/1804567458092605736">“内核支持不足”</a> 是他们最终从 ALiBi 转向旋转嵌入的主要原因。</p>
+<p>ALiBi 在《训练短，测试长：带有线性偏置的注意力实现输入长度外推》中被引入，并声称在推理阶段的长度外推具有有益的特性。值得注意的是，MosaicML 指出“缺乏内核支持”是他们最终从 ALiBi 切换到旋转嵌入的主要原因。</p>
 
-<p>Alibi 与相对位置编码类似，只有一个例外——它具有一个通常是预先计算的每个头的因子。</p>
+<p>Alibi 与相对位置编码类似，只有一个例外——它有一个通常是预先计算的每个头的因子。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">alibi_bias</span> <span class="o">=</span> <span class="n">generate_alibi_bias</span><span class="p">()</span> <span class="c1"># [num_heads]
 </span>
@@ -801,11 +809,11 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">score</span> <span class="o">+</span> <span class="n">bias</span>
 </code></pre></div></div>
 
-<p>这展示了 <code class="language-plaintext highlighter-rouge">torch.compile</code> 提供的一个有趣的灵活性——即使它 <em> 没有作为输入明确传递 </em>，我们也可以从 <code class="language-plaintext highlighter-rouge">alibi_bias</code> 加载！生成的 Triton 内核将从 <code class="language-plaintext highlighter-rouge">alibi_bias</code> 张量中计算正确的加载并融合它。请注意，即使重新生成 <code class="language-plaintext highlighter-rouge">alibi_bias</code>，我们也不需要重新编译。</p>
+<p>这展示了 <code class="language-plaintext highlighter-rouge">torch.compile</code> 提供的一个有趣的灵活性——我们可以从 <code class="language-plaintext highlighter-rouge">alibi_bias</code> 加载，即使它没有被明确地作为输入传递！生成的 Triton 内核将计算正确的加载量，并从 <code class="language-plaintext highlighter-rouge">alibi_bias</code> 张量中融合。请注意，即使我们重新生成 <code class="language-plaintext highlighter-rouge">alibi_bias</code> ，我们也不需要重新编译。</p>
 
 <h3 id="soft-capping">软上限</h3>
 
-<p>软上限是一种在 Gemma2 和 Grok-1 中使用的技巧，用于防止 logits 无限制地增长。在 FlexAttention 中，它看起来像：</p>
+<p>软上限是一种在 Gemma2 和 Grok-1 中使用的技巧，用于防止 logits 无限制地增长过大。在 FlexAttention 中，它看起来像：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">softcap</span> <span class="o">=</span> <span class="mi">20</span>
 <span class="k">def</span> <span class="nf">soft_cap</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
@@ -815,31 +823,31 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">score</span>
 </code></pre></div></div>
 
-<p>注意，我们在这里还自动从正向传递生成反向传递。尽管这种实现从语义上是正确的，但出于性能考虑，我们可能希望在这种情况下使用 tanh 近似。有关更多详细信息，请参阅 <a href="https://github.com/pytorch-labs/attention-gym/blob/main/attn_gym/mods/softcapping.py">attention-gym</a>。</p>
+<p>注意，我们在这里还自动从正向传递生成反向传递。尽管这种实现从语义上是正确的，但出于性能考虑，我们可能希望在这种情况下使用 tanh 近似。更多详情请参阅 attention-gym。</p>
 
 <h3 id="causal-mask">因果掩码</h3>
 
-<p>虽然双向注意力是最简单的，但原始的《Attention is All You Need》论文以及绝大多数LLMs在解码器仅设置中使用注意力，其中每个标记只能关注其之前的标记。人们通常将其视为下三角掩码，但通过 <code class="language-plaintext highlighter-rouge">score_mod</code> API，它可以表示为：</p>
+<p>虽然双向注意力是最简单的，但原始的《Attention is All You Need》论文以及绝大多数LLMs在解码器仅设置中使用注意力，其中每个标记只能关注其之前的标记。人们通常认为这是一种下三角掩码，但通过 <code class="language-plaintext highlighter-rouge">score_mod</code> API 可以表示为：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">causal_mask</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">torch</span><span class="p">.</span><span class="n">where</span><span class="p">(</span><span class="n">q_idx</span> <span class="o">&gt;=</span> <span class="n">kv_idx</span><span class="p">,</span> <span class="n">score</span><span class="p">,</span> <span class="o">-</span><span class="nb">float</span><span class="p">(</span><span class="s">"inf"</span><span class="p">))</span>
 </code></pre></div></div>
 
-<p>基本上，如果查询标记在键标记“之后”，我们保留分数。否则，我们将其设置为-∞，从而确保它不会参与 softmax 计算。</p>
+<p>基本上，如果查询标记在键标记“之后”，我们保留分数。否则，我们将其设置为-无穷大，从而确保它不会参与 softmax 计算。</p>
 
-<p>然而，掩码与其他修改相比是特殊的——如果某些内容被掩码，我们可以完全跳过其计算！在这种情况下，因果掩码大约有 50%的稀疏性，如果不利用稀疏性，会导致 2 倍的性能下降。尽管这个 <code class="language-plaintext highlighter-rouge">score_mod</code> 足以正确实现因果掩码，但要获得稀疏性的性能优势，还需要另一个概念——<code class="language-plaintext highlighter-rouge">mask_mod</code>。</p>
+<p>然而，掩码与其他修改相比是特殊的——如果某些内容被掩码，我们可以完全跳过其计算！在这种情况下，因果掩码大约有 50%的稀疏性，如果不利用稀疏性，会导致 2 倍的性能下降。尽管这个 <code class="language-plaintext highlighter-rouge">score_mod</code> 足以正确实现因果掩码，但要获得稀疏性的性能优势，还需要另一个概念—— <code class="language-plaintext highlighter-rouge">mask_mod</code> 。</p>
 
-<h2 id="mask-mods">掩码模块</h2>
+<h2 id="mask-mods">掩码修改</h2>
 
-<p>为了利用掩码的稀疏性，我们需要做更多的工作。具体来说，通过将一个 <code class="language-plaintext highlighter-rouge">mask_mod</code> 传递给 <a href="https://github.com/pytorch/pytorch/blob/e49c0acc396e89baf8c6450e1fa0571d4ce2d4ed/torch/nn/attention/flex_attention.py#L594"><code class="language-plaintext highlighter-rouge">create_block_mask</code></a>，我们可以创建一个 <code class="language-plaintext highlighter-rouge">BlockMask</code>。FlexAttention 可以使用 <code class="language-plaintext highlighter-rouge">BlockMask</code> 来利用稀疏性！</p>
+<p>为了利用掩码的稀疏性，我们需要做更多的工作。具体来说，通过将 <code class="language-plaintext highlighter-rouge">mask_mod</code> 传递给 <code class="language-plaintext highlighter-rouge">create_block_mask</code> ，我们可以创建一个 <code class="language-plaintext highlighter-rouge">BlockMask</code> 。然后 FlexAttention 可以使用 <code class="language-plaintext highlighter-rouge">BlockMask</code> 来利用稀疏性！</p>
 
-<p><code class="language-plaintext highlighter-rouge">mask_mod</code> 的签名与 <code class="language-plaintext highlighter-rouge">score_mod</code> 非常相似——只是没有 <code class="language-plaintext highlighter-rouge">score</code>。特别是</p>
+<p> <code class="language-plaintext highlighter-rouge">mask_mod</code> 的签名与 <code class="language-plaintext highlighter-rouge">score_mod</code> 非常相似——只是没有 <code class="language-plaintext highlighter-rouge">score</code> 。特别是</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># returns True if this position should participate in the computation
 </span><span class="n">mask_mod</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="nb">bool</span>
 </code></pre></div></div>
 
-<p>注意，<code class="language-plaintext highlighter-rouge">score_mod</code> 严格来说比 <code class="language-plaintext highlighter-rouge">mask_mod</code> 表达性更强。然而，对于掩码，建议使用 <code class="language-plaintext highlighter-rouge">mask_mod</code> 和 <code class="language-plaintext highlighter-rouge">create_block_mask</code>，因为它性能更好。请参阅 FAQ 了解为什么 <code class="language-plaintext highlighter-rouge">score_mod</code> 和 <code class="language-plaintext highlighter-rouge">mask_mod</code> 是分开的。</p>
+<p>注意 <code class="language-plaintext highlighter-rouge">score_mod</code> 比 <code class="language-plaintext highlighter-rouge">mask_mod</code> 具有更强的表达能力。然而，对于掩码，建议使用 <code class="language-plaintext highlighter-rouge">mask_mod</code> 和 <code class="language-plaintext highlighter-rouge">create_block_mask</code> ，因为它性能更好。请参阅 FAQ 了解为什么 <code class="language-plaintext highlighter-rouge">score_mod</code> 和 <code class="language-plaintext highlighter-rouge">mask_mod</code> 是分开的。</p>
 
 <p>现在，让我们看看如何使用 <code class="language-plaintext highlighter-rouge">mask_mod</code> 实现因果掩码。</p>
 
@@ -857,18 +865,18 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 </span><span class="n">flex_attention</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">block_mask</span><span class="o">=</span><span class="n">block_mask</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>注意，<code class="language-plaintext highlighter-rouge">create_block_mask</code> 是一个 <strong> 相对昂贵的操作！</strong> 虽然 FlexAttention 在变化时不需要重新编译，但如果您不仔细缓存它，可能会导致显著的性能下降（请参阅 FAQ 以获取最佳实践建议）。</p>
+<p>注意， <code class="language-plaintext highlighter-rouge">create_block_mask</code> 是一个相对昂贵的操作！虽然 FlexAttention 在变化时不需要重新编译，但如果您不仔细缓存它，可能会导致显著的性能下降（请参阅常见问题解答以获取最佳实践建议）。</p>
 
 <p><img src="/assets/images/flexattention/fg7.png" alt="flexattention performance charts" style="width:100%"></p>
 
-<p>虽然 TFlops 大致相同，但 mask_mod 版本的执行时间快 2 倍！这表明我们可以利用 BlockMask 提供的稀疏性，而不会损失硬件效率。</p>
+<p>虽然 TFlops 大致相同，但 mask_mod 版本的执行时间快了 2 倍！这表明我们可以利用 BlockMask 提供的稀疏性，而不会损失硬件效率。</p>
 
 <h3 id="sliding-window--causal">滑动窗口 + 因果</h3>
 
 <p><img src="/assets/images/flexattention/fg8.png" alt="Sliding Window Causal diagrams" style="width:100%"></p>
-<p style="text-align: center;"><em>来源: <a href="https://arxiv.org/abs/2310.06825"> Mistral 7B</a></em></p>
+<p style="text-align: center;"><em>来源：Mistral 7B</em></p>
 
-<p>由 <a href="https://arxiv.org/abs/2310.06825">Mistral</a> 推广的滑动窗口注意力（也称为局部注意力）利用了最近出现的标记最有用的直觉。特别是，它允许查询标记仅关注最近的 1024 个标记。这通常与因果注意力一起使用。</p>
+<p>滑动窗口注意力（也称为局部注意力）由 Mistral 推广，它利用了最近标记最有用的直觉。特别是，它允许查询标记仅关注最近的 1024 个标记。这通常与因果注意力一起使用。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">SLIDING_WINDOW</span> <span class="o">=</span> <span class="mi">1024</span>
 
@@ -886,16 +894,16 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 <span class="n">sliding_window_causal</span> <span class="o">=</span> <span class="n">and_masks</span><span class="p">(</span><span class="n">causal_mask</span><span class="p">,</span> <span class="n">sliding_window</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>我们将其与 <code class="language-plaintext highlighter-rouge">F.scaled_dot_product_attention</code> 使用滑动窗口掩码以及 FA2 使用因果掩码（作为性能参考点）进行了基准测试。我们不仅比 <code class="language-plaintext highlighter-rouge">F.scaled_dot_product_attention</code> 快得多，而且比使用因果掩码的 FA2 也要快得多，因为这种掩码的稀疏性显著更高。</p>
+<p>我们将其与带有滑动窗口掩码的 <code class="language-plaintext highlighter-rouge">F.scaled_dot_product_attention</code> 以及带有因果掩码的 FA2（作为性能参考点）进行了基准测试。我们不仅比 <code class="language-plaintext highlighter-rouge">F.scaled_dot_product_attention</code> 快得多，而且比带有因果掩码的 FA2 也要快得多，因为这种掩码的稀疏性显著更高。</p>
 
 <p><img src="/assets/images/flexattention/fg9.png" alt="execution time charts" style="max-width:600px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
 <h3 id="prefixlm">PrefixLM</h3>
 
 <p><img src="/assets/images/flexattention/fg10.png" alt="PrefixLM diagram" style="max-width:600px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
-<p style="text-align: center;"><em>来源: <a href="https://arxiv.org/abs/2407.07726">PaliGemma: 一种通用的 3B VLM 迁移学习</a></em></p>
+<p style="text-align: center;"><em>来源：PaliGemma：一个通用的 3B VLM 用于迁移</em></p>
 
-<p>T5 架构在《探索统一文本到文本转换器在迁移学习中的极限》中提出，描述了一种在“前缀”上执行全双向注意力，而在其余部分执行因果注意力的注意力变体。我们再次组合两个掩码函数来完成此操作，一个用于因果掩码，另一个基于前缀长度。</p>
+<p>在《探索统一文本到文本变换器在迁移学习中的极限》一文中提出的 T5 架构，描述了一种在“前缀”上执行全双向注意力，而在其余部分执行因果注意力的注意力变体。我们再次组合两个掩码函数来完成这个任务，一个用于因果掩码，另一个基于前缀长度。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">prefix_length</span><span class="p">:</span> <span class="p">[</span><span class="n">B</span><span class="p">]</span>
 <span class="k">def</span> <span class="nf">prefix_mask</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
@@ -906,18 +914,18 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 </span><span class="n">block_mask</span> <span class="o">=</span> <span class="n">create_block_mask</span><span class="p">(</span><span class="n">prefix_lm_causal</span><span class="p">,</span> <span class="n">B</span><span class="o">=</span><span class="n">B</span><span class="p">,</span> <span class="n">H</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">S</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p>就像 <code class="language-plaintext highlighter-rouge">score_mod</code> 一样，<code class="language-plaintext highlighter-rouge">mask_mod</code> 允许我们引用不是函数显式输入的额外张量！然而，在 prefixLM 中，稀疏模式会<em>根据</em><em>输入</em>变化。这意味着对于每个新的输入批次，我们都需要重新计算 <code class="language-plaintext highlighter-rouge">BlockMask</code>。一种常见的模式是在模型的开始处调用 <code class="language-plaintext highlighter-rouge">create_block_mask</code>，并重用该 <code class="language-plaintext highlighter-rouge">block_mask</code> 来处理模型中的所有注意力调用。参见<em>重新计算块掩码与重新编译。</em></p>
+<p>就像 <code class="language-plaintext highlighter-rouge">score_mod</code> 一样， <code class="language-plaintext highlighter-rouge">mask_mod</code> 允许我们引用不是函数显式输入的其他张量！然而，在 prefixLM 中，稀疏模式会根据输入而变化。这意味着对于每个新的输入批次，我们都需要重新计算 <code class="language-plaintext highlighter-rouge">BlockMask</code> 。一种常见的模式是在模型的开始处调用 <code class="language-plaintext highlighter-rouge">create_block_mask</code> ，然后重用 <code class="language-plaintext highlighter-rouge">block_mask</code> 来处理模型中的所有注意力调用。参见“重新计算块掩码与重新编译”。</p>
 
-<p>然而，作为交换，我们不仅能够拥有一个高效的 prefixLM 注意力核，还能充分利用输入中的任何稀疏性！FlexAttention 会根据 BlockMask 数据动态调整其性能，无需重新编译内核。</p>
+<p>然而，作为交换，我们不仅能够为 prefixLM 获得一个高效的注意力内核，还能够利用输入中存在的任何稀疏性！FlexAttention 将根据块掩码数据动态调整其性能，而无需重新编译内核。</p>
 
-<h3 id="document-maskingjagged-sequences">文档掩码/锯齿状序列</h3>
+<h3 id="document-maskingjagged-sequences">文档遮罩/锯齿序列</h3>
 
-<p>另一种常见的注意力变体是文档掩码/锯齿状序列。想象一下，你有一系列长度不同的序列。你希望将它们一起训练，但不幸的是，大多数操作符只接受矩形张量。</p>
+<p>另一种常见的注意力变体是文档遮罩/锯齿序列。想象一下，你有一系列长度不同的序列。你希望一起训练它们，但不幸的是，大多数操作员只接受矩形张量。</p>
 
-<p>通过 <code class="language-plaintext highlighter-rouge">BlockMask</code>，我们同样可以在 FlexAttention 中高效地支持这一点！</p>
+<p>通过 <code class="language-plaintext highlighter-rouge">BlockMask</code> ，我们也可以在 FlexAttention 中高效地支持这一点！</p>
 
 <ol>
-  <li>首先，我们将所有序列展平成一个包含 sum(sequence lengths) 个标记的单序列。</li>
+  <li>首先，我们将所有序列展平成一个序列，包含序列长度之和的标记。</li>
   <li>然后，我们计算每个标记所属的 document_id。</li>
   <li>最后，在我们的 <code class="language-plaintext highlighter-rouge">mask_mod</code> 中，我们简单地判断查询和 kv 标记是否属于同一文档！</li>
 </ol>
@@ -930,13 +938,13 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">document_id</span><span class="p">[</span><span class="n">q_idx</span><span class="p">]</span> <span class="o">==</span> <span class="n">document_id</span><span class="p">[</span><span class="n">kv_idx</span><span class="p">]</span>
 </code></pre></div></div>
 
-<p>就这样！在这种情况下，我们最终得到一个块对角掩码。</p>
+<p>就这样！在这种情况下，我们看到我们最终得到一个块对角掩码。</p>
 
 <p><img src="/assets/images/flexattention/fg11.png" alt="blockdiagonal mask" style="max-width:600px; display:block; margin-left: auto; margin-right: auto; width:100%"></p>
 
-<p>关于文档掩码的一个有趣方面是，我们可以很容易地看到它如何与任意组合的其他掩码结合。例如，我们在上一节中已经定义了 <code class="language-plaintext highlighter-rouge">prefixlm_mask</code>。现在我们还需要定义一个 <code class="language-plaintext highlighter-rouge">prefixlm_document_mask</code> 函数吗？</p>
+<p>关于文档掩码的一个有趣方面是，很容易看出它如何可能与任意组合的其他掩码结合。例如，我们已经在上一节中定义了 <code class="language-plaintext highlighter-rouge">prefixlm_mask</code> 。我们现在还需要定义一个 <code class="language-plaintext highlighter-rouge">prefixlm_document_mask</code> 函数吗？</p>
 
-<p>在这些情况下，我们发现一种非常有用的模式，我们称之为“高级修改”。在这种情况下，我们可以将现有的 <code class="language-plaintext highlighter-rouge">mask_mod</code> 自动转换成一个适用于锯齿状序列的版本！</p>
+<p>在这些情况下，我们发现一种非常有用的模式，我们称之为“高级修改”。在这种情况下，我们可以将现有的 <code class="language-plaintext highlighter-rouge">mask_mod</code> 自动转换成适用于锯齿状序列的版本！</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">generate_doc_mask_mod</span><span class="p">(</span><span class="n">mask_mod</span><span class="p">,</span> <span class="n">document_id</span><span class="p">):</span>
     <span class="c1"># Get unique document IDs and their counts
@@ -952,7 +960,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">doc_mask_wrapper</span>
 </code></pre></div></div>
 
-<p>例如，给定上面的 <code class="language-plaintext highlighter-rouge">prefix_lm_causal</code> 掩码，我们可以将其转换成一个适用于打包文档的版本：</p>
+<p>例如，给定上面的 <code class="language-plaintext highlighter-rouge">prefix_lm_causal</code> 掩码，我们可以将其转换成适用于打包文档的版本，如下所示：</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">prefix_length</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s">"cuda"</span><span class="p">)</span>
 <span class="k">def</span> <span class="nf">prefix_mask</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
@@ -965,13 +973,13 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
 <p>现在，这个掩码是“block-prefixLM-diagonal”形状的。:)</p>
 
-<p>这就是我们的所有示例！注意力的变体远比我们能列出的多，所以请查看<a href="https://github.com/pytorch-labs/attention-gym">注意力健身房</a>获取更多示例。我们希望社区也能贡献一些他们最喜欢的 FlexAttention 应用。</p>
+<p>这就是我们的所有示例！注意力的变体远比我们能够列出的要多，所以请查看 Attention Gym 获取更多示例。我们希望社区也能贡献一些他们最喜欢的 FlexAttention 应用。</p>
 
 <h3 id="faq">常见问题解答</h3>
 
 <h5 id="q-when-does-flexattention-need-to-recompile"><strong>Q: FlexAttention 何时需要重新编译？</strong></h5>
 
-<p>由于 FlexAttention 利用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 进行图捕获，实际上在许多情况下可以避免重新编译。值得注意的是，即使捕获的张量值发生变化，它也不需要重新编译！</p>
+<p>由于 FlexAttention 利用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 进行图捕获，实际上在广泛的情况下可以避免重新编译。值得注意的是，即使捕获的张量值发生变化，它也不需要重新编译！</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">flex_attention</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="nb">compile</span><span class="p">(</span><span class="n">flex_attention</span><span class="p">)</span>
 <span class="k">def</span> <span class="nf">create_bias_mod</span><span class="p">(</span><span class="n">bias</span><span class="p">)</span>
@@ -985,21 +993,21 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 <span class="n">flex_attention</span><span class="p">(...,</span> <span class="n">score_mod</span><span class="o">=</span><span class="n">bias_mod2</span><span class="p">)</span> <span class="c1"># Doesn't need to recompile! 
 </span></code></pre></div></div>
 
-<p>即使更改块稀疏度也不需要重新编译。然而，如果块稀疏度发生变化，我们确实需要<em>重新计算</em>块掩码。</p>
+<p>即使改变块稀疏性也不需要重新编译。然而，如果块稀疏性发生变化，我们确实需要重新计算 BlockMask。</p>
 
-<h5 id="q-when-should-we-recompute-the-blockmask"><strong>问：我们应该何时重新计算块掩码？</strong></h5>
+<h5 id="q-when-should-we-recompute-the-blockmask"><strong>问：我们应该何时重新计算 BlockMask？</strong></h5>
 
-<p>当块稀疏度发生变化时，我们需要重新计算块掩码。虽然计算块掩码的成本远低于重新编译（大约几百微秒，而重新编译需要几秒），但您仍然应该注意不要过度重新计算块掩码。</p>
+<p>当块稀疏度发生变化时，我们需要重新计算 BlockMask。尽管计算 BlockMask 的成本远低于重新编译（大约几百微秒，而重新编译需要几秒），但您仍然应该注意不要过度重新计算 BlockMask。</p>
 
-<p>这里有一些常见的模式和一些建议，说明您如何处理它们。</p>
+<p>这里有一些常见的模式和一些建议，您可能如何处理它们。</p>
 
-<p><strong>面具从不改变（例如因果面具）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在这种情况下，您可以简单地预先计算块掩码并将其全局缓存，为所有注意力调用重用。</p>
+<p><strong>遮罩从未改变（例如因果遮罩）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在这种情况下，您可以简单地预先计算块掩码并将其全局缓存，以便在所有注意力调用中重复使用。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">block_mask</span> <span class="o">=</span> <span class="n">create_block_mask</span><span class="p">(</span><span class="n">causal_mask</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span><span class="n">S</span><span class="p">)</span>
 <span class="n">causal_attention</span> <span class="o">=</span> <span class="n">functools</span><span class="p">.</span><span class="n">partial</span><span class="p">(</span><span class="n">flex_attention</span><span class="p">,</span> <span class="n">block_mask</span><span class="o">=</span><span class="n">block_mask</span><span class="p">)</span>
 </code></pre></div></div>
 
-<p><strong>面码每批都会改变（例如文档掩码）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在这种情况下，我们建议在模型开始时计算 BlockMask，并将其贯穿整个模型 - 为所有层重用 BlockMask。</p>
+<p><strong>掩码每批都会变化（例如，文档掩码）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在这种情况下，我们建议在模型开始时计算 BlockMask，并将其贯穿整个模型 - 为所有层重复使用 BlockMask。</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">doc_mask</span><span class="p">):</span>
     <span class="c1"># Compute block mask at beginning of forwards
@@ -1012,19 +1020,19 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">x</span>
 </code></pre></div></div>
 
-<p><strong>每一层都会改变掩码（例如数据相关的稀疏性）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">这是难度最大的设置，因为我们无法将块掩码计算在多个 FlexAttention 调用之间分摊。尽管 FlexAttention 确实可以从中受益，但 BlockMask 的实际好处取决于您的注意力掩码有多稀疏以及我们构建 BlockMask 的速度有多快。这让我们想到了...</p>
+<p><strong>掩码每层都会变化（例如，数据相关稀疏性）</font></font></font></strong><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">这是最困难的设置，因为我们无法将块掩码计算分摊到多个 FlexAttention 调用中。尽管 FlexAttention 确实仍然可以从这种情况下受益，但块掩码的实际好处取决于您的注意力掩码有多稀疏以及我们构建块掩码的速度有多快。这让我们想到了...</p>
 
-<h5 id="q-how-can-we-compute-blockmask-quicker"><strong>问：我们如何更快地计算 BlockMask？</strong></h5>
+<h5 id="q-how-can-we-compute-blockmask-quicker"><strong>问：我们如何更快地计算块掩码？</strong></h5>
 
-<p><code class="language-plaintext highlighter-rouge">create_block_mask</code> 在内存和计算方面都相当昂贵，因为确定一个块是否完全稀疏需要在块的每个点上评估 <code class="language-plaintext highlighter-rouge">mask_mod</code>。有几种方法可以解决这个问题：</p>
+<p> <code class="language-plaintext highlighter-rouge">create_block_mask</code> 在内存和计算方面都相当昂贵，因为确定一个块是否完全稀疏需要在块的每个点上评估 <code class="language-plaintext highlighter-rouge">mask_mod</code> 。有几种方法可以解决这个问题：</p>
 
 <ol>
-  <li>如果您的掩码在批次大小或头数上相同，请确保您正在对这些进行广播（即在 create_block_mask 中将其设置为 <code class="language-plaintext highlighter-rouge">None</code>）。</li>
-  <li>编译 create_block_mask。遗憾的是，由于一些不幸的限制，今天 torch.compile 不能直接在 create_block_mask 上工作。然而，您可以设置 <code class="language-plaintext highlighter-rouge">_compile=True</code>，这将显著降低峰值内存和运行时间（在我们的测试中通常是一个数量级的降低）。</li>
+  <li>如果您的掩码在批大小或头之间相同，请确保您已在这些掩码上进行了广播（即在 <code class="language-plaintext highlighter-rouge">create_block_mask</code> 中将它们设置为 <code class="language-plaintext highlighter-rouge">None</code> ）。</li>
+  <li>编译 <code class="language-plaintext highlighter-rouge">create_block_mask</code> 。遗憾的是，由于一些不幸的限制， <code class="language-plaintext highlighter-rouge">torch.compile</code> 今天无法直接在 <code class="language-plaintext highlighter-rouge">create_block_mask</code> 上工作。然而，您可以设置 <code class="language-plaintext highlighter-rouge">_compile=True</code> ，这将显著降低峰值内存和运行时间（在我们的测试中通常是一个数量级的降低）。</li>
   <li>
-    <p>为 BlockMask 编写一个自定义构造函数。BlockMask 的元数据非常简单（见<a href="https://pytorch.org/docs/main/nn.attention.flex_attention.html#blockmask">文档 </a>）。它基本上是两个张量。a. <code class="language-plaintext highlighter-rouge">num_blocks</code>：为每个查询块计算的 KV 块的数量。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">b. <code class="language-plaintext highlighter-rouge">indices</code>：为每个查询块计算的 KV 块的位置。</p>
+    <p>为 BlockMask 编写一个自定义构造函数。BlockMask 的元数据非常简单（请参阅文档）。它本质上是由两个张量组成。a. <code class="language-plaintext highlighter-rouge">num_blocks</code> ：每个查询块计算的 KV 块的数量。</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">b. <code class="language-plaintext highlighter-rouge">indices</code> ：每个查询块计算的 KV 块的位置。</p>
 
-    <p>例如，这里是一个自定义的 <code class="language-plaintext highlighter-rouge">causal_mask</code> 块掩码构造函数。</p>
+    <p>例如，这里是一个为 <code class="language-plaintext highlighter-rouge">causal_mask</code> 的自定义 BlockMask 构造函数。</p>
   </li>
 </ol>
 
@@ -1042,49 +1050,49 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <span class="k">return</span> <span class="n">BlockMask</span><span class="p">(</span><span class="n">num_blocks</span><span class="p">,</span> <span class="n">indices</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="n">BLOCK_SIZE</span><span class="p">,</span> <span class="n">mask_mod</span><span class="o">=</span><span class="n">causal_mask</span><span class="p">)</span>
 </code></pre></div></div>
 
-<h5 id="q-why-are-score_mod-and-mask_mod-different-isnt-mask_mod-just-a-special-case-of-score_mod"><strong>问：为什么 <code class="language-plaintext highlighter-rouge">score_mod</code> 和 <code class="language-plaintext highlighter-rouge">mask_mod</code> 不同？难道 <code class="language-plaintext highlighter-rouge">mask_mod</code> 仅仅是 <code class="language-plaintext highlighter-rouge">score_mod</code> 的一个特例吗？</strong></h5>
+<h5 id="q-why-are-score_mod-and-mask_mod-different-isnt-mask_mod-just-a-special-case-of-score_mod"><strong>问：为什么 <code class="language-plaintext highlighter-rouge">score_mod</code> 和 <code class="language-plaintext highlighter-rouge">mask_mod</code> 不同？ <code class="language-plaintext highlighter-rouge">mask_mod</code> 难道不是 <code class="language-plaintext highlighter-rouge">score_mod</code> 的一个特例吗？</strong></h5>
 
-<p>非常敏锐的问题，假设的听众！实际上，任何 <code class="language-plaintext highlighter-rouge">mask_mod</code> 都可以轻松转换为 <code class="language-plaintext highlighter-rouge">score_mod</code>（我们不推荐在实际中使用此功能！）</p>
+<p>非常敏锐的问题，假设的听众！实际上，任何 <code class="language-plaintext highlighter-rouge">mask_mod</code> 都可以轻松转换为 <code class="language-plaintext highlighter-rouge">score_mod</code> （我们不建议在实际中使用此功能！）</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">mask_mod_as_score_mod</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">torch</span><span class="p">.</span><span class="n">where</span><span class="p">(</span><span class="n">mask_mod</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">),</span> <span class="n">score</span><span class="p">,</span> <span class="o">-</span><span class="nb">float</span><span class="p">(</span><span class="s">"inf"</span><span class="p">))</span>
 </code></pre></div></div>
 
-<p>那么，如果 <code class="language-plaintext highlighter-rouge">score_mod</code> 可以实现 <code class="language-plaintext highlighter-rouge">mask_mod</code> 可以实现的一切，那么拥有 <code class="language-plaintext highlighter-rouge">mask_mod</code> 的意义是什么？</p>
+<p>那么，如果 <code class="language-plaintext highlighter-rouge">score_mod</code> 可以实现 <code class="language-plaintext highlighter-rouge">mask_mod</code> 的所有功能，那么拥有 <code class="language-plaintext highlighter-rouge">mask_mod</code> 的意义在哪里呢？</p>
 
-<p>一个直接挑战：一个 <code class="language-plaintext highlighter-rouge">score_mod</code> 需要实际的 <code class="language-plaintext highlighter-rouge">score</code> 值作为输入，但当我们预计算 BlockMask 时，我们没有实际的 <code class="language-plaintext highlighter-rouge">score</code> 值。我们或许可以通过传递所有零来伪造这些值，如果 <code class="language-plaintext highlighter-rouge">score_mod</code> 返回 <code class="language-plaintext highlighter-rouge">-inf</code>，那么我们将其视为已屏蔽（实际上我们最初就是这样做的！）。</p>
+<p>一个直接的挑战： <code class="language-plaintext highlighter-rouge">score_mod</code> 需要一个实际的 <code class="language-plaintext highlighter-rouge">score</code> 值作为输入，但当我们预计算 BlockMask 时，我们没有实际的 <code class="language-plaintext highlighter-rouge">score</code> 值。我们可以通过传递所有零来伪造这些值，如果 <code class="language-plaintext highlighter-rouge">score_mod</code> 返回 <code class="language-plaintext highlighter-rouge">-inf</code> ，那么我们将其视为已屏蔽（实际上我们最初就是这样做的！）</p>
 
-<p>然而，有两个问题。第一个问题是这很笨拙——如果用户的 <code class="language-plaintext highlighter-rouge">score_mod</code> 在输入为 0 时返回 <code class="language-plaintext highlighter-rouge">-inf</code>，怎么办？或者如果用户的 <code class="language-plaintext highlighter-rouge">score_mod</code> 使用一个很大的负值而不是 <code class="language-plaintext highlighter-rouge">-inf</code> 来屏蔽，怎么办？这似乎是在强行将圆木塞入方孔。然而，将 <code class="language-plaintext highlighter-rouge">mask_mod</code> 和 <code class="language-plaintext highlighter-rouge">score_mod</code> 分离出来的更重要原因是它本质上更高效！。</p>
+<p>然而，有两个问题。第一个问题是这很笨拙——如果用户的 <code class="language-plaintext highlighter-rouge">score_mod</code> 在输入为 0 时返回 <code class="language-plaintext highlighter-rouge">-inf</code> ，或者如果用户的 <code class="language-plaintext highlighter-rouge">score_mod</code> 用一个大负值代替了 <code class="language-plaintext highlighter-rouge">-inf</code> ，那会怎样？这似乎是在把一个圆木塞进方孔。然而，将 <code class="language-plaintext highlighter-rouge">mask_mod</code> 与 <code class="language-plaintext highlighter-rouge">score_mod</code> 分开还有一个更重要的原因——它本质上更有效率！</p>
 
-<p>结果表明，对每个计算元素应用掩码实际上是非常昂贵的——我们的基准测试显示性能下降了15-20%！因此，尽管我们可以通过跳过一半的计算来获得显著的加速，但我们仍然需要掩码每个元素，这导致我们失去了相当一部分的加速效果！</p>
+<p>事实上，对每个计算元素应用掩码实际上是非常昂贵的——我们的基准测试显示性能下降了 15-20%！所以，虽然我们可以通过跳过一半的计算来获得显著的加速，但我们失去了很大一部分速度提升，因为我们仍然需要为每个元素应用掩码！</p>
 
-<p>幸运的是，如果我们可视化因果掩码，我们会注意到绝大多数块实际上根本不需要“因果掩码”——它们已经完全计算了！只有对角线上的块，部分计算和部分掩码，才需要应用掩码。</p>
+<p>幸运的是，如果我们可视化因果掩码，我们会注意到绝大多数块根本不需要“因果掩码”——它们已经完全计算了！只有对角线上的块，部分计算和部分掩码，才需要应用掩码。</p>
 
 <p><img src="/assets/images/flexattention/fg13.png" alt="blockdiagonal mask" style="width:100%"></p>
 
-<p>BlockMask 之前告诉我们哪些块需要计算，哪些块可以跳过。现在，我们进一步扩展这个数据结构，让它也告诉我们哪些块是“完全计算”的（即可以跳过掩码），哪些是“部分计算”的（即需要应用掩码）。请注意，尽管在“完全计算”的块上可以跳过掩码，但其他如相对位置编码之类的 <code class="language-plaintext highlighter-rouge">score_mod</code> 仍然需要应用。</p>
+<p>BlockMask 之前告诉我们哪些块需要计算，哪些块可以跳过。现在，我们进一步扩展这个数据结构，使其也能告诉我们哪些块是“完全计算”的（即可以跳过掩码），与“部分计算”的（即需要应用掩码）。请注意，尽管在“完全计算”的块上可以跳过掩码，但像相对位置编码这样的其他 <code class="language-plaintext highlighter-rouge">score_mod</code> 仍然需要应用。</p>
 
-<p>仅给出一个 <code class="language-plaintext highlighter-rouge"> 分数调整 </code>，我们无法准确判断其中的哪些部分是“掩盖”。因此，用户必须自己将这些部分区分出来，形成 <code class="language-plaintext highlighter-rouge"> 掩盖调整 </code>。</p>
+<p>仅给定一个 <code class="language-plaintext highlighter-rouge">score_mod</code> ，我们无法准确判断其中的哪些部分是“掩码”。因此，用户必须自己将这些部分分离出来成为 <code class="language-plaintext highlighter-rouge">mask_mod</code> 。</p>
 
 <h5 id="q-how-much-additional-memory-does-the-blockmask-need"><strong>问：BlockMask 需要多少额外的内存？</strong></h5>
 
-<p>BlockMask 的元数据大小为 <code class="language-plaintext highlighter-rouge">[BATCH_SIZE, NUM_HEADS, QUERY_LEN//BLOCK_SIZE, KV_LEN//BLOCK_SIZE].</code> 如果掩盖在批次或头维度上是相同的，则可以广播到该维度以节省内存。</p>
+<p>BlockMask 的元数据大小为 <code class="language-plaintext highlighter-rouge">[BATCH_SIZE, NUM_HEADS, QUERY_LEN//BLOCK_SIZE, KV_LEN//BLOCK_SIZE].</code> 。如果掩码在批次或头维度上是相同的，则可以在该维度上广播以节省内存。</p>
 
-<p>在默认的 <code class="language-plaintext highlighter-rouge">BLOCK_SIZE</code> 大小为 128 的情况下，我们预计对于大多数用例，内存使用将非常小。例如，对于长度为 100 万的序列，BlockMask 只会额外使用 60MB 的内存。如果这成为问题，您可以增加块大小： <code class="language-plaintext highlighter-rouge">create_block_mask(..., BLOCK_SIZE=1024).</code> 例如，将 <code class="language-plaintext highlighter-rouge">BLOCK_SIZE</code> 增加到 1024 将使此元数据大小降至不到 1MB。</p>
+<p>在默认的 <code class="language-plaintext highlighter-rouge">BLOCK_SIZE</code> 128 中，我们预计对于大多数用例，内存使用将非常微不足道。例如，对于长度为 100 万的序列，BlockMask 只会额外使用 60MB 的内存。如果这成为问题，您可以增加块大小： <code class="language-plaintext highlighter-rouge">create_block_mask(..., BLOCK_SIZE=1024).</code> 例如，将 <code class="language-plaintext highlighter-rouge">BLOCK_SIZE</code> 增加到 1024 将导致此元数据降至不到 1 兆字节。</p>
 
-<h5 id="q-how-do-the-numerics-compare"><strong>Q: 数值如何比较？</strong></h5>
+<h5 id="q-how-do-the-numerics-compare"><strong>问：数值如何比较？</strong></h5>
 
-<p>尽管结果并非逐位相同，但我们有信心 FlexAttention 在数值上与 FlashAttention 一样准确。我们生成了以下分布，比较了在大量输入上 FlashAttention 与 FlexAttention 在因果和非因果注意力变体上的差异。错误几乎相同。</p>
+<p>虽然结果并非位对位相同，但我们相信 FlexAttention 在数值上与 FlashAttention 一致。我们生成了以下差异分布，比较了 FlashAttention 与 FlexAttention 在大量输入上的因果和非因果注意力变体。误差几乎相同。</p>
 
 <p><img src="/assets/images/flexattention/fg14.png" alt="distribution chart" style="width:100%"></p>
 
 <h3 id="performance">性能</h3>
 
-<p>一般而言，FlexAttention 的性能几乎与手写的 Triton 内核相当，这并不令人惊讶，因为我们大量使用了手写的 Triton 内核。然而，由于其通用性，我们确实会承受一点性能损失。例如，我们必须承担一些额外的延迟来确定下一个要计算的块。在某些情况下，我们提供了一些可以影响内核性能同时改变其行为的内核选项。它们可以在以下位置找到：<a href="https://github.com/pytorch/pytorch/blob/ee09d066d35d7e17cf7e9479c0b8bfc70cffc264/torch/_inductor/kernel/flex_attention.py#L146-L155"> 性能旋钮</a></p>
+<p>一般而言，FlexAttention 的性能几乎与手写的 Triton 内核相当，这并不令人意外，因为我们大量使用了手写的 Triton 内核。然而，由于其通用性，我们确实会付出一点性能上的代价。例如，我们必须承担一些额外的延迟来确定下一个要计算的块。在某些情况下，我们提供了一些可以影响内核性能同时改变其行为的内核选项。它们可以在这里找到：性能旋钮</p>
 
-<p>作为案例研究，让我们探讨旋钮如何影响因果注意力的性能。我们将比较在 A100 上 Triton 内核与 FlashAttentionv2 的性能。脚本可以在以下位置找到：<a href="https://github.com/pytorch/pytorch/blob/main/benchmarks/transformer/score_mod.py"> 这里</a></p>
+<p>作为案例研究，让我们探讨这些旋钮如何影响因果注意力的性能。我们将比较 Triton 内核与 FlashAttentionv2 在 A100 上的性能。脚本可以在这里找到。</p>
 
-<p>FlexAttention 在正向传播中达到了 FlashAttention2 的 90%的性能，在反向传播中达到了 85%。FlexAttention 目前使用的是一种确定性算法，比 FAv2 重新计算了更多的中间结果，但我们有计划改进 FlexAttention 的反向算法，希望缩小这个差距！</p>
+<p>FlexAttention 在正向传递中达到了 FlashAttention2 性能的 90%，在反向传递中达到了 85%。FlexAttention 目前使用的是一个确定性算法，它比 FAv2 重新计算更多的中间值，但我们有计划改进 FlexAttention 的反向算法，希望缩小这个差距！</p>
 
 <p><img src="/assets/images/flexattention/fg15.png" alt="flexattention speed chart" style="width:100%"></p>
 
@@ -1092,20 +1100,20 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
 <h2 id="conclusion">结论</h2>
 
-<p>希望您在使用 FlexAttention 时能像我们开发它时一样开心！在开发这个 API 的过程中，我们意外发现了比预期多得多的应用场景。我们已经看到它将 torchtune 的<a href="https://github.com/pytorch/torchtune/pull/1193">样本打包吞吐量提高了 71%</a>，取代了研究人员花费一周时间编写自己的自定义 Triton 内核的需求，并且与自定义手写注意力变体相比，提供了有竞争力的性能。</p>
+<p>我们希望您在使用 FlexAttention 时能像我们开发它时一样愉快！在开发过程中，我们发现这个 API 的应用范围比我们预期的要多得多。我们已经看到它将 torchtune 的样本打包吞吐量提高了 71%，取代了研究人员花费一周时间编写自己的自定义 Triton 内核的需求，并且与自定义手写注意力变体相比，提供了有竞争力的性能。</p>
 
-<p>最后一件让实现 FlexAttention 变得很有趣的事情是，我们能够以有趣的方式利用大量的现有 PyTorch 基础设施。例如，TorchDynamo（torch.compile 的前端）的一个独特之处在于，它<em>不需要</em>显式地将用于编译函数的张量作为输入传递。这使得我们能够编译像文档掩码这样的 mod，这些 mod 需要访问<em>全局</em>变量，而全局变量需要改变！</p>
+<p>最后，让我们在实现 FlexAttention 时感到非常有趣的一点是，我们能够以有趣的方式利用大量现有的 PyTorch 基础设施。例如，TorchDynamo（torch.compile 的前端）的一个独特之处在于，它不需要将编译函数中使用的张量明确传递为输入。这使得我们能够编译像文档掩码这样的 mod，这些 mod 需要访问全局变量，而全局变量需要改变！</p>
 
 <div class="language-py highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">bias</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">1024</span><span class="p">)</span>
 <span class="k">def</span> <span class="nf">score_mod</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">q_idx</span><span class="p">,</span> <span class="n">kv_idx</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">score</span> <span class="o">+</span> <span class="n">bias</span><span class="p">[</span><span class="n">q_idx</span><span class="p">][</span><span class="n">kv_idx</span><span class="p">]</span> <span class="c1"># The bias tensor can change!
 </span></code></pre></div></div>
 
-<p>此外，由于 <code class="language-plaintext highlighter-rouge">torch.compile</code> 是一个通用的图捕获机制，这也使得它能够支持更“高级”的转换，例如将任何 <code class="language-plaintext highlighter-rouge">mask_mod</code> 转换为一个可以与锯齿形张量一起工作的转换。</p>
+<p>此外， <code class="language-plaintext highlighter-rouge">torch.compile</code> 是一个通用的图捕获机制，这也使得它能够支持更多“高级”的转换，例如将任何 <code class="language-plaintext highlighter-rouge">mask_mod</code> 转换为一个可以与交错张量一起工作的转换。</p>
 
-<p>我们还利用了 TorchInductor（torch.compile 的后端）基础设施为 Triton 模板提供支持。这不仅使得支持 FlexAttention 的代码生成变得容易，而且还自动为我们提供了对动态形状以及尾端融合（即将操作符融合到注意力末尾）的支持！在未来，我们计划扩展这一支持，以允许对注意力或类似 <a href="https://lmsys.org/blog/2024-01-17-sglang/">RadixAttention</a> 之类的量化版本进行支持。</p>
+<p>我们还利用了 TorchInductor（torch.compile 的后端）基础设施为 Triton 模板提供支持。这不仅使得支持 FlexAttention 的代码生成变得容易，而且还自动为我们提供了对动态形状以及尾端融合（即将运算符融合到注意力机制的末尾）的支持！在未来，我们计划扩展这一支持，以允许对注意力或 RadixAttention 等内容的量化版本进行支持。</p>
 
-<p>此外，我们还利用了高阶操作、PyTorch 的 autograd 自动生成反向传递，以及 vmap 自动应用 <code class="language-plaintext highlighter-rouge">score_mod</code> 以创建 BlockMask。</p>
+<p>此外，我们还利用了高阶运算符、PyTorch 的 autograd 自动生成反向传播，以及 vmap 自动应用 <code class="language-plaintext highlighter-rouge">score_mod</code> 以创建 BlockMask。</p>
 
 <p>当然，如果没有 Triton 和 TorchInductor 生成 Triton 代码的能力，这个项目也不可能实现。</p>
 
@@ -1114,16 +1122,16 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 <h3 id="limitations-and-future-work">局限性与未来工作</h3>
 
 <ul>
-  <li>FlexAttention 目前已在 PyTorch 夜间版本中提供，我们计划在 2.5.0 版本中将其作为原型功能发布。</li>
-  <li>本文未涵盖如何使用 FlexAttention 进行推理（或如何实现分页注意力）的内容，我们将在后续文章中介绍。</li>
-  <li>我们正在努力提高 FlexAttention 的性能，使其在 H100 GPU 上与 FlashAttention3 相匹配。</li>
+  <li>FlexAttention 目前已在 PyTorch 夜间版本中提供，我们计划在 2.5.0 版本中将其作为原型功能发布</li>
+  <li>本文未涵盖如何使用 FlexAttention 进行推理（或如何实现分页注意力）- 我们将在后续文章中介绍这些内容。</li>
+  <li>我们正在努力提高 FlexAttention 的性能，使其与 FlashAttention3 在 H100 GPU 上的性能相匹配。</li>
   <li>FlexAttention 需要所有序列长度都是 128 的倍数 - 这将很快得到解决。</li>
   <li>我们计划很快添加 GQA 支持 - 目前，您只需复制 kv 头部即可。</li>
 </ul>
 
 <h3 id="acknowledgements">致谢</h3>
 
-<p>我们想突出一些（工作和人物）对 FlexAttention 有所启发的先前工作。</p>
+<p>我们想突出一些启发 FlexAttention 的先前工作（和人物）。</p>
 
 <ul>
   <li>三道（Tri Dao）的 FlashAttention 工作</li>
@@ -1148,14 +1156,14 @@ def causal_mask(score, b, h, q_idx, kv_idx):
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -1172,7 +1180,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -1185,7 +1193,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -1193,7 +1201,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -1222,9 +1230,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -1234,7 +1240,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -1256,22 +1262,22 @@ def causal_mask(score, b, h, q_idx, kv_idx):
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手指南 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1298,17 +1304,17 @@ def causal_mask(score, b, h, q_idx, kv_idx):
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1343,7 +1349,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1357,7 +1363,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1425,7 +1431,7 @@ def causal_mask(score, b, h, q_idx, kv_idx):
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

@@ -110,8 +110,8 @@ python3 install.py
 # stored at .userbenchmark/cpu/metric-<timestamp>.json.
 python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,hf_Albert,hf_Bart,hf_BigBird,hf_DistilBert,hf_GPT2_large,dlrm,hf_T5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_Longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_Reformer,pytorch_CycleGAN_and_pix2pix,functorch_dp_cifar10,pytorch_unet --test eval --metrics=" latencies,cpu_peak_mem"="" #="" collect="" torch.compile="" mode="" performance="" with="" inductor="" backend="" and="" weights="" pre-packing="" enabled.="" the="" results="" will="" be="" stored="" at="" .userbenchmark="" cpu="" metric-&lt;timestamp&gt;.json="" python3="" run_benchmark.py="" --model="" bert_pytorch,hf_bert,hf_bert_large,hf_gpt2,hf_albert,hf_bart,hf_bigbird,hf_distilbert,hf_gpt2_large,dlrm,hf_t5,mnasnet1_0,mobilenet_v2,mobilenet_v3_large,squeezenet1_1,timm_efficientnet,shufflenet_v2_x1_0,timm_regnet,resnet50,soft_actor_critic,phlippe_densenet,resnet152,resnet18,resnext50_32x4d,densenet121,phlippe_resnet,doctr_det_predictor,timm_vovnet,alexnet,doctr_reco_predictor,vgg16,dcgan,yolov3,pytorch_stargan,hf_longformer,timm_nfnet,timm_vision_transformer,timm_vision_transformer_large,nvidia_deeprecommender,demucs,tts_angular,hf_reformer,pytorch_cyclegan_and_pix2pix,functorch_dp_cifar10,pytorch_unet="" --test="" eval="" --torchdynamo="" --freeze_prepack_weights="" --metrics="latencies,cpu_peak_mem" on="" successful="" completion="" of="" inference="" runs,="" script="" stores="" in="" json="" format.="" following="" is="" sample="" output:="" {="" "name":="" "cpu"="" "environ":="" "pytorch_git_version":="" "d44533f9d073df13895333e70b66f81c513c1889"="" },="" "metrics":="" "bert_pytorch-eval_latency":="" 56.3769865,="" "bert_pytorch-eval_cmem":="" 0.4169921875="" }="" hugging="" face="" benchmarking="" scripts="" google="" t5="" small="" text="" translation="" model="" one="" around="" 30="" models="" we="" benchmarked.="" we’re="" using="" it="" as="" a="" to="" demonstrate="" how="" run="" eager="" compile="" modes.="" additional="" configurations="" apis="" required="" are="" highlighted="" bold.="" save="" google_t5_small_text_translation.py.="" import="" argparse="" from="" transformers="" t5tokenizer,="" t5model="" torch="" torch.profiler="" profile,="" record_function,="" profileractivity="" torch._inductor.config="" config="" config.cpp.weight_prepack="True" config.freezing="True" def="" test_inference(mode,="" num_iter):="" tokenizer="T5Tokenizer.from_pretrained(&quot;t5-small&quot;)" input_ids="tokenizer(" "studies="" have="" been="" shown="" that="" owning="" dog="" good="" for="" you",="" return_tensors="pt" ).input_ids="" batch="" size="" 1="" decoder_input_ids="tokenizer(&quot;Studies" show="" that",="" if="" (mode="=" 'compile'):="" torch.no_grad():="" _="" range(50):="" outputs="model(input_ids=input_ids," profile(activities="[ProfilerActivity.CPU])" prof:="" record_function("model_inference"):="" range(num_iter):="" print(prof.key_averages().table(sort_by="self_cpu_time_total" ))="" main()="" -&gt;="" none:="" global="" m,="" args="" parser="argparse.ArgumentParser(__doc__)" parser.add_argument(="" "-m",="" "--mode",="" choices="[&quot;eager&quot;," "compile"],="" default="eager" ,="" help="Which test to run." )="" "-n",="" "--number",="" type="int," test_inference(args.mode,="" args.number)="" __name__="=" "__main__":="" steps:="" set="" omp_num_threads="" number="" vcpus="" 4="" because="" running="" sequence,="" they="" don't="" need="" large="" export="" install="" dependencies="" -m="" pip="" iterations="" just="" profiler="" output="" but="" benchmarking,="" used="" 1000="" iterations.="" google_t5_small_text_translation.py="" -n="" prints="" latency="" breakdown="" operators.="" profiler:="" c7g.xl="" (4vcpu)="" ------------------------="" ------------="" self="" %="" total="" time="" avg="" calls="" aten::mm="" 40.71%="" 12.502ms="" 130.229us="" 96="" model_inference="" 26.44%="" 8.118ms="" 100.00%="" 30.708ms="" aten::bmm="" 6.85%="" 2.102ms="" 9.47%="" 2.908ms="" 80.778us="" 36="" aten::matmul="" 3.73%="" 1.146ms="" 57.26%="" 17.583ms="" 133.205us="" 132="" aten::select="" 1.88%="" 576.000us="" 1.90%="" 583.000us="" 0.998us="" 584="" aten::transpose="" 1.51%="" 464.000us="" 1.83%="" 563.000us="" 3.027us="" 186="" -------------------="" total:="" same="" instance="" ---------------------------------="" mkldnn::_linear_pointwise="" 37.98%="" 5.461ms="" 45.91%="" 6.602ms="" 68.771us="" torch-compiled="" region="" 29.56%="" 4.251ms="" 98.53%="" 14.168ms="" 14.90%="" 2.143ms="" 21.73%="" 3.124ms="" 86.778us="" 4.51%="" 648.000us="" 4.62%="" 665.000us="" 1.155us="" 576="" aten::view="" 3.29%="" 473.000us="" 1.642us="" 288="" aten::empty="" 2.53%="" 364.000us="" 3.165us="" 115="" --------------------="" 14.379ms="" technical="" deep="" dive:="" what="" challenges="" optimization="" details="" underpinning="" new="" technologies="" –="" torchdynamo,="" aotdispatcher,="" torchinductor.="" torchdynamo="" captures="" pytorch="" programs="" safely="" python="" frame="" evaluation="" hooks="" aotdispatcher="" overloads="" pytorch’s="" autograd="" engine="" tracing="" autodiff="" generating="" ahead-of-time="" backward="" traces.="" torchinductor="" learning="" compiler="" generates="" fast="" code="" multiple="" accelerators="" backends.="" image="" 3:="" compilation="" process="" when="" invoked,="" dynamo="" rewrites="" bytecode="" extract="" sequences="" operations="" into="" an="" fx="" graph,="" which="" then="" compiled="" backend.="" typical="" scenario="" where="" graph="" frozen="" gradient="" calculations="" disabled,="" invokes="" platform="" specific="" optimizations="" like="" rewrite="" more="" performant="" operators,="" operator="" fusion,="" pre-packing.="" however,="" graviton3,="" wasn’t="" able="" perform="" any="" those="" there="" was="" no="" aarch64="" defined.="" fix="" this,="" extended="" inductor’s="" passes="" pick="" onednn="" operators="" linear="" layer="" graviton3="" processors="" acl="" snippet="" this="" follows:="" packed_weight_op="(" mkldnn._reorder_linear_weight="" (is_bf16_weight="" or="" mkldnn._is_mkldnn_acl_supported())="" packed_linear_inputs:="" tuple[any,="" ...]="(input," packed_weight_node)="" is_bf16_weight="" mkldnn._is_mkldnn_acl_supported():="" packed_linear_inputs="" +="(bias," "none",="" [],="" "")="" packed_linear_op="mkldnn._linear_pointwise.default" after="" done,="" pass="" compiling="" matmul="" linear_pointwise="" .="" highlights="" original="" model:="" %attention_scores="" :="" [num_users="1]" =="" call_function[target="torch.matmul](args" (%query_layer,="" %transpose),="" kwargs="{})" %attention_scores_1="" (%attention_scores,="" 8.0),="" %attention_scores_2="" (%attention_scores_1,="" %extended_attention_mask_3),="" graph:="" %_linear_pointwise_default_140="" (%add_7,="" %_frozen_param278,="" %_frozen_param16,="" none,="" ),="" %mul_5="" (%_linear_pointwise_default_140,="" 0.5),="" %mul_6="" 0.7071067811865476),="" %erf="" (%mul_6,),="" %add_8="" (%erf,="" 1),="" completes="" changes="" optimized="" aws="" processors.="" next="" comes="" actual="" dispatched="" run.="" chose="" during="" compilation,="" so,="" were="" expected,="" example,="" mkldnn._linear_pointwise.="" due="" gaps="" primitives,="" c++="" reference="" kernels="" instead="" kernels.="" hence,="" still="" significantly="" behind="" performance.="" mainly="" three="" areas="" primitives="" lack="" support="" mode.="" section="" talks="" about="" them="" detail.="" 1.="" didn’t="" blocked="" layout="" originally="" designed="" supported="" only="" standard="" channels="" last="" (nhwc)="" format,="" without="" whereas="" main="" reordered="" blocks="" runtime="" platform.="" avoids="" redundant="" on-the-fly="" reorders="" general="" matrix="" multiplication="" (gemm),="" otherwise="" would="" bottleneck="" hence="" instead.="" 2.="" mixed="" precision="" weren’t="" bfloat16="" mmla="" instructions="" can="" accelerate="" fp32="" gemm="" compute.="" supports="" kernels,="" integrated="" math="" compute="" option="" existing="" approach="" work="" optimization.="" requires="" explicit="" primitive="" implementation="" order="" use="" acceleration.="" 3.="" fused="" some="" activation="" functions="" mode,="" individually="" independently="" soon="" it’s="" reached.="" fusion="" another="" important="" efficiency.="" gaussian="" error="" unit="" (gelu)="" most="" widely="" transformers-based="" neural="" network="" architectures.="" (with="" multiplications)="" followed="" by="" gelu="" activation.="" part="" efficient="" fuses="" single="" linearpointwise+gelu="" operator.="" gelu.="" addressed="" these="" extending="" handle="" layouts="" definitions.="" sections="" talk="" 1:="" accept="" weight="" tensors="" addition="" nhwc="" const="" bool="" is_weights_md_format_ok="utils::one_of(weights_format_kind_received," format_kind::any,="" format_kind::blocked);="" memory_desc_t="" weights_md_received="weights_md_;" acl_utils::reorder_to_weight_format(aip.wei_tensor_info,="" weights_md_,="" expected_weight_format,="" inner_dim,="" o_dim,="" remaining_dims,="" {});="" acl_check_support(="" (weights_format_kind_received="=" format_kind::blocked)="" &amp;&amp;="" !(dnnl_memory_desc_equal(="" &amp;weights_md_received,="" &amp;weights_md_)),="" "specified="" format="" not="" acl,="" "="" "format_kind_t::any="" find="" "your="" platform");="" 2:="" defined="" (weights="" activations="" fp32)="" definitions="" updated="" tensors.="" *="" reorder="" pre-pack="" load="" phase="" itself="" so="" avoided.="" definition="" fastmath="" src="" bf16="" {{forward,="" f32,="" bf16,="" f32},="" cpu_instance_aarch64_acl(acl_inner_product_fwd_t)="" nullptr,="" }},="" disabled="" bypassed="" doesn’t="" contain="" temporary="" solution="" enable="" torch.compile.="" progress="" future="" releases.="" workaround,="" successfully="" dispatch="" acl.="" output,="" aten::addmm="" (one="" variants="" operator)="" aten::gelu="" (as="" 4)="" 5).="" ---------------------------="" 73.32%="" 46.543ms="" 74.49%="" 47.287ms="" 647.767us="" 73="" 9.92%="" 6.296ms="" 63.479ms="" 4.37%="" 2.776ms="" 5.46%="" 3.467ms="" 144.458us="" 24="" aten::copy_="" 1.74%="" 1.102ms="" 8.103us="" 136="" 1.50%="" 950.000us="" 79.167us="" 12="" 4:="" bert="" base="" showing="" addmm="" &nbsp;="" -----------------------------------------------------="" 53.61%="" 15.529ms="" 57.53%="" 16.665ms="" 228.288us="" 36.95%="" 10.705ms="" 99.31%="" 28.769ms="" aten::_scaled_dot_product_flash_attention_for_cpu="" 3.67%="" 1.064ms="" 4.43%="" 1.284ms="" 107.000us="" 1.97%="" 572.000us="" 2.509us="" 228="" 1.38%="" 399.000us="" 3.270us="" 122="" 5:="" lastly,="" erf="" (error="" function)="" auto="" vectorization="" snippets="" libm.so.="" 6:="" post="" grad="" function="" 0.82%="" 0.40%="" libm.so.6="" [.]="" erff32="" 0.05%="" 0.00%="" libtorch_python.so="" torch::autograd::thpvariable_erf="" libtorch_cpu.so="" at::_ops::erf::call="" 7:="" linux="" perf="" report="" libm.so="" work,="" optimize="" along="" onednn+acl="" torchbench="" enhancements="" improvements="" processors,="" framework="" add="" argument="" freeze="" disable="" test="" "—freeze_prepack_weights",="" action="store_true" args.freeze_prepack_weights:="" torch._inductor.config.freezing="True" torch._inductor.config.cpp.weight_prepack="True" 8:="" added="" freeze_prepack_weights="" upstreamed="" all="" optimizations,="" starting="" 2.3.1,="" wheels="" graviton="" dlc.="" what’s="" next,="" llama="" model,="" adding="" conclusion="" tutorial,="" covered="" graviton3-based="" ec2="" instances,="" improve="" performance,="" demonstrated="" resulting="" speedups.="" hope="" you="" give="" try!="" ml="" software="" graviton,="" please="" open="" issue="" guide="" github.="" acknowledgements="" thank="" community="" baseline="" their="" continued="" efforts="" further.="" references:="" https:="" pytorch.org="" assets="" pytorch2-2.pdf="" author="" sunita="" nadampalli="" development="" manager="" ai="" expert="" aws.="" she="" leads="" hpc="" workloads.="" passionate="" source="" delivering="" high-performance="" sustainable="" solutions="" socs="" based="" arm="" isa.="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -325,7 +325,7 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -333,7 +333,7 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -342,27 +342,27 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -373,21 +373,27 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -395,18 +401,20 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -417,12 +425,12 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -433,28 +441,28 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -468,7 +476,7 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -504,7 +512,7 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2024年7月9日</p>
+            <p class="featured-post">2024 年 7 月 9 日</p>
             <h1>
                 <a class="blog-title">在 AWS Graviton 处理器上使用 torch.compile 加速 PyTorch 推理</a>
             </h1>
@@ -519,39 +527,39 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
                     <p class="author">由 Sunita Nadampalli 撰写</p>
                     <h2 id="summary">摘要</h2>
 
-<p>原本是 PyTorch，使用了一种急切模式，其中构成模型的每个 PyTorch 操作都在达到时独立运行。PyTorch 2.0 引入了 <a href="https://maskerprc.github.io/tutorials/intermediate/torch_compile_tutorial.html">torch.compile</a> 来加速 PyTorch 代码，相对于默认的急切模式。与急切模式相比，torch.compile 将整个模型预编译成一个针对特定硬件平台运行最优的单个图。AWS 针对 <a href="https://aws.amazon.com/about-aws/whats-new/2022/05/amazon-ec2-c7g-instances-powered-aws-graviton3-processors/">AWS Graviton3 处理器</a>优化了 PyTorch 的 torch.compile 功能。这种优化使得 <a href="https://huggingface.co/models">Hugging Face</a> 模型推理（基于 33 个模型的性能改进几何平均值）的性能提高最多 2 倍，对于 <a href="https://github.com/pytorch/benchmark">TorchBench</a> 模型推理（基于 45 个模型的性能改进几何平均值）的性能提高最多 1.35 倍，与默认急切模式推理相比，在 AWS Graviton3 基于的 Amazon EC2 实例上运行了多个自然语言处理（NLP）、计算机视觉（CV）和推荐模型。从 PyTorch 2.3.1 版本开始，这些优化可在 torch Python <a href="https://pypi.org/project/torch/2.3.1/"> 轮子</a>和 AWS Graviton PyTorch <a href="https://github.com/aws/deep-learning-containers/blob/master/available_images.md#ec2-framework-graviton-containers-ec2-ecs-and-eks-support-only"> 深度学习容器（DLC）</a> 中使用。</p>
+<p>原本是 PyTorch，使用了一种急切模式，其中构成模型的每个 PyTorch 操作都在达到时独立运行。PyTorch 2.0 引入了 torch.compile 来加速 PyTorch 代码，相对于默认的急切模式。与急切模式相比，torch.compile 将整个模型预编译成一个针对特定硬件平台运行最优的单个图。AWS 针对 AWS Graviton3 处理器优化了 PyTorch 的 torch.compile 功能。这种优化使得 Hugging Face 模型推理（基于 33 个模型的性能改进的几何平均值）的性能提高最多 2 倍，对于 TorchBench 模型推理（基于 45 个模型的性能改进的几何平均值）的性能提高最多 1.35 倍，与在 AWS Graviton3 基于的 Amazon EC2 实例上默认急切模式推理相比，涵盖了几种自然语言处理（NLP）、计算机视觉（CV）和推荐模型。从 PyTorch 2.3.1 版本开始，这些优化可在 torch Python wheels 和 AWS Graviton PyTorch 深度学习容器（DLC）中获取。</p>
 
-<p>在这篇博客文章中，我们展示了如何在 AWS Graviton3 基于的 EC2 实例上优化 torch.compile 性能，如何使用这些优化来提高推理性能，以及带来的速度提升。</p>
+<p>在这篇博客文章中，我们展示了如何优化基于 AWS Graviton3 的 EC2 实例上的 torch.compile 性能，如何使用这些优化来提高推理性能，以及带来的速度提升。</p>
 
 <h2 id="why-torchcompile-and-whats-the-goal">为什么使用 torch.compile？目标是什么？</h2>
 
-<p>在即时模式（eager mode）下，模型中的操作器在遇到时立即执行。这种模式使用起来更简单，更适合机器学习（ML）研究人员，因此是默认模式。然而，即时模式由于冗余内核启动和内存读取开销，会带来运行时开销。而在 torch compile 模式下，操作器首先被合成成一个图，其中一个操作器与另一个操作器合并，以减少和定位内存读取以及总的内核启动开销。</p>
+<p>在即时模式（eager mode）下，模型中的操作器在遇到时立即执行。这种模式使用起来更简单，更适合机器学习（ML）研究人员，因此是默认模式。然而，即时模式由于冗余的内核启动和内存读取开销，会带来运行时开销。而在 torch compile 模式下，操作器首先被合成成一个图，其中一个操作器与另一个操作器合并，以减少和定位内存读取以及总的内核启动开销。</p>
 
-<p>AWS Graviton 团队的目标是优化 torch.compile 后端以适应 Graviton3 处理器。PyTorch 的即时模式已经通过 Arm Compute Library (ACL)内核使用 oneDNN（也称为 MKLDNN）对 Graviton3 处理器进行了优化。因此，问题是，如何在 torch.compile 模式下重用这些内核，以实现图编译和优化内核性能的最佳结合？</p>
+<p>对于 AWS Graviton 团队来说，目标是优化 torch.compile 后端以适应 Graviton3 处理器。PyTorch 的即时模式已经通过 Arm Compute Library（ACL）内核使用 oneDNN（也称为 MKLDNN）对 Graviton3 处理器进行了优化。因此，问题是，如何在 torch.compile 模式下重用这些内核，以实现图编译和优化内核性能的最佳结合？</p>
 
 <h2 id="results">结果</h2>
 
-<p>AWS Graviton 团队扩展了火炬电感器和 oneDNN 原语，这些原语重用了 ACL 内核并优化了 Graviton3 处理器的编译模式性能。从 PyTorch 2.3.1 版本开始，这些优化已包含在 torch Python 轮子中，并可在 AWS Graviton DLC 中使用。请参阅以下 <strong> 运行推理 </strong> 部分，了解安装、运行时配置以及如何运行测试的说明。</p>
+<p>AWS Graviton 团队扩展了火炬电感器和 oneDNN 原语，这些原语重用了 ACL 内核并优化了编译模式在 Graviton3 处理器上的性能。从 PyTorch 2.3.1 版本开始，这些优化已包含在 torch Python 轮子中，并可在 AWS Graviton DLC 中使用。请参阅随后的运行推理部分，以获取有关安装、运行时配置和如何运行测试的说明。</p>
 
-<p>为了展示性能提升，我们使用了来自 <a href="https://github.com/pytorch/benchmark">TorchBench</a> 的 NLP、CV 和推荐模型，以及来自 <a href="https://huggingface.co/models">Hugging Face</a> 的最受欢迎的 NLP 模型，涵盖了问答、文本分类、标记分类、翻译、零样本分类、翻译、摘要、特征提取、文本生成、文本到文本生成、填空和句子相似性等任务，以覆盖广泛的客户用例。</p>
+<p>为了展示性能提升，我们使用了来自 TorchBench 的 NLP、CV 和推荐模型，以及来自 Hugging Face 的最热门 NLP 模型，涵盖了问答、文本分类、标记分类、翻译、零样本分类、翻译、摘要、特征提取、文本生成、文本到文本生成、填空和句子相似性等任务，以覆盖广泛的客户用例。</p>
 
-<p>我们首先测量了 TorchBench 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。您可以看到，在 45 个基准测试的模型中，延迟提高了 1.35 倍（45 个模型的几何平均值）。</p>
+<p>我们首先测量了 TorchBench 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。你可以看到，对于我们基准测试的 45 个模型，延迟提高了 1.35 倍（45 个模型的几何平均值）。</p>
 
 <p><img src="/assets/images/accelerated-pytorch-inference/fg1.png" alt="PyTorch model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using TorchBench framework" style="width:100%"></p>
 
-<p><em><strong>图 1</strong>：使用 TorchBench 框架在 AWS Graviton3-based c7g 实例上，torch.compile 对 PyTorch 模型推理性能的改进。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
+<p><em>图像 1：使用 TorchBench 框架在 AWS Graviton3-based c7g 实例上，torch.compile 对 PyTorch 模型推理性能的改进。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
 
-<p>与前面的 TorchBench 推理性能图类似，我们首先测量了 Hugging Face NLP 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。您可以看到，在 33 个基准测试的模型中，性能提高了约 2 倍（33 个模型的几何平均值）。</p>
+<p>与前面的 TorchBench 推理性能图类似，我们首先测量了 Hugging Face NLP 模型在急切模式下的推理延迟，以毫秒（msec）为单位，在下面的图中用红色虚线标记为 1.0。然后我们比较了 torch.compile 对相同模型推理的改进，归一化结果在图中展示。你可以看到，对于我们基准测试的 33 个模型，性能提高了大约 2 倍（33 个模型的几何平均值）。</p>
 
 <p><img src="/assets/images/accelerated-pytorch-inference/fg2.png" alt="Hugging Face NLP model inference performance improvement with torch.compile on AWS Graviton3-based c7g instance using Hugging Face example scripts" style="width:100%"></p>
 
-<p><em><strong>图像 2</strong>：使用 Hugging Face 示例脚本在 AWS Graviton3-based c7g 实例上通过 torch.compile 提升 Hugging Face NLP 模型推理性能。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
+<p><em>图像 2：使用 Hugging Face 示例脚本在 AWS Graviton3-based c7g 实例上通过 torch.compile 提升 Hugging Face NLP 模型推理性能。参考急切模式性能标记为 1.0。（数值越高越好）</em></p>
 
 <h2 id="running-an-inference">运行推理</h2>
 
-<p>从 PyTorch 2.3.1 版本开始，优化功能包含在 torch Python 轮和 AWS Graviton PyTorch DLC 中。本节展示了如何使用 torch Python 轮和来自 Hugging Face 及 TorchBench 仓库的基准测试脚本在急切模式和 torch.compile 模式下运行推理。</p>
+<p>从 PyTorch 2.3.1 版本开始，优化功能可在 torch Python 轮和 AWS Graviton PyTorch DLC 中使用。本节展示了如何使用 torch Python 轮和来自 Hugging Face 及 TorchBench 仓库的基准测试脚本在急切和 torch.compile 模式下运行推理。</p>
 
-<p>要成功运行脚本并重现本帖中提到的加速数值，您需要一个来自 Graviton3 系列的硬件实例（<code class="language-plaintext highlighter-rouge">c7g/r7g/m7g/hpc7g</code>）。对于本帖，我们使用了 <a href="https://aws.amazon.com/ec2/instance-types/c7g/">c7g.4xl（16 vcpu）实例 </a>。实例、AMI 详细信息和所需的 torch 库版本将在以下片段中说明。</p>
+<p>要成功运行脚本并重现本帖中提到的加速数值，您需要一个来自 Graviton3 家族的硬件实例（ <code class="language-plaintext highlighter-rouge">c7g/r7g/m7g/hpc7g</code> ）。对于本帖，我们使用了 c7g.4xl（16 vcpu）实例。实例、AMI 详细信息和所需的 torch 库版本将在以下片段中说明。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Instance: c7g.4xl instance
 Region: us-west-2
@@ -584,7 +592,7 @@ export LRU_CACHE_CAPACITY=1024
 
 <h4 id="torchbench-benchmarking-scripts">TORCHBENCH 基准测试脚本</h4>
 
-<p>TorchBench 是一个开源基准测试集合，用于评估 PyTorch 的性能。我们使用 TorchBench 仓库中的脚本对 45 个模型进行了基准测试。以下代码展示了如何使用脚本运行急切模式和编译模式下的 inductor 后端。</p>
+<p>TorchBench 是一个开源基准测试集合，用于评估 PyTorch 的性能。我们使用 TorchBench 仓库中的脚本对 45 个模型进行了基准测试。以下代码展示了如何使用 inductor 后端运行急切模式和 compile 模式的脚本。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Set OMP_NUM_THREADS to number of vcpus, 16 for c7g.4xl instance
 export OMP_NUM_THREADS=16
@@ -631,7 +639,7 @@ python3 run_benchmark.py cpu --model BERT_pytorch,hf_Bert,hf_Bert_large,hf_GPT2,
 
 <h4 id="hugging-face-benchmarking-scripts">Hugging Face 基准测试脚本</h4>
 
-<p>Google T5 小型文本翻译模型是我们测试的约 30 个 Hugging Face 模型之一。我们将其作为示例模型来演示如何在急切模式和编译模式下运行推理。在编译模式下运行所需的附加配置和 API 以粗体形式突出显示 。 将以下脚本保存为 <code class="language-plaintext highlighter-rouge">google_t5_small_text_translation.py</code> 。</p>
+<p>Google T5 小型文本翻译模型是我们测试的约 30 个 Hugging Face 模型之一。我们将其作为示例模型来演示如何在急切模式和编译模式下运行推理。在编译模式下运行所需的附加配置和 API 以粗体形式突出显示。将以下脚本保存为 <code class="language-plaintext highlighter-rouge">google_t5_small_text_translation.py</code> 。</p>
 
 <pre><code>import argparse
 from transformers import T5Tokenizer, T5Model
@@ -707,7 +715,7 @@ python3 google_t5_small_text_translation.py -n 1 -m eager
 python3 google_t5_small_text_translation.py -n 1 -m compile
 </code></pre></div></div>
 
-<p>推理运行成功完成后，脚本将打印 torch 分析器输出，包括 torch 操作符的延迟分解。以下是从 torch 分析器获得的示例输出：</p>
+<p>推理运行成功完成后，脚本将打印 torch 分析器输出，其中包括 torch 操作符的延迟分解。以下是从 torch 分析器获得的示例输出：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Torch profiler output for the eager mode run on c7g.xl (4vcpu)
 ------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
@@ -738,19 +746,19 @@ Self CPU time total: 14.379ms
 
 <h2 id="technical-deep-dive-what-are-the-challenges-and-optimization-details">技术深度解析：挑战与优化细节</h2>
 
-<p>torch.compile 的基础是新技术——TorchDynamo、AOTDispatcher 和 TorchInductor。</p>
+<p>火炬编译器（torch.compile）基于新技术——TorchDynamo、AOTDispatcher 和 TorchInductor。</p>
 
-<p><strong>TorchDynamo</strong> 通过使用 Python 框架评估钩子安全地捕获 PyTorch 程序<br>
-<strong>AOTDispatcher</strong> 覆盖 PyTorch 的 autograd 引擎，作为生成即时反向跟踪的跟踪自动微分<br>
-<strong>torchInductor</strong> 是一个深度学习编译器，可以为多个加速器和后端生成快速代码。</p>
+<p>TorchDynamo 通过 Python 框架评估钩子安全地捕获 PyTorch 程序。<br>
+AOTDispatcher 重载 PyTorch 的 autograd 引擎，作为追踪自动微分，用于生成预编译的回溯。<br>
+TorchInductor 是一个深度学习编译器，可以为多个加速器和后端生成快速代码。</p>
 
 <p><img src="/assets/images/accelerated-pytorch-inference/fg3.png" alt="The PyTorch compilation process source" style="width:100%"></p>
 
-<p><em><strong>图像 3</strong>：PyTorch 编译过程</em></p>
+<p><em>图像 3：PyTorch 编译过程</em></p>
 
-<p>当调用 torch.compile 时，torch dynamo 会重写 Python 字节码，将 PyTorch 操作序列提取到 <a href="https://pytorch.org/docs/stable/fx.html">FX</a><a href="https://pytorch.org/docs/stable/fx.html"> 图 </a> 中，然后使用 inductor 后端进行编译。对于典型的推理场景，其中图已冻结且梯度计算被禁用，inductor 会调用平台特定的优化，如将图重写为更高效的运算符、运算符融合和权重预打包。</p>
+<p>当调用 torch.compile 时，torch dynamo 会重写 Python 字节码，将 PyTorch 操作序列提取到 FX 图中，然后使用 inductor 后端进行编译。对于典型的推理场景，其中图已冻结且梯度计算被禁用，inductor 会调用平台特定的优化，如将图重写为更高效的运算符、运算符融合和权重预打包。</p>
 
-<p>然而，在 Graviton3 上，inductor 无法执行这些优化，因为没有定义 aarch64 后端。为了解决这个问题，我们扩展了 inductor 的 FX 遍历，以便在 Graviton3 处理器上使用 ACL 后端为线性层编译选择 oneDNN 运算符。下面的代码片段展示了这一过程：</p>
+<p>然而，在 Graviton3 上，inductor 无法执行这些优化，因为没有定义 aarch64 后端。为了解决这个问题，我们扩展了 inductor 的 FX 遍历，以便在 Graviton3 处理器上使用 ACL 后端为线性层编译选择 oneDNN 运算符。以下是对应的代码片段：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>packed_weight_op = (
     mkldnn._reorder_linear_weight
@@ -762,14 +770,14 @@ if is_bf16_weight or mkldnn._is_mkldnn_acl_supported():
     packed_linear_op = mkldnn._linear_pointwise.default
 </code></pre></div></div>
 
-<p>在完成这些操作后，FX 渲染流程成功将 <code class="language-plaintext highlighter-rouge">matmul</code> 操作符编译为 <code class="language-plaintext highlighter-rouge">linear_pointwise</code> 操作符。以下代码片段突出了原始模型中的 matmul 操作符：</p>
+<p>在完成此操作后，FX 渲染流程成功将 <code class="language-plaintext highlighter-rouge">matmul </code> 运算符编译为 <code class="language-plaintext highlighter-rouge">linear_pointwise </code> 。以下代码片段突出了原始模型中的 matmul 运算符：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code> %attention_scores   : [num_users=1] = call_function[target=torch.matmul](args = (%query_layer, %transpose), kwargs = {})
  %attention_scores_1 : [num_users=1] = call_function[target=operator.truediv](args = (%attention_scores, 8.0), kwargs = {})
  %attention_scores_2 : [num_users=1] = call_function[target=operator.add](args = (%attention_scores_1, %extended_attention_mask_3), kwargs = {})
 </code></pre></div></div>
 
-<p>以下代码片段突出了编译图中 linear_pointwise 操作符：</p>
+<p>以下代码片段突出了编译图中使用的 linear_pointwise 运算符：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>%_linear_pointwise_default_140 : [num_users=2] = call_function[target=torch.ops.mkldnn._linear_pointwise.default](args = (%add_7, %_frozen_param278, %_frozen_param16, none, [], ), kwargs = {})
 %mul_5 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.5), kwargs = {})
@@ -778,27 +786,27 @@ if is_bf16_weight or mkldnn._is_mkldnn_acl_supported():
 %add_8 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%erf, 1), kwargs = {})
 </code></pre></div></div>
 
-<p>这完成了在 AWS Graviton3 处理器上编译图到优化操作符所需的 torch inductor 变更。接下来是实际的推理阶段，编译好的图被调度以运行。在 inductor 编译过程中，我们选择了 OneDNN with ACL 作为后端，因此，新的操作符被调度到 oneDNN，例如，<code class="language-plaintext highlighter-rouge">mkldnn._linear_pointwise</code>。然而，由于 oneDNN ACL 原语存在缺陷，操作符使用了 C++ 引用内核而不是优化的 ACL 内核。因此，编译性能仍然显著低于 eager 模式性能。</p>
+<p>这完成了在 AWS Graviton3 处理器上编译图到优化运算符所需的 torch inductor 变更。接下来是实际的推理阶段，编译好的图被调度以运行。在 inductor 编译过程中，我们选择了 OneDNN with ACL 作为后端，因此，新的运算符被期望地调度到 oneDNN，例如， <code class="language-plaintext highlighter-rouge">mkldnn._linear_pointwise</code> 。然而，由于 oneDNN ACL 原语存在缺陷，运算符使用了 C++ 引用内核而不是优化的 ACL 内核。因此，编译性能仍然显著低于 eager 模式性能。</p>
 
-<p>主要有三个领域 oneDNN ACL 原语不支持 torch.compile 模式。以下章节将详细讨论这些问题。</p>
+<p>主要有三个领域，oneDNN ACL 原语在 torch.compile 模式下缺乏支持。以下章节将详细讨论这些问题。</p>
 
-<p><strong>1. ACL 基本操作原语在阻塞布局中不支持权重</strong></p>
+<p><strong>1. ACL 基本操作在阻塞布局中不支持权重</strong></p>
 
-<p>ACL 基本操作原语最初是为急切模式设计的，仅支持在标准通道最后（<a href="https://oneapi-src.github.io/oneDNN/dev_guide_understanding_memory_formats.html#nhwc">NHWC</a>）格式中的权重，而不进行任何预打包。而权重预打包到阻塞布局是感应器编译过程中权重重排序到特定于运行时平台块的主要优化之一。这避免了在运行通用矩阵乘法（GEMM）时的冗余和即时重排序，否则这将是推理性能的瓶颈。但 ACL 基本操作原语不支持阻塞布局，因此运算符使用 oneDNN C++ 参考内核运行。</p>
+<p>ACL 基本操作最初是为急切模式设计的，仅支持在标准通道最后（NHWC）格式中的权重，没有任何预打包。而权重预打包到阻塞布局是感应器编译过程中权重重排序到特定于运行时平台块的优化之一。这避免了在运行通用矩阵乘法（GEMM）时的冗余和即时重排序，否则这将是推理性能的瓶颈。但 ACL 基本操作不支持阻塞布局，因此运算符使用 oneDNN C++ 参考内核运行。</p>
 
-<p><strong>2. oneDNN 中不支持混合精度基本操作原语</strong></p>
+<p><strong>2. oneDNN 中不支持混合精度基本操作</strong></p>
 
-<p>AWS Graviton3 处理器支持 <a href="https://developer.arm.com/documentation/ddi0596/2020-12/SVE-Instructions/BFMMLA--BFloat16-floating-point-matrix-multiply-accumulate-">bfloat16 MMLA 指令 </a>，可用于加速使用 bfloat16 GEMM 作为混合精度计算的 fp32 推理。ACL 支持混合精度 GEMM 内核，并将其集成到 oneDNN 中，作为现有 fp32 操作的快速数学计算选项。然而，由于权重预打包优化，快速数学方法在编译模式下不起作用。编译模式需要在 oneDNN 中显式实现混合精度原语，才能使用 bfloat16 加速。</p>
+<p>AWS Graviton3 处理器支持 bfloat16 MMLA 指令，可用于加速使用 bfloat16 GEMM 作为混合精度计算的 fp32 推理。ACL 支持混合精度 GEMM 内核，并将其集成到 oneDNN 中，作为现有 fp32 运算符的快速数学计算选项。然而，由于权重预打包优化，快速数学方法在编译模式下不起作用。编译模式需要在 oneDNN 中显式实现混合精度原语才能使用 bfloat16 加速。</p>
 
-<p><strong>3. ACL 原语不支持某些激活函数的融合内核</strong></p>
+<p><strong>3. ACL 基本原语不支持某些激活函数的融合内核</strong></p>
 
-<p>在急切模式下，操作符是单独分发的，因为模型一旦到达就会独立运行。而相比之下，在编译模式下，操作符融合是另一种重要的优化，它将操作符融合以提高运行时效率。例如，高斯误差线性单元（<a href="https://arxiv.org/pdf/1606.08415.pdf#%3A~%3Atext%3DWe%20propose%20the%20Gaussian%20Error%2Cstandard%20Gaussian%20cumulative%20distribution%20function">GELU</a>）是基于变换器神经网络的架构中最广泛使用的激活函数之一。因此，通常会有一个线性层（包含矩阵乘法）后跟 GELU 激活。作为将模型编译成高效操作符的一部分，torch inductor 将 matmul 和 GELU 融合成一个单一的 linearpointwise+gelu 操作符。然而，oneDNN ACL 原语没有对融合内核与 GELU 的支持。</p>
+<p>在急切模式下，操作符是单独分发的，因为模型一旦到达就会独立运行。而相比之下，在编译模式下，操作符融合是另一种重要的优化，它将操作符融合以提高运行时效率。例如，高斯误差线性单元（GELU）是基于变换器神经网络的架构中最广泛使用的激活函数之一。因此，通常会有一个线性层（包含矩阵乘法）后跟 GELU 激活。作为将模型编译成高效操作符的一部分，torch inductor 将 matmul 和 GELU 融合成一个单一的 linearpointwise+gelu 操作符。然而，oneDNN ACL 原语没有对具有 GELU 的融合内核的支持。</p>
 
 <p>我们通过扩展 oneDNN 原语以处理额外的布局和新原语定义来填补这些差距。以下章节将详细介绍这些优化。</p>
 
 <h3 id="optimization-1-extended-acl-primitives-to-accept-weight-tensors-in-blocked-layout">优化 1：扩展 ACL 原语以接受分块布局的权重张量</h3>
 
-<p>我们扩展了 ACL 原语，使其除了标准 NHWC 格式外，还可以接受分块布局。相应的代码片段如下：</p>
+<p>我们扩展了 ACL 原语，使其除了标准的 NHWC 格式外，还可以接受分块布局。相应的代码片段如下：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>const bool is_weights_md_format_ok
                     = utils::one_of(weights_format_kind_received,
@@ -836,7 +844,7 @@ ACL_CHECK_SUPPORT(
 
 <h3 id="optimization-3-disabled-operator-fusion-pass-in-torch-inductor">优化 3：禁用了 torch inductor 中的算子融合 pass</h3>
 
-<p>我们绕过了 torch inductor 中的算子融合 pass，这样编译后的图不包含 GELU 融合算子。这是一个临时解决方案，以启用 ACL 内核在 torch.compile 中。目前有一个正在进行的工作，旨在为未来的 PyTorch 版本启用算子融合 pass。通过这个解决方案，我们成功地将线性层调度到 ACL。如下面的 torch.profiler 输出所示，原始模型中的 <code class="language-plaintext highlighter-rouge">aten::addmm</code>（矩阵乘法算子的一个变体）和 <code class="language-plaintext highlighter-rouge">aten::gelu</code>（如<em>图 4</em> 中突出显示）被编译为 <code class="language-plaintext highlighter-rouge">mkldnn::_linear_pointwise</code>，没有融合 <code class="language-plaintext highlighter-rouge">gelu</code> 算子（如<em>图 5</em> 中突出显示）。</p>
+<p>我们绕过了 torch inductor 中的算子融合 pass，这样编译后的图不包含 GELU 融合算子。这是一个临时解决方案，以启用 torch.compile 中的 ACL 内核。目前有一个正在进行的工作，旨在为未来的 PyTorch 版本启用算子融合 pass。通过这个解决方案，我们成功地将线性层调度到 ACL。如下面的 torch.profiler 输出所示，原始模型中的 <code class="language-plaintext highlighter-rouge">aten::addmm </code> （矩阵乘法算子的一个变体）和 <code class="language-plaintext highlighter-rouge">aten::gelu </code> （如图 4 中突出显示）被编译为 <code class="language-plaintext highlighter-rouge">mkldnn::_linear_pointwise </code> ，而没有 <code class="language-plaintext highlighter-rouge">gelu </code> 算子融合（如图 5 中突出显示）。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>---------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
                        Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
@@ -848,7 +856,7 @@ ACL_CHECK_SUPPORT(
                  aten::gelu         1.50%     950.000us         1.50%     950.000us      79.167us            12  
 </code></pre></div></div>
 
-<p><em><strong>图像 4</strong>：torch.profiler 输出，显示 Hugging Face bert 基础模型在 Eager 模式下的推理，包括 addmm 和 gelu 运算符</em></p>
+<p><em>图像 4：torch.profiler 输出，显示 Hugging Face bert base 模型在 Eager 模式下的推理，包括 addmm 和 gelu 运算符</em></p>
 <div class="mt-3 mb-3">&nbsp;</div>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-----------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
@@ -861,9 +869,9 @@ ACL_CHECK_SUPPORT(
                                           aten::empty         1.38%     399.000us         1.38%     399.000us       3.270us           122 
 </code></pre></div></div>
 
-<p><em><strong>图像 5</strong>：torch.profiler 输出，显示 Hugging Face Bert 基础模型在 torch.compile 模式下的推理，包括没有 gelu 融合的 linear_pointwise 运算符</em></p>
+<p><em>图像 5：torch.profiler 输出，显示 Hugging Face Bert base 模型在 torch.compile 模式下的推理，包括没有 gelu 合并的 linear_pointwise 运算符</em></p>
 
-<p>最后，<code class="language-plaintext highlighter-rouge">gelu</code> 运算符被编译成 <code class="language-plaintext highlighter-rouge">erf</code>（误差函数），并调度到 inductor 自动向量化后端。以下代码片段显示了编译图中的 <code class="language-plaintext highlighter-rouge">erf</code> 运算符以及使用 <code class="language-plaintext highlighter-rouge">libm.so</code> 运行它。</p>
+<p>最后， <code class="language-plaintext highlighter-rouge">gelu </code> 运算符被编译成 <code class="language-plaintext highlighter-rouge">erf </code> （错误函数）并调度到 inductor 自动向量化后端。以下代码片段显示了编译图中的 <code class="language-plaintext highlighter-rouge">erf </code> 运算符以及使用 <code class="language-plaintext highlighter-rouge">libm.so</code> 运行它。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>%_linear_pointwise_default_140 : [num_users=2] = call_function[target=torch.ops.mkldnn._linear_pointwise.default](args = (%add_7, %_frozen_param278, %_frozen_param16, none, [], ), kwargs = {})
 %mul_5 : [num_users=1] = call_function[target=torch.ops.aten.mul.Tensor](args = (%_linear_pointwise_default_140, 0.5), kwargs = {})
@@ -872,7 +880,7 @@ ACL_CHECK_SUPPORT(
 %add_8 : [num_users=1] = call_function[target=torch.ops.aten.add.Tensor](args = (%erf, 1), kwargs = {})
 </code></pre></div></div>
 
-<p><em><strong>图像 6</strong>：后梯度传递后的代码片段，显示编译图中的 erf 函数</em></p>
+<p><em>图像 6：后梯度传递后的代码片段，显示编译图中的 erf 函数</em></p>
 <div class="mt-3 mb-3">&nbsp;</div>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>     0.82%     0.40%  python3  libm.so.6            [.] erff32
@@ -880,13 +888,13 @@ ACL_CHECK_SUPPORT(
      0.05%     0.00%  python3  libtorch_cpu.so      [.] at::_ops::erf::call
 </code></pre></div></div>
 
-<p><em><strong>图像 7</strong>：Linux perf 报告显示 erf 分派到 libm.so</em></p>
+<p><em>图像 7：Linux perf 报告显示 erf 调度到 libm.so</em></p>
 
-<p>通过这项工作，我们能够通过使用电感图编译以及 oneDNN+ACL 后端优化了 Graviton3 处理器上的 <code class="language-plaintext highlighter-rouge">torch.compile</code> 性能。</p>
+<p>通过这项工作，我们能够通过使用电感图编译以及 oneDNN+ACL 后端，优化 Graviton3 处理器上的 <code class="language-plaintext highlighter-rouge">torch.compile </code> 性能。</p>
 
-<h3 id="torchbench-enhancements">TorchBench 优化</h3>
+<h3 id="torchbench-enhancements">TorchBench 增强</h3>
 
-<p>为了展示 torch.compile 在 AWS Graviton3 处理器上的性能提升，我们扩展了 TorchBench 框架，添加了一个新参数以启用图冻结和权重预打包，并禁用 torch auto grad 用于评估测试模式。相应的代码片段如下：</p>
+<p>为了展示 torch.compile 在 AWS Graviton3 处理器上的性能提升，我们扩展了 TorchBench 框架，添加了一个新参数以启用图冻结和权重预打包，并禁用 torch auto grad 的评估测试模式。相应的代码片段如下：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>parser.add_argument(
  "—freeze_prepack_weights",
@@ -899,27 +907,27 @@ if args.freeze_prepack_weights:
  torch._inductor.config.cpp.weight_prepack=True
 </code></pre></div></div>
 
-<p><em><strong>图像 8</strong>：在 TorchBench 中为 torchdynamo 后端添加了 freeze_prepack_weights 选项，以展示 torch.compile 在 AWS Graviton3 处理器上的性能改进</em></p>
+<p><em>图像 8：在 TorchBench 中为 torchdynamo 后端添加了 freeze_prepack_weights 选项，以展示 torch.compile 在 AWS Graviton3 处理器上的性能改进</em></p>
 
 <p>我们已将所有优化提交到上游，从 PyTorch 2.3.1 版本开始，这些优化支持在 torch Python wheels 和 AWS Graviton PyTorch DLC 中</p>
 
 <h2 id="whats-next">接下来是什么</h2>
 
-<p>接下来，我们将扩展 torch inductor CPU 后端支持以编译 Llama 模型，并添加对融合 GEMM 内核的支持，以在 AWS Graviton3 处理器上启用 torch inductor 操作融合优化</p>
+<p>接下来，我们将扩展 torch inductor CPU 后端支持以编译 Llama 模型，并添加对融合 GEMM 内核的支持，以在 AWS Graviton3 处理器上启用 torch inductor 算子融合优化</p>
 
 <h2 id="conclusion">结论</h2>
 
-<p>在本教程中，我们介绍了如何在 AWS Graviton3 基于的 EC2 实例上优化 torch.compile 性能，如何使用这些优化来提高 PyTorch 模型推理性能，并展示了带来的速度提升。希望您能尝试一下！如果您在 Graviton 上需要任何关于 ML 软件的支持，请打开 AWS Graviton 技术指南 <a href="https://github.com/aws/aws-graviton-getting-started">GitHub</a> 上的问题。</p>
+<p>在本教程中，我们介绍了如何在 AWS Graviton3 基于的 EC2 实例上优化 torch.compile 性能，如何使用这些优化来提高 PyTorch 模型推理性能，并展示了带来的速度提升。希望您能尝试一下！如果您在 Graviton 上需要任何关于 ML 软件的支持，请在 AWS Graviton 技术指南 GitHub 上提交问题。</p>
 
 <h2 id="acknowledgements">致谢</h2>
 
 <p>我们感谢 PyTorch 社区对 torch.compile 基准框架的贡献以及他们持续的努力来进一步优化它。</p>
 
-<p>参考资料：<a href="https://maskerprc.github.io/assets/pytorch2-2.pdf">https://maskerprc.github.io/assets/pytorch2-2.pdf</a></p>
+<p>参考资料请见：https://pytorch.org/assets/pytorch2-2.pdf</p>
 
 <h2 id="author">作者</h2>
 
-<p>Sunita Nadampalli 是 AWS 的软件开发经理和 AI/ML 专家。她负责 AWS Graviton 软件性能优化，以支持 AI/ML 和 HPC 工作负载。她对开源软件开发以及为基于 Arm ISA 的 SoC 提供高性能和可持续的软件解决方案充满热情。</p>
+<p>Sunita Nadampalli 是 AWS 的软件开发经理和 AI/ML 专家。她负责 AWS Graviton 软件性能优化，以支持 AI/ML 和 HPC 工作负载。她对开源软件开发充满热情，致力于为基于 Arm ISA 的 SoC 提供高性能和可持续的软件解决方案。</p>
 
                 </article>
             </div>
@@ -935,14 +943,14 @@ if args.freeze_prepack_weights:
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -959,7 +967,7 @@ if args.freeze_prepack_weights:
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -972,7 +980,7 @@ if args.freeze_prepack_weights:
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -980,7 +988,7 @@ if args.freeze_prepack_weights:
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -1009,9 +1017,7 @@ if args.freeze_prepack_weights:
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -1021,7 +1027,7 @@ if args.freeze_prepack_weights:
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -1043,22 +1049,22 @@ if args.freeze_prepack_weights:
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1085,17 +1091,17 @@ if args.freeze_prepack_weights:
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1130,7 +1136,7 @@ if args.freeze_prepack_weights:
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1144,7 +1150,7 @@ if args.freeze_prepack_weights:
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1212,7 +1218,7 @@ if args.freeze_prepack_weights:
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

@@ -42,8 +42,8 @@ user_model = ...
 user_model.eval()
 with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(user_model)" y="compiled_model(x)" figure="" 1.="" code="" snippet="" showing="" the="" use="" of="" bf16="" inference="" with="" torchinductor="" \="" we="" measured="" performance="" on="" three="" benchmark="" suites—torchbench,="" hugging="" face,="" and="" timm—and="" results="" are="" as="" follows="" in="" table="" here="" see="" that="" graph="" mode="" (torchinductor)="" outperforms="" eager="" by="" factors="" ranging="" from="" 1.25x="" to="" 2.35x.="" bfloat16="" geometric="" mean="" speedup="" mode,="" compared="" (single-socket="" multithreads)="" compiler="" torchbench="" huggingface="" timm_models="" inductor="" 1.81x="" 2.35x="" (single-core="" single="" thread)="" 1.74x="" 1.28x="" 1.29x="" developers="" can="" fully="" deploy="" their="" models="" 4th="" generation="" intel="" xeon="" processors="" take="" advantage="" intel®="" advanced="" matrix="" extensions="" (intel®="" amx)="" feature="" get="" peak="" for="" torch.compile.="" amx="" has="" two="" primary="" components:="" tiles="" tiled="" multiplication="" (tmul).="" store="" large="" amounts="" data="" eight="" two-dimensional="" registers,="" each="" one="" kilobyte="" size.="" tmul="" is="" an="" accelerator="" engine="" attached="" contain="" instructions="" compute="" larger="" matrices="" a="" operation.="" cpu="" dynamic="" shapes="" path="" torch.compile="" key="" features="" pytorch="" 2.0.="" 2.0="" assumes="" everything="" static="" default.="" if="" recompile="" because="" size="" changed,="" will="" instead="" attempt="" being="" (sizes="" have="" changed="" likely="" change="" future).="" support="" required="" popular="" like="" language="" (llm).="" provide="" broad="" scope="" help="" users="" more="" benefit="" shapes,="" post-op="" fusion="" conv="" gemm="" operators="" vectorization="" code-gen="" non-conv="" operators.="" supported="" both="" triton="" back="" end="" cuda*="" c++="" cpu.="" covers="" improvements="" functionality="" (as="" model="" passing="" rate)="" latency="" throughput).="" 2="" shows="" shape="" torchinductor.="" user_model="..." #="" training="" example="" trigger="" input="" user_model.eval()="" torch.no_grad():="" 2.="" again="" 1.15x="" 1.79x.="" 1.35x="" 1.79x="" single-thread)="" 1.48x="" wrapper="" (prototype)="" generates="" python*="" invoke="" generated="" kernels="" external="" reduce="" python="" overhead.="" it="" also="" intermediate="" step="" deployment="" environments="" without="" python.="" enable="" this="" feature,="" following="" configuration:="" import="" torch="" torch._inductor.config="" config="" config.cpp_wrapper="True" light="" workloads="" where="" overhead="" dominant,="" demonstrates="" higher="" boost="" ratio.="" grouped="" torchbench,="" timm="" per="" average="" time="" iteration="" categorized="" them="" into="" small,="" medium,="" categories.="" 3="" speedups="" achieved="" comparison="" default="" wrapper.="" 3.="" fp32="" small="" (t="" &lt;="0.04s)" medium="" (0.04s="" t="" &gt;="" 1.5s)="" 1.06x="" 1.01x="" 1.00x="" 1.13x="" 1.02x="" 1.05x="" 1.14x="" 1.09x="" 1.03x="" 1.04x="" 1.17x="" flash-attention-based="" scaled="" dot="" product="" algorithm="" attention="" (sdpa)="" flagship="" helps="" speed="" up="" transformer="" models.="" accelerated="" optimal="" cuda="" while="" still="" lacking="" optimized="" kernels.="" flash-attention="" implementation="" targets="" inference,="" types="" supported.="" there="" no="" front-end="" leverage="" sdpa="" optimization.="" when="" calling="" sdpa,="" specific="" be="" chosen="" automatically,="" including="" new="" implementation.="" sdpa-related="" they="" proven="" effective="" unfused="" sdpa.="" shown="" 4="" 4.="" optimization="" 1.15x,="" 20="" 1.07x,="" 1.02x,="" 1.04x,="" export="" post-training="" quantization="" x86="" through="" provides="" flow="" export.="" uses="" device="" flow.="" torch._dynamo="" torchdynamo="" torch.ao.quantization.quantize_pt2e="" convert_pt2e,="" prepare_pt2e="" torch.ao.quantization.quantizer.x86_inductor_quantizer="" xiq="" model.eval()="" 1:="" trace="" fx="" flattened="" aten="" exported_graph_module,="" guards="torchdynamo.export(" model,="" *copy.deepcopy(example_inputs),="" aten_graph="True," )="" 2:="" insert="" observers="" or="" fake="" quantize="" modules="" quantizer="xiq.X86InductorQuantizer()" operator_config="xiq.get_default_x86_inductor_quantization_config()" quantizer.set_global(operator_config)="" prepared_graph_module="prepare_pt2e(exported_graph_module," quantizer)="" doing="" calibration="" here.="" 3:="" convert_graph_module="convert_pt2e(prepared_graph_module)" 4:="" lower="" quantized="" backend="" compile_model="torch.compile(convert_graph_module)" all="" convolutional="" neural="" networks="" (cnn)="" test="" suite="" been="" path.="" metrics="" 5.="" related="" accuracy="" loss="" 3.25x,="" 12="" 0.44%,="" next="" steps="" software="" try="" out="" 2.1="" realize="" benefits="" yourself="" these="" contributed="" intel.="" encourage="" you="" check="" intel’s="" other="" ai="" tools="" framework="" optimizations="" learn="" about="" open,="" standards-based="" oneapi="" multiarchitecture,="" multivendor="" programming="" forms="" foundation="" portfolio.="" details="" scalable="" processor,="" visit="" platform="" how="" empowering="" run="" high-performance,="" efficient="" end-to-end="" pipelines.="" resources="" started="" dev="" discussions="" documentation="" information="" 1="" amazon="" ec2*="" m7i.16xlarge:="" 1-node,="" platinum="" 8488c="" processor="" 256="" gb="" memory="" (1="" x="" ddr5="" 4800="" mt="" s),="" microcode="" 0x2b000461,="" hyperthreading="" on,="" turbo="" ubuntu*="" 22.04.3="" lts,="" kernel="" 6.2.0-1011-aws,="" gcc*="" 11.3.0,="" elastic="" block="" 200="" gb,="" bios="" ec2="" 1.0="" 10="" 16="" 2017;="" software:="" 2.1.0_rc4,="" deep="" network="" library="" (onednn)="" version="" 3.1.1,="" torchvision,="" torchtext,="" torchaudio,="" torchdata,="" benchmarks,="" tested="" 9="" 2023.="" c6i.16xlarge:="" 8375c="" 128="" ddr4="" 3200="" 0xd0003a5,="" ubuntu="" 22.04.2="" gcc="" 1.010="" onednn="" userbenchmark,="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -121,7 +121,7 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -129,7 +129,7 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -141,24 +141,24 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -169,10 +169,16 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
@@ -182,8 +188,8 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
             <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -191,18 +197,20 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -213,12 +221,12 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -226,31 +234,31 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">博客与新闻</a>
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -264,7 +272,7 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -300,9 +308,9 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2023年11月29日</p>
+            <p class="featured-post">2023 年 11 月 29 日</p>
             <h1>
-                <a class="blog-title">PyTorch 2.1 包含面向 AI 开发者的新性能特性</a>
+                <a class="blog-title">PyTorch 2.1 包含针对 AI 开发者的新性能特性</a>
             </h1>
         </div>
     </div>
@@ -313,7 +321,7 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由英特尔提供</p>
-                    <p>我们非常期待 PyTorch 2.1 的发布。在这篇博客中，我们讨论了 Intel 对 PyTorch 2.1 做出的五个重要贡献：</p>
+                    <p>我们非常期待 PyTorch 2.1 的发布。在这篇博客中，我们讨论了英特尔为 PyTorch 2.1 做出的五个重要贡献：</p>
 
 <ol>
   <li>TorchInductor-CPU 优化，包括 torch.compile 的 Bfloat16 推理路径</li>
@@ -329,7 +337,7 @@ with torch.no_grad(), torch.autocast(" cpu"):="" compiled_model="torch.compile(u
 
 <h2 id="torchinductor-cpu-optimizations">TorchInductor-CPU 优化</h2>
 
-<p>此功能优化了 TorchInductor 的 bfloat16 推理性能。第 3 代和第 4 代 Intel® Xeon® 可扩展处理器内置硬件加速器，用于加快 bfloat16 数据类型的点积计算。图 1 展示了如何指定 BF16 推理路径的代码片段。</p>
+<p>此功能优化了 TorchInductor 的 bfloat16 推理性能。第 3 代和第 4 代英特尔® 至强® 可扩展处理器内置硬件加速器，用于加快 bfloat16 数据类型的点积计算。图 1 展示了如何指定 BF16 推理路径的代码片段。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>user_model = ...
 
@@ -341,7 +349,7 @@ with torch.no_grad(), torch.autocast("cpu"):
 
 <p>图 1. 使用 TorchInductor 的 BF16 推理的代码片段</p>
 
-<p>我们在三个 TorchInductor 基准测试套件——TorchBench、Hugging Face<em> 和 TIMM——上进行了性能测试，结果如下表 1 所示。在这里，我们可以看到图模式（TorchInductor）的性能比 eager 模式高 1.25 倍到 2.35 倍。</em></p>
+<p>我们在三个 TorchInductor 基准测试套件——TorchBench、Hugging Face 和 TIMM——上进行了性能测试，结果如下表 1 所示。在这里，我们看到图模式（TorchInductor）的性能比 eager 模式高 1.25 倍到 2.35 倍。</p>
 
 <p>表 1. 图模式下的 Bfloat16 性能几何平均加速，与急切模式相比</p>
 
@@ -353,17 +361,19 @@ with torch.no_grad(), torch.autocast("cpu"):
   </tr>
   <tr>
    <td>编译器</td>
-   <td>火炬基准</td>
-   <td>Hugging Face</td>
+   <td>
+torchbench
+   </td>
+   <td>
+huggingface
+   </td>
    <td>timm 模型</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>
-1.81x
-   </td>
-   <td>1.25倍</td>
-   <td>2.35倍</td>
+   <td>电磁感抗</td>
+   <td>1.81 倍</td>
+   <td>1.25 倍</td>
+   <td>2.35 倍</td>
   </tr>
 </tbody></table>
 
@@ -375,27 +385,31 @@ with torch.no_grad(), torch.autocast("cpu"):
   </tr>
   <tr>
    <td>编译器</td>
-   <td>火炬基准</td>
-   <td>Hugging Face</td>
-   <td>timm 模型</td>
+   <td>
+torchbench
+   </td>
+   <td>
+huggingface
+   </td>
+   <td>
+timm_models
+   </td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>
-1.74x
-   </td>
-   <td>1.28倍</td>
-   <td>1.29倍</td>
+   <td>电感器</td>
+   <td>1.74 倍</td>
+   <td>1.28 倍</td>
+   <td>1.29 倍</td>
   </tr>
 </tbody></table>
 
-<p>开发者可以将他们的模型完全部署在第四代英特尔至强处理器上，以利用英特尔® 高级矩阵扩展（英特尔® AMX）功能，为 <code class="language-plaintext highlighter-rouge">torch.compile</code> 获取峰值性能。英特尔 AMX 有两个主要组件：瓦片和瓦片矩阵乘法（TMUL）。瓦片将大量数据存储在八个二维寄存器中，每个寄存器大小为一千字节。TMUL 是一个连接到瓦片的加速引擎，其中包含用于在单个操作中计算较大矩阵的指令。</p>
+<p>开发者可以将他们的模型完全部署在第四代英特尔至强处理器上，以充分利用英特尔® 高级矩阵扩展（英特尔® AMX）功能，以获得 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的最高性能。英特尔 AMX 有两个主要组件：瓦片和瓦片矩阵乘法（TMUL）。瓦片将大量数据存储在八个二维寄存器中，每个寄存器大小为一千字节。TMUL 是一个连接到瓦片的加速引擎，其中包含用于单次操作计算较大矩阵的指令。</p>
 
 <h2 id="cpu-dynamic-shapes-inference-path-for-torchcompile">torch.compile 的 CPU 动态形状推理路径</h2>
 
-<p>动态形状是 PyTorch 2.0 的关键特性之一。PyTorch 2.0 默认假设所有内容都是静态的。如果我们因为大小变化而重新编译，我们将尝试将那个大小作为动态的（大小变化的可能性很大，未来可能会再次变化）。动态形状支持对于大型语言模型（LLM）等流行模型是必需的。支持广泛模型的动态形状可以帮助用户从 torch.compile 中获得更多好处。对于动态形状，我们提供了 conv/gemm 运算符的后操作融合以及非 conv/gemm 运算符的向量化代码生成。</p>
+<p>动态形状是 PyTorch 2.0 中的关键特性之一。PyTorch 2.0 默认假设所有内容都是静态的。如果我们因为大小变化而重新编译，我们将尝试将那个大小作为动态的重新编译（大小变化的可能性很大，未来可能会发生变化）。动态形状支持对于大型语言模型（LLM）等流行模型是必需的。支持广泛模型范围的动态形状可以帮助用户从 torch.compile 中获得更多好处。对于动态形状，我们为 conv/gemm 运算符提供后操作融合，为非 conv/gemm 运算符提供向量化代码生成。</p>
 
-<p>动态形状同时支持 CUDA* 的 inductor 后端和 CPU 的 C++ 后端。范围包括功能（通过模型通过率衡量）和性能（通过推理延迟/吞吐量衡量）的改进。图 2 展示了使用 TorchInductor 进行动态形状推理的代码片段。</p>
+<p>动态形状功能由 CUDA*后端的电感器 Triton 和 CPU 后端的 C++后端同时支持。范围包括对功能（通过模型通过率衡量）和性能（通过推理延迟/吞吐量衡量）的改进。图 2 显示了使用 TorchInductor 进行动态形状推理的代码片段。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>user_model = ...
 
@@ -415,29 +429,35 @@ with torch.no_grad():
  y = compiled_model(x_size2)
 </code></pre></div></div>
 
-<p>图 2. 展示使用 TorchInductor 进行动态形状推理的代码片段</p>
+<p>图 2. 显示使用 TorchInductor 进行动态形状推理的代码片段</p>
 
-<p>我们再次在三个 TorchInductor 基准测试套件——TorchBench、Hugging Face 和 TIMM——上测量了性能，结果见表 2。在这里，我们可以看到图模式下的性能比急切模式高出 1.15 倍到 1.79 倍。</p>
+<p>我们再次在三个 TorchInductor 基准测试套件——TorchBench、Hugging Face 和 TIMM——上测量了性能，结果见表 2。在这里，我们看到图模式下的性能比急切模式高出 1.15 倍到 1.79 倍。</p>
 
-<p>表2. 与急切模式相比的动态形状几何平均速度提升</p>
+<p>表 2. 与急切模式相比的动态形状几何平均速度提升</p>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="4">
-<strong>动态形状几何平均速度提升（单 socket 多线程）</strong>
+<strong>动态形状几何平均加速（单核多线程）</strong>
    </td>
   </tr>
   <tr>
    <td>编译器</td>
-   <td>火炬基准</td>
-   <td>Hugging Face</td>
-   <td>timm 模型</td>
+   <td>
+torchbench
+   </td>
+   <td>
+huggingface
+   </td>
+   <td>
+timm_models
+   </td>
   </tr>
   <tr>
    <td>电感</td>
-   <td>1.35倍</td>
-   <td>1.15倍</td>
-   <td>1.79倍</td>
+   <td>1.35 倍</td>
+   <td>1.15 倍</td>
+   <td>1.79 倍</td>
   </tr>
 </tbody></table>
 
@@ -454,10 +474,10 @@ with torch.no_grad():
    <td>timm 模型</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.48倍</td>
-   <td>1.15倍</td>
-   <td>1.48倍</td>
+   <td>诱导器</td>
+   <td>1.48 倍</td>
+   <td>1.15 倍</td>
+   <td>1.48 倍</td>
   </tr>
 </tbody></table>
 
@@ -484,35 +504,35 @@ config.cpp_wrapper = True
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t ≤ 0.04 秒）</td>
+   <td>中（0.04 秒 &lt; t ≤ 1.5 秒）</td>
+   <td>大（t &gt; 1.5 秒）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.06倍</td>
-   <td>1.01倍</td>
-   <td>1.00倍</td>
+   <td>电感器</td>
+   <td>1.06 倍</td>
+   <td>1.01 倍</td>
+   <td>1.00 倍</td>
   </tr>
 </tbody></table>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="4">
-<strong>FP32 静态形状模式几何平均速度提升（单核单线程）</strong>
+<strong>FP32 静态形状模式几何平均加速（单核单线程）</strong>
    </td>
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t ≤ 0.04 秒）</td>
+   <td>中（0.04 秒 &lt; t ≤ 1.5 秒）</td>
+   <td>大（t &gt; 1.5 秒）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.13倍</td>
-   <td>1.02倍</td>
-   <td>1.01倍</td>
+   <td>电感器</td>
+   <td>1.13 倍</td>
+   <td>1.02 倍</td>
+   <td>1.01 倍</td>
   </tr>
 </tbody></table>
 
@@ -524,35 +544,35 @@ config.cpp_wrapper = True
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t ≤ 0.04 秒）</td>
+   <td>中（0.04 秒 &lt; t ≤ 1.5 秒）</td>
+   <td>大（t &gt; 1.5 秒）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.05倍</td>
-   <td>1.01倍</td>
-   <td>1.00倍</td>
+   <td>电感器</td>
+   <td>1.05 倍</td>
+   <td>1.01 倍</td>
+   <td>1.00 倍</td>
   </tr>
 </tbody></table>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="4">
-<strong>FP32 动态形状模式几何平均速度提升（单核单线程）</strong>
+<strong>FP32 动态形状模式几何平均加速（单核单线程）</strong>
    </td>
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t ≤ 0.04 秒）</td>
+   <td>中（0.04 秒 &lt; t ≤ 1.5 秒）</td>
+   <td>大（t &gt; 1.5 秒）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.14倍</td>
-   <td>1.02倍</td>
-   <td>1.01倍</td>
+   <td>电感器</td>
+   <td>1.14 倍</td>
+   <td>1.02 倍</td>
+   <td>1.01 倍</td>
   </tr>
 </tbody></table>
 
@@ -564,50 +584,50 @@ config.cpp_wrapper = True
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t ≤ 0.04 秒）</td>
+   <td>中（0.04 秒 &lt; t ≤ 1.5 秒）</td>
+   <td>大（t &gt; 1.5 秒）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.09倍</td>
-   <td>1.03倍</td>
-   <td>1.04倍</td>
+   <td>电感器</td>
+   <td>1.09 倍</td>
+   <td>1.03 倍</td>
+   <td>1.04 倍</td>
   </tr>
 </tbody></table>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="4">
-<strong>BF16 静态形状模式几何平均速度提升（单核单线程）</strong>
+<strong>BF16 静态形状模式几何平均加速（单核单线程）</strong>
    </td>
   </tr>
   <tr>
    <td>编译器</td>
-   <td>小型（t &lt;= 0.04s）</td>
-   <td>中型（0.04s &lt; t &lt;= 1.5s）</td>
-   <td>大型（t &gt; 1.5s）</td>
+   <td>小（t &lt;= 0.04 秒）</td>
+   <td>中等（0.04s &lt; t ≤ 1.5s）</td>
+   <td>大（t &gt; 1.5s）</td>
   </tr>
   <tr>
-   <td>电感</td>
-   <td>1.17倍</td>
-   <td>1.04倍</td>
-   <td>1.03倍</td>
+   <td>电感器</td>
+   <td>1.17 倍</td>
+   <td>1.04 倍</td>
+   <td>1.03 倍</td>
   </tr>
 </tbody></table>
 
-<h2 id="flash-attention-based-scaled-dot-product-algorithm-for-cpu">基于 Flash-Attention 的缩放点积算法（适用于 CPU）</h2>
+<h2 id="flash-attention-based-scaled-dot-product-algorithm-for-cpu">基于 Flash-Attention 的缩放点积算法（SDPA）用于 CPU</h2>
 
-<p>扩放点积注意力（SDPA）是 PyTorch 2.0 的旗舰特性之一，有助于加速 Transformer 模型。它通过最优 CUDA 内核进行加速，同时仍缺乏优化的 CPU 内核。这种闪速注意力实现针对训练和推理，支持 FP32 和 Bfloat16 数据类型。用户无需进行前端使用更改即可利用这种 SDPA 优化。调用 SDPA 时，将自动选择特定实现，包括这一新实现。</p>
+<p>缩放点积注意力（SDPA）是 PyTorch 2.0 的旗舰特性之一，有助于加速 Transformer 模型。它通过最优的 CUDA 内核进行加速，但仍然缺乏优化的 CPU 内核。这种闪速注意力实现针对训练和推理，支持 FP32 和 Bfloat16 数据类型。用户无需进行前端使用更改即可利用这种 SDPA 优化。调用 SDPA 时，将自动选择特定的实现，包括这种新的实现。</p>
 
-<p>我们已经测量了 Hugging Face 中的 SDPA 相关模型，与未融合的 SDPA 相比，它们已被证明是有效的。表 4 显示了 SDPA 优化的几何平均加速比。</p>
+<p>我们已经测量了 Hugging Face 中的 SDPA 相关模型，与未融合的 SDPA 相比，它们已被证明是有效的。表 4 展示了 SDPA 优化的几何平均加速比。</p>
 
-<p>表 4. SDPA 优化性能几何平均加速比</p>
+<p>表 4. SDPA 优化性能的几何平均加速</p>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="3">
-<strong>SDPA 几何平均加速比（单 socket 多线程）</strong>
+<strong>SDPA 几何平均加速（单 socket 多线程）</strong>
    </td>
   </tr>
   <tr>
@@ -617,15 +637,15 @@ config.cpp_wrapper = True
   </tr>
   <tr>
    <td>电感</td>
-   <td>1.15倍，20/20</td>
-   <td>1.07倍，20/20</td>
+   <td>1.15 倍，20/20</td>
+   <td>1.07 倍，20/20</td>
   </tr>
 </tbody></table>
 
 <table class="table table-bordered">
   <tbody><tr>
    <td colspan="3">
-<strong>SDPA 几何平均加速（单核单线程）</strong>
+<strong>单核单线程 SDPA 几何平均加速比</strong>
    </td>
   </tr>
   <tr>
@@ -635,14 +655,14 @@ config.cpp_wrapper = True
   </tr>
   <tr>
    <td>电感</td>
-   <td>1.02倍，20/20</td>
-   <td>1.04倍，20/20</td>
+   <td>1.02 倍，20/20</td>
+   <td>1.04 倍，20/20</td>
   </tr>
 </tbody></table>
 
-<h2 id="pytorch-2-export-post-training-quantization-with-x86-back-end-through-inductor">PyTorch 2 导出后训练量化通过电感器使用 x86 后端</h2>
+<h2 id="pytorch-2-export-post-training-quantization-with-x86-back-end-through-inductor">PyTorch 2.0 导出后训练量化通过电感器使用 x86 后端</h2>
 
-<p>PyTorch 2.0 导出中提供了一种新的量化流程。该功能使用 TorchInductor，并以 x86 CPU 设备作为后端，实现了该新量化流程的后训练静态量化。示例代码片段如图 3 所示。</p>
+<p>PyTorch 2.0 导出中提供了新的量化流程。该功能使用 TorchInductor，并以 x86 CPU 设备作为后端，实现了该新量化流程的后训练静态量化。示例代码片段如图 3 所示。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
 import torch._dynamo as torchdynamo
@@ -675,7 +695,7 @@ with torch.no_grad():
  compile_model = torch.compile(convert_graph_module)
 </code></pre></div></div>
 
-<p>图 3. 展示使用电感器作为 PyTorch 2 导出后训练量化后端的代码片段</p>
+<p>图 3. 展示使用电感器作为 PyTorch 2.0 导出后训练量化后端代码片段</p>
 
 <p>所有来自 TorchBench 测试套件的卷积神经网络（CNN）模型在与 Inductor FP32 推理路径进行比较时均经过测量并证明有效。性能指标显示在表 5 中。</p>
 
@@ -692,10 +712,10 @@ with torch.no_grad():
    </td>
   </tr>
   <tr>
-   <td>电感</td>
    <td>
-3.25x, 12/12
+inductor
    </td>
+   <td>3.25 倍，12/12</td>
    <td>
 0.44%, 12/12
    </td>
@@ -706,25 +726,25 @@ with torch.no_grad():
 
 <h3 id="get-the-software">获取软件</h3>
 
-<p>尝试使用 <a href="https://github.com/pytorch/pytorch/releases/tag/v2.1.0">PyTorch 2.1</a> 并亲身体验由英特尔贡献的这些功能带来的性能优势。</p>
+<p>尝试使用 PyTorch 2.1，并亲自体验由英特尔贡献的这些特性带来的性能优势。</p>
 
-<p>我们鼓励您查看英特尔的其他 <a href="https://www.intel.com/content/www/us/en/developer/topic-technology/artificial-intelligence/tools.html">AI 工具</a>和<a href="https://www.intel.com/content/www/us/en/developer/tools/frameworks/overview.html">框架</a>优化，并了解作为英特尔 AI 软件组合基础的开放、基于标准的 <a href="https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html">oneAPI</a> 多架构、多厂商编程模型。</p>
+<p>我们鼓励您查看英特尔的其他 AI 工具和框架优化，并了解作为英特尔 AI 软件组合基础的开放、基于标准的 oneAPI 多架构、多厂商编程模型。</p>
 
-<p>想了解更多关于第 4 代英特尔至强可扩展处理器的信息，请访问<a href="https://www.intel.com/content/www/us/en/developer/topic-technology/artificial-intelligence/platform.html">人工智能平台 </a>，在那里您可以了解英特尔如何赋能开发者运行高性能、高效的端到端人工智能管道。</p>
+<p>想了解更多关于第四代英特尔至强可扩展处理器的详细信息，请访问 AI 平台，了解英特尔如何赋能开发者运行高性能、高效的端到端 AI 管道。</p>
 
 <h3 id="pytorch-resources">PyTorch 资源</h3>
 
 <ul>
   <li><a href="http://pytorch.org/get-started/pytorch-2.0/">PyTorch 入门</a></li>
-  <li><a href="http://dev-discuss.pytorch.org/t/pytorch-release-2-0-execution-update/1077">开发者讨论</a></li>
+  <li><a href="http://dev-discuss.pytorch.org/t/pytorch-release-2-0-execution-update/1077">开发讨论</a></li>
   <li><a href="http://pytorch.org/docs/2.0/">文档</a></li>
 </ul>
 
 <h3 id="product-and-performance-information">产品和性能信息</h3>
 
-<p>1 Amazon EC2* m7i.16xlarge：1 节点，搭载 256 GB 内存（1 x 256 GB DDR5 4800 MT/s）的英特尔至强铂金 8488C 处理器，微代码 0x2b000461，开启超线程，开启超频，Ubuntu* 22.04.3 LTS，内核 6.2.0-1011-aws，GCC* 11.3.0，Amazon Elastic Block Store 200 GB，BIOS Amazon EC2 1.0 10/16/2017；软件：<a href="https://github.com/pytorch/pytorch/tree/release/2.1">PyTorch 2.1.0_rc4</a>，<a href="https://github.com/oneapi-src/oneDNN/tree/v3.1.1"> 英特尔® oneAPI 深度神经网络库（oneDNN）版本 3.1.1</a>，<a href="https://github.com/pytorch/benchmark/commit/ffbbebb9">TorchBench</a>，<a href="https://github.com/pytorch/vision/commit/8636bf3">TorchVision</a>，<a href="https://github.com/pytorch/text/commit/142d029">TorchText</a>，<a href="https://github.com/pytorch/audio/commit/475b6ae">TorchAudio</a>，<a href="https://github.com/pytorch/data/commit/eb9bf61">TorchData</a>，<a href="https://github.com/pytorch/pytorch/tree/release/2.1/benchmarks/dynamo">TorchDynamo Benchmarks</a>，由英特尔于 2023 年 9 月 12 日测试。</p>
+<p>1 Amazon EC2* m7i.16xlarge：1 节点，Intel Xeon Platinum 8488C 处理器，256 GB 内存（1 x 256 GB DDR5 4800 MT/s），微代码 0x2b000461，超线程开启，睿频开启，Ubuntu* 22.04.3 LTS，内核 6.2.0-1011-aws，GCC* 11.3.0，Amazon Elastic Block Store 200 GB，BIOS Amazon EC2 1.0 10/16/2017；软件：PyTorch 2.1.0_rc4，Intel® oneAPI 深度神经网络库（oneDNN）版本 3.1.1，TorchBench，TorchVision，TorchText，TorchAudio，TorchData，TorchDynamo Benchmarks，由英特尔于 2023 年 9 月 12 日测试。</p>
 
-<p>2 亚马逊 EC2 c6i.16xlarge：1 节点，英特尔至强铂金 8375C 处理器，128GB 内存（1 x 128GB DDR4 3200 MT/s），微码 0xd0003a5，超线程开启，睿频开启，Ubuntu 22.04.2 LTS，内核 6.2.0-1011-aws，gcc 11.3.0，亚马逊弹性块存储 200GB，亚马逊 EC2 BIOS 1.010/16/2017；软件：<a href="https://github.com/pytorch/pytorch/tree/release/2.1">PyTorch 2.1.0_rc4</a>，<a href="https://github.com/oneapi-src/oneDNN/tree/v3.1.1">oneDNN 版本 3.1.1</a>，<a href="https://github.com/pytorch/benchmark/commit/ffbbebb9">TorchBench</a>，<a href="https://github.com/pytorch/vision/commit/8636bf3">TorchVision</a>，<a href="https://github.com/pytorch/text/commit/142d029">TorchText</a>，<a href="https://github.com/pytorch/audio/commit/475b6ae">TorchAudio</a>，<a href="https://github.com/pytorch/data/commit/eb9bf61">TorchData</a>，<a href="https://github.com/pytorch/pytorch/tree/release/2.1/benchmarks/dynamo">TorchDynamo Benchmarks</a>，<a href="https://github.com/pytorch/benchmark/tree/chuanqiw/inductor_quant/userbenchmark/cpu">TorchBench cpu userbenchmark</a>，由英特尔于 2023 年 9 月 12 日测试。</p>
+<p>2 Amazon EC2 c6i.16xlarge：1 节点，Intel Xeon Platinum 8375C 处理器，128 GB 内存（1 x 128 GB DDR4 3200 MT/s），微代码 0xd0003a5，超线程开启，睿频开启，Ubuntu 22.04.2 LTS，内核 6.2.0-1011-aws，gcc 11.3.0，Amazon Elastic Block Store 200 GB，BIOS Amazon EC2 1.010/16/2017；软件：PyTorch 2.1.0_rc4，oneDNN 版本 3.1.1，TorchBench，TorchVision，TorchText，TorchAudio，TorchData，TorchDynamo Benchmarks，TorchBench cpu userbenchmark，由英特尔于 2023 年 9 月 12 日测试。</p>
 
                 </article>
             </div>
@@ -740,14 +760,14 @@ with torch.no_grad():
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -764,7 +784,7 @@ with torch.no_grad():
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -777,7 +797,7 @@ with torch.no_grad():
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -785,7 +805,7 @@ with torch.no_grad():
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -814,9 +834,7 @@ with torch.no_grad():
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -826,7 +844,7 @@ with torch.no_grad():
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -851,19 +869,19 @@ with torch.no_grad():
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手指南 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -886,11 +904,11 @@ with torch.no_grad():
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -900,7 +918,7 @@ with torch.no_grad():
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -916,7 +934,7 @@ with torch.no_grad():
         </ul>
 
         <li class="resources-mobile-menu-title">
-          <a>博客与新闻</a>
+          <a>博客 &amp; 新闻</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -935,7 +953,7 @@ with torch.no_grad():
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -949,7 +967,7 @@ with torch.no_grad():
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1017,7 +1035,7 @@ with torch.no_grad():
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

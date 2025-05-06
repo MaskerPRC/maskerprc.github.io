@@ -82,8 +82,8 @@ static PyTypeObject py_FloatType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     " py.floatobject",="" *="" tp_name="" sizeof(pyfloatobject),="" tp_basicsize="" 0,="" tp_itemsize="" tp_dealloc="" tp_print="" tp_getattr="" tp_setattr="" tp_as_async="" tp_repr="" tp_as_number="" tp_as_sequence="" tp_as_mapping="" tp_hash="" tp_call="" tp_str="" tp_getattro="" tp_setattro="" tp_as_buffer="" py_tpflags_default,="" tp_flags="" "a="" floating="" point="" number",="" tp_doc="" };="" the="" easiest="" way="" to="" think="" of="" a="" type="" object="" is="" as="" set="" fields="" which="" define="" properties="" object.="" for="" example,="" field="" sizeof(pyfloatobject).="" this="" so="" that="" python="" knows="" how="" much="" memory="" allocate="" when="" calling="" pyobject_new()="" pyfloatobject.="" full="" list="" you="" can="" defined="" in="" object.h="" cpython="" backend:="" https:="" github.com="" blob="" master="" include="" object.h.="" our="" thptensor="" thptensortype,="" csrc="" generic="" tensor.cpp.="" defines="" name,="" size,="" mapping="" methods,="" etc.="" thptensor.="" an="" let’s="" take="" look="" at="" tp_new="" function="" we="" pytypeobject:="" pytypeobject="" thptensortype="{" pyvarobject_head_init(null,="" 0)="" ...="" thptensor_(pynew),="" enables="" creation.="" it="" responsible="" creating="" (as="" opposed="" initializing)="" objects="" and="" equivalent="" __new__()="" method="" level.="" c="" implementation="" static="" passed="" being="" instantiated="" any="" arguments,="" returns="" newly="" created="" pyobject="" thptensor_(pynew)(pytypeobject="" *type,="" *args,="" *kwargs)="" {="" handle_th_errors="" py_ssize_t="" num_args="args" ?="" pytuple_size(args)="" :="" 0;="" thptensorptr="" self="(THPTensor" *)type-&gt;tp_alloc(type,="" 0);="" more="" code="" below="" first="" thing="" new="" does="" then="" runs="" through="" series="" initializations="" based="" off="" args="" function.="" x="" from="" another="" y,="" thptensor’s="" cdata="" be="" result="" thtensor_(newwithtensor)="" with="" y’s="" underlying="" th="" tensor="" argument.="" similar="" constructors="" exist="" sizes,="" storages,="" numpy="" arrays,="" sequences.="" **="" note="" solely="" use="" tp_new,="" not="" combination="" tp_init="" (which="" corresponds="" __init__()="" function).="" other="" important="" tensor.cpp="" indexing="" works.="" pytorch="" tensors="" support="" python’s="" protocol.="" allows="" us="" do="" things="" like:="" y="x[3]" 1="" x[4]="2" extends="" than="" one="" dimension="" are="" able="" []-style="" notation="" by="" defining="" three="" methods="" described="" here.="" most="" thptensor_(getvalue)="" thptensor_(setvalue)="" describe="" index="" tensor,="" returning="" scalar,="" or="" updating="" values="" existing="" place.="" read="" these="" implementations="" better="" understand="" supports="" basic="" indexing.="" builds="" (part="" one)="" could="" spend="" ton="" time="" exploring="" various="" aspects="" relates="" but="" still="" need="" see="" thptensor_(init)()="" translated="" thpinttensor_init()="" used="" module="" initialization.="" file="" “generic”="" generate="" all="" permutations="" types?="" put="" way,="" littered="" lines="" return="" thptensor_(new)(thtensor_(new)(library_state_noargs));="" illustrates="" both="" cases="" make="" type-specific:="" output="" will="" call="" thp&lt;type&gt;tensor_new(...)="" place="" thptensor_(new)="" th&lt;type&gt;tensor_new(...)="" thtensor_(new)="" words,="" supported="" types,="" “generate”="" source="" has="" done="" above="" substitutions.="" part="" “build”="" process="" pytorch.="" relies="" on="" setuptools="" (https:="" setuptools.readthedocs.io="" en="" latest="" )="" building="" package,="" setup.py="" top-level="" directory="" customize="" build="" process.="" component="" extension="" using="" files="" involved="" compilation.="" however,="" listed!="" end="" up="" product?="" recall="" thptensor*="" functions="" (such="" init)="" generic.="" if="" directory,="" there="" defined.="" last="" line="" important:="" generic_include="" torch="" included="" setup.py,="" wrapped="" helper="" called="" split_types.="" takes="" input="" file,="" looks="" “="" generic_include”="" string="" contents.="" found,="" generates="" each="" type,="" following="" changes:="" renamed="" tensor&lt;type&gt;.cpp="" slightly="" modified="" follows:="" #="" before:="" after:="" #define="" th_generic_file="" "torch="" src="" tensor.cpp"="" #include="" "th="" thgenerate&lt;type&gt;type.h"="" including="" header="" second="" side="" effect="" some="" additional="" context="" headers:="" #ifndef="" #error="" "you="" must="" before="" thgeneratefloattype.h"="" #endif="" real="" float="" accreal="" double="" th_convert_real_to_accreal(_val)="" (accreal)(_val)="" th_convert_accreal_to_real(_val)="" (real)(_val)="" thinf="" flt_max="" th_real_is_float="" #line="" #undef="" th_convert_real_to_accreal="" th_convert_accreal_to_real="" thgeneratemanytypes="" what="" doing="" bringing="" surrounding="" macro="" definitions.="" float,="" refers="" something="" have="" replaced="" float.="" corresponding="" thgenerateinttype.h,="" same="" would="" replace="" int.="" returned="" split_types="" added="" files,="" .cpp="" different="" types="" created.="" few="" here:="" first,="" strictly="" necessary.="" wrap="" single="" repeating="" type.="" reason="" split="" into="" separate="" speed="" second,="" mean="" talk="" about="" replacement="" (e.g.="" float)="" preprocessor="" perform="" substitutions="" during="" merely="" macros="" no="" effects="" until="" preprocessing.="" two)="" now="" consider="" declarations="" created,="" also="" conversions="" thtensor_(method)="" thptensor_(method)="" th&lt;type&gt;tensor_method="" thp&lt;type&gt;tensor_method="" work.="" tensor.h="" thp_api="" thptensor_(new)(thtensor="" *ptr);="" strategy="" generating="" headers.="" tensor.h,="" following:="" "generic="" tensor.h"="" &lt;th="" thgeneratealltypes.h&gt;="" thgeneratehalftype.h&gt;="" effect,="" where="" draw="" header,="" definitions,="" only="" difference="" resulting="" contained="" within="" multiple="" files.="" lastly,="" “convert”="" “substitute”="" types.="" bunch="" statements,="" including:="" thptensor_(name)="" th_concat_4(thp,real,tensor_,name)="" says="" matching="" format="" should="" thprealtensor_name,="" derived="" whatever="" symbol="" #define‘d="" time.="" because="" surrounded="" definitions="" seen="" above,="" after="" run,="" expect.="" library="" thtensor_(name),="" supporting="" translation="" those="" well.="" specialized="" code.="" th’s="" definition="" thp,="" generated="" thp="" such="" thpfloattensor_init(...).="" explore="" actually="" terms="" creating.="" key="" thptensor_(init)="" is:="" thptensorbasestr,="" specific="" pymodule_addobject(module,="" (pyobject="" *)&amp;thptensortype);="" registers="" module,="" thpfloattensor,="" thpinttensor,="" just="" create="" isn’t="" very="" useful="" -="" defines.="" simple="" example="" shows="" in-place="" zero_="" tensor.="" x.zero_()="" start="" seeing="" add="" “type="" object”="" tp_methods.="" holds="" array="" (pymethoddefs)="" associate="" (and="" their="" c++="" implementations)="" suppose="" wanted="" pyfloatobject="" replaces="" value.="" implement="" replace(pyfloatobject="" *self,="" *args)="" val;="" (!pyarg_parsetuple(args,="" "d",="" &amp;val))="" null;="" self-&gt;ob_fval="val;" py_return_none="" }="" method:="" def="" replace(self,="" val):="" self.ob_fval="val" instructive="" works="" cpython.="" general,="" parameter="" instance="" object,="" optionally="" parameters="" positional="" arguments="" keyword="" arguments.="" registered="" float:="" pymethoddef="" float_methods[]="{" {"replace",="" (pycfunction)replace,="" meth_varargs,="" "replace="" value="" float"="" },="" {null}="" sentinel="" replace,="" implemented="" name.="" meth_varargs="" flag="" indicates="" tuple="" representing="" tp_methods="" like="" equivalents.="" writing="" wrappers="" time-consuming="" error="" prone.="" this.="" cwrap="" implements="" its="" own="" tool="" backend.="" .cwrap="" containing="" custom="" yaml="" format.="" outputs="" compatible="" th,="" cudnn.="" extensible.="" “declaration”="" addmv_="" [[="" name:="" cname:="" addmv="" return:="" arguments:="" thtensor*="" arg:="" beta="" default:="" as_real(1)="" alpha="" mat="" vec="" ]]="" architecture="" simple.="" reads="" processes="" plugins.="" tools="" plugins="" __init__.py="" documentation="" ways="" plugin="" alter="" generation="" occurs="" passes.="" parsed="" processed.="" piece-by-piece="" adding="" argument="" checks="" extractions,="" actual="" th.="" finally,="" processing="" entire="" explored="" order="" interface="" backend,="" pymethoddefs="" stored="" appended="" field.="" case="" wrapping="" tensormethods.cwrap.="" #include‘d="" file.="" magic.="" result,="" undergo="" pass="" above.="" thus="" declaration="" putting="" together="" far,="" shown="" extend="" interpreter="" briefly,="" touch="" torch._c="" compiled="" collecting="" libraries,="" extension.="" handles="" itself.="" i="" subsequent="" post.="" summarize,="" revisit="" four="" questions:="" manipulated="" code?="" uses="" cpython’s="" framework="" extending="" while="" taking="" special="" care="" libraries="" tensor’s="" methods?="" thptensor,="" backed="" calls="" forwarded="" via="" backend’s="" conventions.="" work="" yaml-formatted="" steps="" number="" pytorch’s="" system="" components="" compile="" workable="" application?="" compilation="" directives="" setuptools.="" snapshot="" parts="" nuance,="" detail,="" hope="" serves="" gentle="" introduction="" lot="" library.="" resources:="" docs.python.org="" 3.7="" index.html="" invaluable="" understanding="" write="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -241,7 +241,7 @@ static PyTypeObject py_FloatType = {
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -249,7 +249,7 @@ static PyTypeObject py_FloatType = {
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -258,27 +258,27 @@ static PyTypeObject py_FloatType = {
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -289,21 +289,27 @@ static PyTypeObject py_FloatType = {
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -311,18 +317,20 @@ static PyTypeObject py_FloatType = {
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -333,12 +341,12 @@ static PyTypeObject py_FloatType = {
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -349,28 +357,28 @@ static PyTypeObject py_FloatType = {
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -384,7 +392,7 @@ static PyTypeObject py_FloatType = {
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -420,9 +428,9 @@ static PyTypeObject py_FloatType = {
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2017年5月11日</p>
+            <p class="featured-post">2017 年 5 月 11 日</p>
             <h1>
-                <a class="blog-title">PyTorch 内部结构巡礼（第一部分）</a>
+                <a class="blog-title">PyTorch 内部结构探秘（第一部分）</a>
             </h1>
         </div>
     </div>
@@ -432,23 +440,23 @@ static PyTypeObject py_FloatType = {
             <div class="container">
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
-                    <p class="author">作者：Trevor Killeen</p>
-                    <p>PyTorch 的基本单元是张量。本文将概述我们在 PyTorch 中实现张量的方式，以便用户可以从 Python shell 与之交互。特别是，我们想要回答以下四个主要问题：</p>
+                    <p class="author">由 Trevor Killeen 撰写</p>
+                    <p>PyTorch 的基本单元是张量。本文将概述如何在 PyTorch 中实现张量，以便用户可以从 Python shell 与之交互。特别是，我们想要回答以下四个主要问题：</p>
 
 <ul>
-  <li>PyTorch 是如何扩展 Python 解释器以定义一个可以从 Python 代码中操作的 Tensor 类型的？</li>
-  <li>PyTorch 是如何包装实际定义 Tensor 属性和方法的 C 库的？</li>
+  <li>PyTorch 是如何扩展 Python 解释器以定义一个可以从 Python 代码中操作的张量类型的？</li>
+  <li>PyTorch 是如何包装定义张量属性和方法的 C 库的？</li>
   <li>PyTorch 的 cwrap 是如何生成 Tensor 方法代码的？</li>
   <li>PyTorch 的构建系统是如何将这些组件编译并生成一个可工作的应用程序的？</li>
 </ul>
 
 <h2 id="extending-the-python-interpreter">扩展 Python 解释器</h2>
 
-<p>PyTorch 定义了一个新的包 <code class="language-plaintext highlighter-rouge">torch</code>。在这篇文章中，我们将考虑 <code class="language-plaintext highlighter-rouge">._C</code> 模块。这个模块被称为“扩展模块”——一个用 C 语言编写的 Python 模块。这样的模块允许我们定义新的内置对象类型（例如 <code class="language-plaintext highlighter-rouge">Tensor</code>）以及调用 C/C++ 函数。</p>
+<p>PyTorch 定义了一个新的包 <code class="language-plaintext highlighter-rouge">torch</code> 。在这篇文章中，我们将考虑 <code class="language-plaintext highlighter-rouge">._C</code> 模块。这个模块被称为“扩展模块”——一个用 C 语言编写的 Python 模块。这些模块允许我们定义新的内置对象类型（例如 <code class="language-plaintext highlighter-rouge">Tensor</code> ）以及调用 C/C++函数。</p>
 
-<p><code class="language-plaintext highlighter-rouge">._C</code> 模块定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/Module.cpp</code> 中。函数 <code class="language-plaintext highlighter-rouge">init_C()</code> / <code class="language-plaintext highlighter-rouge">PyInit__C()</code> 创建了该模块，并添加了适当的方法定义。这个模块被传递给多个不同的 <code class="language-plaintext highlighter-rouge">__init__</code> 函数，这些函数向模块添加更多的对象，注册新的类型等。</p>
+<p>“ <code class="language-plaintext highlighter-rouge">._C</code> 模块定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/Module.cpp</code> 中。 <code class="language-plaintext highlighter-rouge">init_C()</code> / <code class="language-plaintext highlighter-rouge">PyInit__C()</code> 函数创建模块并添加适当的方法定义。此模块被传递给多个不同的 <code class="language-plaintext highlighter-rouge">__init()</code> 函数，这些函数向模块添加更多对象、注册新类型等。”</p>
 
-<p>这些 <code class="language-plaintext highlighter-rouge">__init__</code> 调用中的一组如下：</p>
+<p>“这些 <code class="language-plaintext highlighter-rouge">__init()</code> 调用中的一组如下：”</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">THPDoubleTensor_init</span><span class="p">(</span><span class="n">module</span><span class="p">));</span>
 <span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">THPFloatTensor_init</span><span class="p">(</span><span class="n">module</span><span class="p">));</span>
@@ -460,38 +468,38 @@ static PyTypeObject py_FloatType = {
 <span class="n">ASSERT_TRUE</span><span class="p">(</span><span class="n">THPByteTensor_init</span><span class="p">(</span><span class="n">module</span><span class="p">));</span>
 </code></pre></div></div>
 
-<p>这些 <code class="language-plaintext highlighter-rouge">__init__()</code> 函数将每种类型的 Tensor 对象添加到 <code class="language-plaintext highlighter-rouge">._C</code> 模块中，以便在模块中使用。让我们学习这些方法是如何工作的。</p>
+<p>“这些 <code class="language-plaintext highlighter-rouge">__init()</code> 函数将每种类型的 Tensor 对象添加到 <code class="language-plaintext highlighter-rouge">._C</code> 模块中，以便在模块中使用。让我们了解这些方法是如何工作的。”</p>
 
-<h2 id="the-thptensor-type">THPTensor 类型</h2>
+<h2 id="the-thptensor-type">“THPTensor 类型”</h2>
 
-<p>与底层的 <code class="language-plaintext highlighter-rouge">TH</code> 和 <code class="language-plaintext highlighter-rouge">THC</code> 库类似，PyTorch 定义了一个“通用”的 Tensor，然后将其专门化为多种不同类型。在考虑这种专门化是如何工作的之前，我们首先考虑一下在 Python 中定义新类型的工作方式，以及如何创建通用的 <code class="language-plaintext highlighter-rouge">THPTensor</code> 类型。</p>
+<p>与底层 <code class="language-plaintext highlighter-rouge">TH</code> 和 <code class="language-plaintext highlighter-rouge">THC</code> 库类似，PyTorch 定义了一个“通用”的 Tensor，然后将其专门化为多种不同类型。在考虑这种专门化是如何工作的之前，让我们首先考虑在 Python 中定义新类型的工作方式，以及如何创建通用的 <code class="language-plaintext highlighter-rouge">THPTensor</code> 类型。</p>
 
-<p>Python 运行时将所有 Python 对象视为类型为 <code class="language-plaintext highlighter-rouge">PyObject *</code> 的变量，这作为所有 Python 对象的“基类型”。每个 Python 类型都包含对象的引用计数，以及指向对象 <em> 类型对象 </em> 的指针。类型对象决定了类型的属性。例如，它可能包含与类型关联的方法列表，以及实现这些方法的 C 函数。对象还包含表示其状态所需的任何字段。</p>
+<p>Python 运行时将所有 Python 对象视为类型为 <code class="language-plaintext highlighter-rouge">PyObject *</code> 的变量，这作为所有 Python 对象的“基类型”。每个 Python 类型都包含对象的引用计数，以及指向对象类型对象的指针。类型对象决定了类型的属性。例如，它可能包含与类型关联的方法列表，以及实现这些方法的 C 函数。对象还包含表示其状态所需的任何字段。</p>
 
 <p>定义新类型的公式如下：</p>
 
 <ul>
-  <li>创建一个结构体来定义新对象将包含的内容</li>
+  <li>创建一个结构体，定义新对象将包含的内容</li>
   <li>定义类型对象的类型</li>
 </ul>
 
-<p>结构体本身可能非常简单。在 Python 中，所有浮点类型实际上都是在堆上的对象。Python 的浮点结构体定义如下：</p>
+<p>结构体本身可能非常简单。在 Python 中，所有浮点类型实际上都是堆上的对象。Python 浮点结构定义为：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">typedef</span> <span class="k">struct</span> <span class="p">{</span>
     <span class="n">PyObject_HEAD</span>
     <span class="kt">double</span> <span class="n">ob_fval</span><span class="p">;</span>
 <span class="p">}</span> <span class="n">PyFloatObject</span><span class="p">;</span>
 </code></pre></div></div>
-<p>《PyObject_HEAD》是一个宏，它引入了实现对象引用计数的代码以及指向相应类型对象的指针。因此，在这种情况下，要实现浮点数，除了浮点值本身之外，还需要其他“状态”。</p>
+<p> <code class="language-plaintext highlighter-rouge">PyObject_HEAD</code> 是一个宏，它引入了实现对象引用计数的代码以及对应类型对象的指针。因此，在这种情况下，实现浮点数所需的唯一其他“状态”就是浮点值本身。</p>
 
-<p>现在，让我们看看我们的 <code class="language-plaintext highlighter-rouge">THPTensor</code> 类型的结构：</p>
+<p>现在，让我们看看我们的 <code class="language-plaintext highlighter-rouge">THPTensor</code> 类型的结构体：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">THPTensor</span> <span class="p">{</span>
     <span class="n">PyObject_HEAD</span>
     <span class="n">THTensor</span> <span class="o">*</span><span class="n">cdata</span><span class="p">;</span>
 <span class="p">};</span>
 </code></pre></div></div>
-<p>很简单，对吧？我们只是通过存储对它的指针来封装底层的 <code class="language-plaintext highlighter-rouge">TH</code> 张量。</p>
+<p>简单易懂，对吧？我们只是通过存储对它的指针来包装底层的 <code class="language-plaintext highlighter-rouge">TH</code> 张量。</p>
 
-<p>关键部分是定义新类型的“类型对象”。我们 Python 浮点数的类型对象定义示例如下：</p>
+<p>关键部分是定义一个新的“类型对象”。例如，我们 Python float 的类型对象的定义形式如下：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">PyTypeObject</span> <span class="n">py_FloatType</span> <span class="o">=</span> <span class="p">{</span>
     <span class="n">PyVarObject_HEAD_INIT</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
     <span class="s">"py.FloatObject"</span><span class="p">,</span>          <span class="cm">/* tp_name */</span>
@@ -516,9 +524,9 @@ static PyTypeObject py_FloatType = {
     <span class="s">"A floating point number"</span><span class="p">,</span> <span class="cm">/* tp_doc */</span>
 <span class="p">};</span>
 </code></pre></div></div>
-<p>将一个 <em> 类型对象 </em> 理解为一组定义对象属性的域是最简单的方法。例如，<code class="language-plaintext highlighter-rouge">tp_basicsize</code> 字段被设置为 <code class="language-plaintext highlighter-rouge">sizeof(PyFloatObject)</code>。这样，Python 就知道在调用 <code class="language-plaintext highlighter-rouge">PyObject_New()</code> 为 <code class="language-plaintext highlighter-rouge">PyFloatObject</code> 分配多少内存。你可以设置的完整字段列表定义在 CPython 后端的 <code class="language-plaintext highlighter-rouge">object.h</code> 中：https://github.com/python/cpython/blob/master/Include/object.h。</p>
+<p>最简单的方法是将类型对象想象成一组字段，这些字段定义了对象的属性。例如， <code class="language-plaintext highlighter-rouge">tp_basicsize</code> 字段被设置为 <code class="language-plaintext highlighter-rouge">sizeof(PyFloatObject)</code> 。这样，Python 在调用 <code class="language-plaintext highlighter-rouge">PyObject_New()</code> 为一个 <code class="language-plaintext highlighter-rouge">PyFloatObject.</code> 分配内存时就知道需要多少内存。你可以设置的完整字段列表在 CPython 后端中定义，请参阅 <code class="language-plaintext highlighter-rouge">object.h</code> ：https://github.com/python/cpython/blob/master/Include/object.h。</p>
 
-<p>我们 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的类型对象是 <code class="language-plaintext highlighter-rouge">THPTensorType</code>，它在 <code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.cpp</code> 中定义。该对象定义了 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的名称、大小、映射方法等。</p>
+<p>我们 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的类型对象是 <code class="language-plaintext highlighter-rouge">THPTensorType</code> ，定义在 <code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.cpp</code> 中。该对象定义了名称、大小、映射方法等 <code class="language-plaintext highlighter-rouge">THPTensor</code> 。</p>
 
 <p>例如，让我们看看我们在 <code class="language-plaintext highlighter-rouge">PyTypeObject</code> 中设置的 <code class="language-plaintext highlighter-rouge">tp_new</code> 函数：</p>
 
@@ -528,7 +536,7 @@ static PyTypeObject py_FloatType = {
   <span class="n">THPTensor_</span><span class="p">(</span><span class="n">pynew</span><span class="p">),</span> <span class="cm">/* tp_new */</span>
 <span class="p">};</span>
 </code></pre></div></div>
-<p>《tp_new》函数用于对象创建。它负责创建（而不是初始化）该类型的对象，在 Python 级别上等同于`__new__()`方法。C 实现是一个静态方法，它接收要实例化的类型和任何参数，并返回一个新创建的对象。</p>
+<p> <code class="language-plaintext highlighter-rouge">tp_new</code> 函数用于对象创建。它负责创建（而不是初始化）该类型的对象，在 Python 级别上等同于 <code class="language-plaintext highlighter-rouge">__new__()</code> 方法。C 实现是一个静态方法，它接收要实例化的类型和任何参数，并返回一个新创建的对象。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">PyObject</span> <span class="o">*</span> <span class="nf">THPTensor_</span><span class="p">(</span><span class="n">pynew</span><span class="p">)(</span><span class="n">PyTypeObject</span> <span class="o">*</span><span class="n">type</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">kwargs</span><span class="p">)</span>
 <span class="p">{</span>
@@ -538,45 +546,45 @@ static PyTypeObject py_FloatType = {
   <span class="n">THPTensorPtr</span> <span class="n">self</span> <span class="o">=</span> <span class="p">(</span><span class="n">THPTensor</span> <span class="o">*</span><span class="p">)</span><span class="n">type</span><span class="o">-&gt;</span><span class="n">tp_alloc</span><span class="p">(</span><span class="n">type</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
 <span class="c1">// more code below</span>
 </code></pre></div></div>
-<p>我们的新函数首先分配`THPTensor`。然后根据传递给函数的参数运行一系列初始化。例如，当我们从一个`THPTensor`创建另一个`THPTensor`时，我们将新创建的`THPTensor`的`cdata`字段设置为调用`THTensor_(newWithTensor)`的结果，其中参数是`y`的底层`TH` Tensor。类似构造函数存在用于大小、存储、NumPy 数组和序列。</p>
+<p>我们的新函数首先分配 <code class="language-plaintext highlighter-rouge">THPTensor</code> 。然后根据传递给函数的参数运行一系列初始化。例如，当从另一个 <code class="language-plaintext highlighter-rouge">THPTensor</code> y 创建 <code class="language-plaintext highlighter-rouge">THPTensor</code> x 时，我们将新创建的 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的 <code class="language-plaintext highlighter-rouge">cdata</code> 字段设置为调用 <code class="language-plaintext highlighter-rouge">THTensor_(newWithTensor)</code> 并将 y 的底层 <code class="language-plaintext highlighter-rouge">TH</code> Tensor 作为参数的结果。类似的构造函数存在于大小、存储、NumPy 数组和序列中。</p>
 
-<p>**注意，我们仅使用`tp_new`，而不是`tp_new`和`tp_init`（对应于`__init__()`函数）的组合。</p>
+<p>** 注意我们只使用 <code class="language-plaintext highlighter-rouge">tp_new</code> ，而不是 <code class="language-plaintext highlighter-rouge">tp_new</code> 和 <code class="language-plaintext highlighter-rouge">tp_init</code> 的组合（对应于 <code class="language-plaintext highlighter-rouge">__init__()</code> 函数）。</p>
 
-<p>在 Tensor.cpp 中定义的另一个重要的事情是索引的工作方式。PyTorch 张量支持 Python 的&lt;强 id=0&gt;映射协议 。这使得我们可以执行如下操作：</p>
+<p>在 Tensor.cpp 中定义的另一个重要的事情是索引的工作方式。PyTorch 张量支持 Python 的映射协议。这使得我们可以执行如下操作：</p>
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">Tensor</span><span class="p">(</span><span class="mi">10</span><span class="p">).</span><span class="n">fill_</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
 <span class="n">y</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">//</span> <span class="n">y</span> <span class="o">==</span> <span class="mi">1</span>
 <span class="n">x</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="o">=</span> <span class="mi">2</span>
 <span class="o">//</span> <span class="n">etc</span><span class="p">.</span>
 </code></pre></div></div>
-<p>**请注意，这种索引扩展到多维张量**</p>
+<p>**请注意，这种索引扩展到多维 Tensor</p>
 
-<p>我们可以通过定义以下<a href="https://docs.python.org/3.7/c-api/typeobj.html#c.PyMappingMethods">这里</a>描述的三个映射方法来使用 <code class="language-plaintext highlighter-rouge">[]</code>-风格的表示法。</p>
+<p>我们可以通过定义这里描述的三个映射方法来使用 <code class="language-plaintext highlighter-rouge">[]</code> -风格的表示法。</p>
 
-<p>最重要的方法是 <code class="language-plaintext highlighter-rouge">THPTensor_(getValue)</code> 和 <code class="language-plaintext highlighter-rouge">THPTensor_(setValue)</code>，它们描述了如何索引张量，以返回新的张量/标量或就地更新现有张量的值。阅读这些实现以更好地理解 PyTorch 如何支持基本的张量索引。</p>
+<p>其中最重要的方法是 <code class="language-plaintext highlighter-rouge">THPTensor_(getValue)</code> 和 <code class="language-plaintext highlighter-rouge">THPTensor_(setValue)</code> ，它们描述了如何索引 Tensor，以返回新的 Tensor/标量或就地更新现有 Tensor 的值。阅读这些实现以更好地理解 PyTorch 如何支持基本的张量索引。</p>
 
 <h3 id="generic-builds-part-one">通用构建（第一部分）</h3>
 
-<p>我们本可以花大量时间探讨 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的各个方面以及它与定义新的 Python 对象之间的关系。但我们仍然需要了解如何将 <code class="language-plaintext highlighter-rouge">THPTensor_(init)()</code> 函数翻译成我们在模块初始化中使用的 <code class="language-plaintext highlighter-rouge">THPIntTensor_init()</code>。我们如何将定义“通用”Tensor 的 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件用于生成所有类型排列的 Python 对象？换句话说，<code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 中充满了如下代码行：</p>
+<p>我们可以花很多时间探索 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的各个方面以及它与定义新 Python 对象的关系。但我们仍然需要看看 <code class="language-plaintext highlighter-rouge">THPTensor_(init)()</code> 函数是如何翻译成我们在模块初始化中使用的 <code class="language-plaintext highlighter-rouge">THPIntTensor_init()</code> 的。我们如何使用定义“通用”张量的 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件来生成所有类型排列的 Python 对象？换句话说， <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 中充满了如下代码行：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">return</span> <span class="nf">THPTensor_</span><span class="p">(</span><span class="n">New</span><span class="p">)(</span><span class="n">THTensor_</span><span class="p">(</span><span class="k">new</span><span class="p">)(</span><span class="n">LIBRARY_STATE_NOARGS</span><span class="p">));</span>
 </code></pre></div></div>
 <p>这说明了我们需要进行类型特定的两种情况：</p>
 
 <ul>
-  <li>我们输出的代码将用 <code class="language-plaintext highlighter-rouge">THP&lt;Type&gt;Tensor_New(...)</code> 替换 <code class="language-plaintext highlighter-rouge">THPTensor_(New)</code></li>
-  <li>我们输出的代码将用 <code class="language-plaintext highlighter-rouge">TH&lt;Type&gt;Tensor_new(...)</code> 替换 <code class="language-plaintext highlighter-rouge">THTensor_(new)</code></li>
+  <li>我们输出的代码将用 <code class="language-plaintext highlighter-rouge">THP&lt;Type&gt;Tensor_New(...)</code> 代替 <code class="language-plaintext highlighter-rouge">THPTensor_(New)</code> </li>
+  <li>我们输出的代码将用 <code class="language-plaintext highlighter-rouge">TH&lt;Type&gt;Tensor_new(...)</code> 代替 <code class="language-plaintext highlighter-rouge">THTensor_(new)</code> </li>
 </ul>
 
-<p>换句话说，对于所有支持的 Tensor 类型，我们需要“生成”完成上述替换的源代码。这是 PyTorch 的“构建”过程的一部分。PyTorch 依赖于 Setuptools（https://setuptools.readthedocs.io/en/latest/）来构建包，我们在顶层目录中定义一个 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件来自定义构建过程。</p>
+<p>换句话说，对于所有支持的 Tensor 类型，我们需要“生成”已经完成上述替换的源代码。这是 PyTorch 构建过程的一部分。PyTorch 依赖于 Setuptools（https://setuptools.readthedocs.io/en/latest/）来构建包，我们在顶级目录中定义一个 <code class="language-plaintext highlighter-rouge">setup.py</code> 文件来定制构建过程。</p>
 
-<p>构建扩展模块的一个组件是使用 Setuptools 列出参与编译的源文件。然而，我们的 <code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.cpp</code> 文件并未列出！那么这个文件中的代码是如何成为最终产品的组成部分的呢？</p>
+<p>构建扩展模块的一个组件是使用 Setuptools 列出参与编译的源文件。然而，我们的 <code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.cpp</code> 文件并未被列出！那么这个文件中的代码是如何最终成为最终产品的组成部分的呢？</p>
 
-<p>回想一下，我们是从 <code class="language-plaintext highlighter-rouge">generic</code> 目录以上的目录调用 <code class="language-plaintext highlighter-rouge">THPTensor*</code> 函数（如 <code class="language-plaintext highlighter-rouge">init</code>）。如果我们查看这个目录，会发现另一个名为 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 的文件。这个文件的重要最后一行是：</p>
+<p>回想一下，我们是从位于 <code class="language-plaintext highlighter-rouge">generic</code> 目录上方的目录中调用 <code class="language-plaintext highlighter-rouge">THPTensor*</code> 函数（如 <code class="language-plaintext highlighter-rouge">init</code> ）。如果我们查看这个目录，会发现另一个文件 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 被定义了。这个文件的重要最后一行是：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//generic_include TH torch/csrc/generic/Tensor.cpp</span>
 </code></pre></div></div>
-<p>注意这个 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件被包含在 <code class="language-plaintext highlighter-rouge">setup.py</code> 中，但它被一个名为 <code class="language-plaintext highlighter-rouge">split_types</code> 的 Python 辅助函数调用所封装。这个函数接收一个文件作为输入，并在文件内容中查找“//generic_include”字符串。如果找到，它会为每个 Tensor 类型生成一个新的输出文件，并进行以下更改：</p>
+<p>注意，此 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件包含在 <code class="language-plaintext highlighter-rouge">setup.py</code> 中，但它被一个名为 <code class="language-plaintext highlighter-rouge">split_types</code> 的 Python 辅助函数调用所包裹。此函数接收一个文件作为输入，并在文件内容中查找“//generic_include”字符串。如果找到，则为每种 Tensor 类型生成一个新的输出文件，并进行以下更改：</p>
 
 <ul>
-  <li>输出文件被重命名为 <code class="language-plaintext highlighter-rouge">Tensor&lt;Type&gt;.cpp</code></li>
+  <li>输出文件被重命名为 <code class="language-plaintext highlighter-rouge">Tensor&lt;Type&gt;.cpp</code> </li>
   <li>输出文件进行了以下微小的修改：</li>
 </ul>
 
@@ -587,7 +595,7 @@ static PyTypeObject py_FloatType = {
 #define TH_GENERIC_FILE "torch/src/generic/Tensor.cpp"
 #include "TH/THGenerate&lt;Type&gt;Type.h"
 </span></code></pre></div></div>
-<p>在第二行包含头文件会产生副作用，即在 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 中包含源代码，并定义了一些额外的上下文。让我们看一下其中一个头文件：</p>
+<p>在第二行包含头文件会产生一个副作用，即在 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 中包含源代码，并带有一些额外的上下文定义。让我们看一下其中一个头文件：</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#ifndef TH_GENERIC_FILE
 #error "You must define TH_GENERIC_FILE before including THGenerateFloatType.h"
@@ -615,45 +623,45 @@ static PyTypeObject py_FloatType = {
 #endif
 </span></code></pre></div></div>
 
-<p>这所做的是将来自通用 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件的代码引入，并用以下宏定义包围起来。例如，我们定义 real 为 float，因此通用 Tensor 实现中任何将某物称为 real 的代码都将将 real 替换为 float。在相应的文件 <code class="language-plaintext highlighter-rouge">THGenerateIntType.h</code> 中，相同的宏将把 <code class="language-plaintext highlighter-rouge">real</code> 替换为 <code class="language-plaintext highlighter-rouge">int</code>。</p>
+<p>这所做的是从通用的 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件中引入代码，并用以下宏定义将其包围。例如，我们定义 real 为 float，因此任何在通用 Tensor 实现中引用 real 的代码都将被替换为 float。在相应的文件 <code class="language-plaintext highlighter-rouge">THGenerateIntType.h</code> 中，相同的宏将用 <code class="language-plaintext highlighter-rouge">int</code> 替换 <code class="language-plaintext highlighter-rouge">real</code> 。</p>
 
-<p>这些输出文件由 <code class="language-plaintext highlighter-rouge">split_types</code> 返回，并添加到源文件列表中，这样我们就可以看到不同类型的 <code class="language-plaintext highlighter-rouge">.cpp</code> 代码是如何创建的。</p>
+<p>这些输出文件由 <code class="language-plaintext highlighter-rouge">split_types</code> 返回，并添加到源文件列表中，这样我们就可以看到如何创建不同类型的 <code class="language-plaintext highlighter-rouge">.cpp</code> 代码。</p>
 
-<p>这里有一些需要注意的事项：首先，<code class="language-plaintext highlighter-rouge">split_types</code> 函数并非绝对必要。我们可以将代码包裹在 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 文件中，并在每个类型中重复它。我们将代码拆分成单独的文件是为了加快编译速度。其次，当我们谈论类型替换（例如将 real 替换为 float）时，我们的意思是 C 预处理器将在编译期间执行这些替换。仅仅用这些宏包围源代码没有任何副作用，直到预处理。</p>
+<p>这里有几个需要注意的地方：首先， <code class="language-plaintext highlighter-rouge">split_types</code> 函数并非绝对必要。我们可以在单个文件中将 <code class="language-plaintext highlighter-rouge">Tensor.cpp</code> 中的代码包裹起来，为每种类型重复使用。我们将代码拆分到单独的文件中的原因是加快编译速度。其次，当我们谈论类型替换（例如，将 real 替换为 float）时，我们的意思是 C 预处理器将在编译期间执行这些替换。仅仅用这些宏包围源代码不会产生任何副作用，直到预处理。</p>
 
 <h3 id="generic-builds-part-two">通用构建（第二部分）</h3>
 
-<p>现在我们已经有了所有 Tensor 类型的源文件，我们需要考虑如何创建相应的头文件声明，以及如何将 <code class="language-plaintext highlighter-rouge">THTensor_(method)</code> 和 <code class="language-plaintext highlighter-rouge">THPTensor_(method)</code> 转换为 <code class="language-plaintext highlighter-rouge">TH&lt;Type&gt;Tensor_method</code> 和 <code class="language-plaintext highlighter-rouge">THP&lt;Type&gt;Tensor_method</code>。例如，<code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.h</code> 中有如下声明：</p>
+<p>现在我们已经拥有了所有 Tensor 类型的源文件，我们需要考虑如何创建相应的头文件声明，以及如何将 <code class="language-plaintext highlighter-rouge">THTensor_(method)</code> 和 <code class="language-plaintext highlighter-rouge">THPTensor_(method)</code> 转换为 <code class="language-plaintext highlighter-rouge">TH&lt;Type&gt;Tensor_method</code> 和 <code class="language-plaintext highlighter-rouge">THP&lt;Type&gt;Tensor_method</code> 。例如， <code class="language-plaintext highlighter-rouge">csrc/generic/Tensor.h</code> 有如下声明：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">THP_API</span> <span class="n">PyObject</span> <span class="o">*</span> <span class="nf">THPTensor_</span><span class="p">(</span><span class="n">New</span><span class="p">)(</span><span class="n">THTensor</span> <span class="o">*</span><span class="n">ptr</span><span class="p">);</span>
 </code></pre></div></div>
-<p>我们在头文件的源文件中采用相同的策略生成代码。在 <code class="language-plaintext highlighter-rouge">csrc/Tensor.h</code> 中，我们执行以下操作：</p>
+<p>我们在头文件的源文件中生成代码时使用相同的策略。在 <code class="language-plaintext highlighter-rouge">csrc/Tensor.h</code> 中，我们执行以下操作：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#include "generic/Tensor.h"
 #include &lt;TH/THGenerateAllTypes.h&gt;
 </span>
 <span class="cp">#include "generic/Tensor.h"
 #include &lt;TH/THGenerateHalfType.h&gt;
 </span></code></pre></div></div>
-<p>这种方法具有相同的效果，即我们从通用头文件中提取代码，用相同的宏定义包裹，针对每种类型分别进行。唯一的区别在于，生成的代码全部包含在同一个头文件中，而不是分散到多个源文件中。</p>
+<p>这具有相同的效果，我们从通用头文件中抽取代码，并使用相同的宏定义进行包装，针对每种类型。唯一的区别是生成的代码全部包含在同一个头文件中，而不是分散在多个源文件中。</p>
 
-<p>最后，我们需要考虑如何“转换”或“替换”函数类型。如果我们查看同一个头文件，我们会看到一系列的 <code class="language-plaintext highlighter-rouge">#define</code> 语句，包括：</p>
+<p>最后，我们需要考虑如何“转换”或“替换”函数类型。如果我们查看同一个头文件，我们会看到许多 <code class="language-plaintext highlighter-rouge">#define</code> 语句，包括：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#define THPTensor_(NAME)            TH_CONCAT_4(THP,Real,Tensor_,NAME)
 </span></code></pre></div></div>
-<p>这个宏表示，源代码中任何匹配格式 <code class="language-plaintext highlighter-rouge">THPTensor_(NAME)</code> 的字符串都应该被替换为 <code class="language-plaintext highlighter-rouge">THPRealTensor_NAME</code>，其中 Real 是从当时定义的符号 Real 派生出来的。由于我们的头文件和源代码都被上述所有类型的宏定义所包围，在预处理程序运行后，生成的代码就是我们预期的代码。在 <code class="language-plaintext highlighter-rouge">TH</code> 库中定义的相同宏用于 <code class="language-plaintext highlighter-rouge">THTensor_(NAME)</code>，支持这些函数的转换。通过这种方式，我们最终得到了包含专用代码的头文件和源文件。</p>
+<p>这个宏表示，源代码中任何符合格式 <code class="language-plaintext highlighter-rouge">THPTensor_(NAME)</code> 的字符串都应该被替换为 <code class="language-plaintext highlighter-rouge">THPRealTensor_NAME</code> ，其中 Real 是根据当时符号 Real 的定义 <code class="language-plaintext highlighter-rouge">#define</code> ‘d 得到的。因为我们的头文件和源代码被所有类型的宏定义所包围，如上所示，在预处理程序运行后，生成的代码就是我们预期的代码。 <code class="language-plaintext highlighter-rouge">TH</code> 库中的代码为 <code class="language-plaintext highlighter-rouge">THTensor_(NAME)</code> 定义了相同的宏，支持这些函数的翻译。这样，我们就得到了包含专用代码的头文件和源文件。</p>
 
 <h4 id="module-objects-and-type-methods">模块对象和类型方法</h4>
 
-<p>现在我们已经看到了我们是如何将 <code class="language-plaintext highlighter-rouge">TH</code> 的 Tensor 定义封装在 <code class="language-plaintext highlighter-rouge">THP</code> 中，并生成了 THP 方法，例如 <code class="language-plaintext highlighter-rouge">THPFloatTensor_init(...)</code>。现在我们可以探索上述代码实际上在创建的模块中做了什么。在 <code class="language-plaintext highlighter-rouge">THPTensor_(init)</code> 中的关键行是：</p>
+<p>现在我们已经看到，我们是如何将 <code class="language-plaintext highlighter-rouge">TH</code> 的 Tensor 定义封装在 <code class="language-plaintext highlighter-rouge">THP</code> 中，并生成 THP 方法如 <code class="language-plaintext highlighter-rouge">THPFloatTensor_init(...)</code> 的。现在我们可以探索上述代码实际上在创建的模块中做了什么。 <code class="language-plaintext highlighter-rouge">THPTensor_(init)</code> 中的关键行是：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp"># THPTensorBaseStr, THPTensorType are also macros that are specific
 # to each type
 </span><span class="n">PyModule_AddObject</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">THPTensorBaseStr</span><span class="p">,</span> <span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="p">)</span><span class="o">&amp;</span><span class="n">THPTensorType</span><span class="p">);</span>
 </code></pre></div></div>
 <p>此函数将我们的 Tensor 对象注册到扩展模块中，这样我们就可以在 Python 代码中使用 THPFloatTensor、THPIntTensor 等。</p>
 
-<p>只能创建 Tensor 并不是很有用 - 我们需要能够调用 <code class="language-plaintext highlighter-rouge">TH</code> 定义的 所有方法。一个简单的例子是调用 Tensor 上的就地 <code class="language-plaintext highlighter-rouge">zero_</code> 方法。</p>
+<p>只能创建张量还不够有用 - 我们需要能够调用 <code class="language-plaintext highlighter-rouge">TH</code> 定义的 所有方法。一个简单的例子是调用张量上的 in-place <code class="language-plaintext highlighter-rouge">zero_</code> 方法。</p>
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
 <span class="n">x</span><span class="p">.</span><span class="n">zero_</span><span class="p">()</span>
 </code></pre></div></div>
-<p>让我们先看看我们是如何为新定义的类型添加方法的。在“类型对象”中的一个字段是 <code class="language-plaintext highlighter-rouge">tp_methods</code>。此字段包含方法定义数组 (<code class="language-plaintext highlighter-rouge">PyMethodDef</code>)，并用于将方法（及其底层的 C/C++ 实现）与类型关联起来。假设我们想在我们的 <code class="language-plaintext highlighter-rouge">PyFloatObject</code> 上定义一个新的方法来替换值。我们可以这样实现：</p>
+<p>让我们先看看我们是如何向新定义的类型添加方法的。在“类型对象”中的一个字段是 <code class="language-plaintext highlighter-rouge">tp_methods</code> 。这个字段包含方法定义（ <code class="language-plaintext highlighter-rouge">PyMethodDef</code> ）的数组，并用于将方法（及其底层的 C/C++ 实现）与类型关联起来。假设我们想在我们的 <code class="language-plaintext highlighter-rouge">PyFloatObject</code> 上定义一个新的替换值的方法。我们可以这样实现：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">PyObject</span> <span class="o">*</span> <span class="nf">replace</span><span class="p">(</span><span class="n">PyFloatObject</span> <span class="o">*</span><span class="n">self</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="p">{</span>
 	<span class="kt">double</span> <span class="n">val</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">PyArg_ParseTuple</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s">"d"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">val</span><span class="p">))</span>
@@ -662,11 +670,11 @@ static PyTypeObject py_FloatType = {
 	<span class="n">Py_RETURN_NONE</span>
 <span class="p">}</span>
 </code></pre></div></div>
-<p>这相当于 Python 方法：</p>
+<p>这与 Python 方法等价：</p>
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">replace</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">val</span><span class="p">):</span>
 	<span class="bp">self</span><span class="p">.</span><span class="n">ob_fval</span> <span class="o">=</span> <span class="n">val</span>
 </code></pre></div></div>
-<p>在 CPython 中定义方法的工作方式很有启发性。一般来说，方法将对象实例作为第一个参数，并可选地接受位置参数和关键字参数。这个静态函数被注册为我们 float 对象的方法：</p>
+<p>了解 CPython 中定义方法的工作原理很有帮助。一般来说，方法将对象实例作为第一个参数，并可选地接受位置参数和关键字参数。这个静态函数被注册为浮点数的方法：</p>
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">static</span> <span class="n">PyMethodDef</span> <span class="n">float_methods</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span>
 	<span class="p">{</span><span class="s">"replace"</span><span class="p">,</span> <span class="p">(</span><span class="n">PyCFunction</span><span class="p">)</span><span class="n">replace</span><span class="p">,</span> <span class="n">METH_VARARGS</span><span class="p">,</span>
 	<span class="s">"replace the value in the float"</span>
@@ -674,15 +682,15 @@ static PyTypeObject py_FloatType = {
 	<span class="p">{</span><span class="nb">NULL</span><span class="p">}</span> <span class="cm">/* Sentinel */</span>
 <span class="p">}</span>
 </code></pre></div></div>
-<p>这注册了一个名为 replace 的方法，该方法由同名的 C 函数实现。METH_VARARGS 标志表示该方法接受一个表示函数所有参数的元组。这个数组被设置为类型对象的 tp_methods 字段，然后我们就可以在该类型的对象上使用 replace 方法了。</p>
+<p>这注册了一个名为 replace 的方法，该方法由同名的 C 函数实现。 <code class="language-plaintext highlighter-rouge">METH_VARARGS</code> 标志表示该方法接受一个元组参数，代表函数的所有参数。此数组被设置为类型对象的 <code class="language-plaintext highlighter-rouge">tp_methods</code> 字段，然后我们可以使用该类型的对象的 <code class="language-plaintext highlighter-rouge">replace</code> 方法。</p>
 
-<p>我们希望能够在我们的 THP 张量等价物上调用所有 TH 张量的方法。然而，为所有 TH 方法编写包装器既费时又容易出错。我们需要一种更好的方法来做这件事。</p>
+<p>我们希望能够在我们的 <code class="language-plaintext highlighter-rouge">THP</code> 张量等价物上调用所有 <code class="language-plaintext highlighter-rouge">TH</code> 张量的方法。然而，为所有 <code class="language-plaintext highlighter-rouge">TH</code> 方法编写包装器将非常耗时且容易出错。我们需要一种更好的方法来完成这项工作。</p>
 
 <h3 id="pytorch-cwrap">PyTorch cwrap</h3>
 
-<p>PyTorch 实现了自己的 cwrap 工具来封装 <code class="language-plaintext highlighter-rouge">TH</code> 张量方法，以便在 Python 后端使用。我们定义了一个包含一系列 C 方法声明的自定义 <a href="http://yaml.org">YAML 格式 </a> 的 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件。cwrap 工具读取此文件，并输出包含封装方法的 <code class="language-plaintext highlighter-rouge">.cpp</code> 源文件，这些文件与我们的 <code class="language-plaintext highlighter-rouge">THPTensor</code> Python 对象和 Python C 扩展方法调用格式兼容。此工具用于生成代码来封装不仅 <code class="language-plaintext highlighter-rouge">TH</code>，还包括 <code class="language-plaintext highlighter-rouge">CuDNN</code>。它被定义为可扩展的。</p>
+<p>PyTorch 实现了自己的 cwrap 工具，用于包装 <code class="language-plaintext highlighter-rouge">TH</code> Tensor 方法以在 Python 后端使用。我们定义一个包含一系列 C 方法声明的自定义 YAML 格式的 <code class="language-plaintext highlighter-rouge">.cwrap</code> 文件。cwrap 工具接收此文件，并输出包含包装方法的源文件，这些文件与我们的 <code class="language-plaintext highlighter-rouge">THPTensor</code> Python 对象和 Python C 扩展方法调用格式兼容。此工具用于生成代码以包装不仅 <code class="language-plaintext highlighter-rouge">TH</code> ，还包括 <code class="language-plaintext highlighter-rouge">CuDNN</code> 。它被定义为可扩展的。</p>
 
-<p>一个 in-place <code class="language-plaintext highlighter-rouge">addmv_</code> 函数的 YAML “声明”示例如下：</p>
+<p>一个用于原地 <code class="language-plaintext highlighter-rouge">addmv_</code> 函数的示例 YAML“声明”如下：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[[
   name: addmv_
   cname: addmv
@@ -698,52 +706,52 @@ static PyTypeObject py_FloatType = {
     - THTensor* vec
 ]]
 </code></pre></div></div>
-<p>cwrap 工具的架构非常简单。它读取一个文件，然后使用一系列 <strong> 插件 </strong> 处理它。请参阅 <code class="language-plaintext highlighter-rouge">tools/cwrap/plugins/__init__.py</code>  了解插件如何更改代码的所有方式。</p>
+<p>cwrap 工具的架构非常简单。它读取一个文件，然后通过一系列插件进行处理。有关插件如何更改代码的所有方式的文档，请参阅 <code class="language-plaintext highlighter-rouge">tools/cwrap/plugins/__init__.py</code> 。</p>
 
-<p>源代码生成过程是一系列步骤。首先，解析并处理 YAML“声明”。然后，逐步生成源代码，添加诸如参数检查和提取、定义方法头以及调用底层库（如 <code class="language-plaintext highlighter-rouge">TH</code>）的实际调用等功能。最后，cwrap 工具允许一次处理整个文件。对于 <code class="language-plaintext highlighter-rouge">addmv_</code> 的结果可以在这里<a href="https://gist.github.com/killeent/c00de46c2a896335a52552604cc4d74b">探索 </a>。</p>
+<p>源代码生成发生在一系列步骤中。首先，解析并处理 YAML“声明”。然后逐步生成源代码 - 添加诸如参数检查和提取、定义方法头以及调用底层库的实际调用（如 <code class="language-plaintext highlighter-rouge">TH</code> ）。最后，cwrap 工具允许一次处理整个文件。 <code class="language-plaintext highlighter-rouge">addmv_</code> 的结果输出可以在此处探索。</p>
 
-<p>为了与 CPython 后端接口，工具生成一个 <code class="language-plaintext highlighter-rouge">PyMethodDef</code> 数组，该数组可以存储或附加到 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的 <code class="language-plaintext highlighter-rouge">tp_methods</code> 字段。</p>
+<p>为了与 CPython 后端接口，该工具生成一个 <code class="language-plaintext highlighter-rouge">PyMethodDef</code> 数组，可以存储或追加到 <code class="language-plaintext highlighter-rouge">THPTensor</code> 的 <code class="language-plaintext highlighter-rouge">tp_methods</code> 字段。</p>
 
-<p>在包装 Tensor 方法的特定情况下，构建过程首先从 <code class="language-plaintext highlighter-rouge">TensorMethods.cwrap</code> 生成输出源文件。此源文件被包含在通用的 Tensor 源文件中。所有这些都在预处理器执行其魔法之前发生。因此，生成的所有方法包装器都经过与上面 <code class="language-plaintext highlighter-rouge">THPTensor</code> 代码相同的步骤。因此，为每种类型生成单个通用的声明和定义。</p>
+<p>在包装 Tensor 方法的具体情况下，构建过程首先从 <code class="language-plaintext highlighter-rouge">TensorMethods.cwrap</code> 生成输出源文件。这个源文件在通用的 Tensor 源文件中 <code class="language-plaintext highlighter-rouge">#include</code> 。所有这些都在预处理器施展魔法之前发生。因此，所有生成的包装器方法都经过与上面 <code class="language-plaintext highlighter-rouge">THPTensor</code> 代码相同的流程。因此，为每种类型都专门化了一个通用的声明和定义。</p>
 
-<h3 id="putting-it-all-together">将一切整合</h3>
+<h3 id="putting-it-all-together">整合一切</h3>
 
-<p>到目前为止，我们已经展示了如何扩展 Python 解释器以创建一个新的扩展模块，如何定义我们的新类型 <code class="language-plaintext highlighter-rouge">THPTensor</code>，以及如何为所有类型的 Tensor 生成与 <code class="language-plaintext highlighter-rouge">TH</code> 接口的源代码。简要来说，我们将简要介绍编译过程。</p>
+<p>到目前为止，我们已经展示了如何扩展 Python 解释器以创建一个新的扩展模块，该模块如何定义我们的新 <code class="language-plaintext highlighter-rouge">THPTensor</code> 类型，以及我们如何为与 <code class="language-plaintext highlighter-rouge">TH</code> 接口的所有类型的 Tensors 生成源代码。简要来说，我们将简要介绍编译过程。</p>
 
-<p>Setuptools 允许我们定义一个用于编译的扩展。整个 <code class="language-plaintext highlighter-rouge">torch._C</code> 扩展是通过收集所有源文件、头文件、库等并创建一个 setuptools 的 <code class="language-plaintext highlighter-rouge">Extension</code> 来编译的。然后 setuptools 负责构建扩展本身。我将在后续的文章中更深入地探讨构建过程。</p>
+<p>Setuptools 允许我们定义一个用于编译的扩展。整个 <code class="language-plaintext highlighter-rouge">torch._C</code> 扩展通过收集所有源文件、头文件、库等并创建 setuptools <code class="language-plaintext highlighter-rouge">Extension</code> 来编译。然后 setuptools 负责构建扩展本身。我将在后续的文章中更深入地探讨构建过程。</p>
 
-<p>总结一下，让我们回顾一下我们提出的四个问题：</p>
+<p>总结一下，让我们重新审视我们的四个问题：</p>
 
 <ul>
   <li><strong>PyTorch 是如何扩展 Python 解释器以定义一个可以从 Python 代码中操作的 Tensor 类型的？</strong></li>
 </ul>
 
-<p>它使用 CPython 的框架来扩展 Python 解释器并定义新类型，同时特别关注为所有类型生成代码。</p>
+<p>它使用 CPython 的框架来扩展 Python 解释器并定义新类型，同时特别注意为所有类型生成代码。</p>
 
 <ul>
-  <li><strong>PyTorch 是如何包装实际定义 Tensor 属性和方法的 C 库的？</strong></li>
+  <li><strong>PyTorch 是如何包装定义 Tensor 属性和方法的 C 库的？</strong></li>
 </ul>
 
-<p>它通过定义一个新的类型 <code class="language-plaintext highlighter-rouge">THPTensor</code> 来实现，该类型由 <code class="language-plaintext highlighter-rouge">TH</code> Tensor 支持。函数调用通过 CPython 后端的约定转发到这个张量。</p>
+<p>通过定义一个新的类型 <code class="language-plaintext highlighter-rouge">THPTensor</code> ，该类型由 <code class="language-plaintext highlighter-rouge">TH</code> 张量支持来实现。函数调用通过 CPython 后端的约定转发到这个张量。</p>
 
 <ul>
   <li><strong>PyTorch 的 cwrap 是如何生成 Tensor 方法代码的？</strong></li>
 </ul>
 
-<p>它通过一系列步骤使用多个插件处理我们的自定义 YAML 格式代码，为每个方法生成源代码。</p>
+<p>它通过一系列步骤使用多个插件处理我们的自定义 YAML 格式代码，并为每个方法生成源代码。</p>
 
 <ul>
   <li><strong>PyTorch 的构建系统是如何将这些组件编译并生成一个可工作的应用程序的？</strong></li>
 </ul>
 
-<p>它使用源代码/头文件、库和编译指令来构建一个扩展，使用 Setuptools。</p>
+<p>使用 Setuptools 构建扩展需要一大堆源文件、头文件、库和编译指令。</p>
 
-<p>这只是 PyTorch 构建系统部分内容的快照。其中包含更多细微之处和细节，但我希望这能作为对我们张量库众多组件的温和介绍。</p>
+<p>这只是 PyTorch 构建系统的一部分快照。其中包含更多细微之处和细节，但我希望这能作为对我们张量库众多组件的温和介绍。</p>
 
 <h3 id="resources">资源：</h3>
 
 <ul>
-  <li><a href="https://docs.python.org/3.7/extending/index.html">https://docs.python.org/3.7/extending/index.html</a> 对于理解如何编写 C/C++ 扩展到 Python 无价。</li>
+  <li>https://docs.python.org/3.7/extending/index.html 对于理解如何编写 C/C++扩展到 Python 非常有价值。</li>
 </ul>
 
                 </article>
@@ -760,14 +768,14 @@ static PyTypeObject py_FloatType = {
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -784,7 +792,7 @@ static PyTypeObject py_FloatType = {
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -797,7 +805,7 @@ static PyTypeObject py_FloatType = {
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -805,7 +813,7 @@ static PyTypeObject py_FloatType = {
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -834,9 +842,7 @@ static PyTypeObject py_FloatType = {
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -846,7 +852,7 @@ static PyTypeObject py_FloatType = {
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -868,22 +874,22 @@ static PyTypeObject py_FloatType = {
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -910,17 +916,17 @@ static PyTypeObject py_FloatType = {
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -955,7 +961,7 @@ static PyTypeObject py_FloatType = {
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -969,7 +975,7 @@ static PyTypeObject py_FloatType = {
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1037,7 +1043,7 @@ static PyTypeObject py_FloatType = {
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

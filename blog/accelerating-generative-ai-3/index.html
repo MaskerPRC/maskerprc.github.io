@@ -62,8 +62,8 @@ For an easier reproduction environment, you can also refer to this Dockerfile. T
 
 Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_float32_matmul_precision(" high")="" to="" benefit="" from="" the="" tf32="" precision="" format.="" run="" inference="" using="" a="" reduced="" running="" sdxl="" in="" diffusers="" just="" takes="" few="" lines="" of="" code:="" import="" stablediffusionxlpipeline="" ##="" load="" pipeline="" full-precision="" and="" place="" its="" model="" components="" on="" cuda.="" pipe="StableDiffusionXLPipeline.from_pretrained(&quot;stabilityai/stable-diffusion-xl-base-1.0&quot;).to(&quot;cuda&quot;)" attention="" ops="" without="" efficiency.="" pipe.unet.set_default_attn_processor()="" pipe.vae.set_default_attn_processor()="" prompt="Astronaut in a jungle, cold color palette, muted colors, detailed, 8k" image="pipe(prompt," num_inference_steps="30).images[0]" but="" this="" isn’t="" very="" practical="" as="" it="" 7.36="" seconds="" generate="" single="" with="" 30="" steps.="" is="" our="" baseline="" which="" we="" will="" try="" optimize="" one="" step="" at="" time.="" here,="" we’re="" full="" precision.="" can="" immediately="" cut="" down="" time="" by="" such="" bfloat16.="" besides,="" modern="" gpus="" come="" dedicated="" cores="" for="" accelerated="" computation="" benefiting="" computations="" bfloat16="" precision,="" need="" specify="" data="" type="" while="" initializing="" pipeline:="" "stabilityai="" stable-diffusion-xl-base-1.0",="" torch_dtype="torch.bfloat16" ).to("cuda")="" able="" latency="" 4.63="" seconds.="" some="" notes="" use="" numerical="" (such="" float16,="" bfloat16)="" doesn’t="" affect="" generation="" quality="" significantly="" improves="" latency.="" benefits="" compared="" float16="" are="" hardware-dependent.="" generations="" tend="" favor="" furthermore,="" experiments,="" be="" much="" more="" resilient="" when="" used="" quantization="" comparison="" float16.="" (we="" later="" ran="" experiments="" found="" out="" that="" recent="" versions="" torchao="" do="" not="" incur="" problems="" float16.)="" sdpa="" performing="" default,="" uses="" scaled_dot_product_attention="" (sdpa)="" attention-related="" pytorch="" 2.="" provides="" faster="" efficient="" kernels="" intensive="" operations.="" sdpa,="" simply="" don’t="" set="" any="" processor="" like="" so:="" gives="" nice="" boost="" 3.31="" compiling="" unet="" vae="" ask="" perform="" low-level="" optimizations="" operator="" fusion="" launching="" cuda="" graphs)="" torch.compile.="" stablediffusionxlpipeline,="" compile="" denoiser="" (unet)="" vae:="" torch="" vae.="" pipe.unet="torch.compile(pipe.unet," mode="max-autotune" ,="" fullgraph="True)" pipe.vae.decode="torch.compile(pipe.vae.decode," first="" call="" `pipe`="" slow,="" subsequent="" ones="" faster.="" both="" reduces="" 2.54="" torch.compile="" offers="" different="" backends="" modes.="" aiming="" maximum="" speed,="" opt="" inductor="" backend="" “max-autotune”.="" “max-autotune”="" graphs="" optimizes="" compilation="" graph="" specifically="" greatly="" overhead="" gpu="" saves="" mechanism="" launch="" multiple="" operations="" through="" cpu="" operation.="" specifying="" true="" ensures="" there="" no="" breaks="" underlying="" model,="" ensuring="" fullest="" potential="" case,="" following="" compiler="" flags="" were="" also="" important="" explicitly="" set:="" torch._inductor.config.conv_1x1_as_mm="True" torch._inductor.config.coordinate_descent_tuning="True" torch._inductor.config.epilogue_fusion="False" torch._inductor.config.coordinate_descent_check_all_directions="True" list="" flags,="" refer="" file.="" change="" memory="" layout="" “channels_last”="" them="" ensure="" speed:="" pipe.unet.to(memory_format="torch.channels_last)" pipe.vae.to(memory_format="torch.channels_last)" next="" section,="" we’ll="" show="" how="" improve="" even="" further.="" additional="" during="" method="" fully="" compiled="" crucial="" performance="" (torch.compile="" means="" having="" breaks.="" did="" changing="" access="" returning="" variables.="" consider="" example:="" getting="" rid="" syncs="" after="" iterative="" reverse="" diffusion="" process,="" step()="" scheduler="" each="" predicts="" less="" noisy="" latent="" embeddings.="" inside="" step(),="" sigmas="" variable="" indexed.="" if="" array="" placed="" gpu,="" indexing="" causes="" communication="" sync="" between="" gpu.="" latency,="" becomes="" evident="" has="" already="" been="" compiled.="" always="" stays="" (refer="" line),="" take="" place,="" hence="" improved="" general,="" &lt;-&gt;="" should="" none="" or="" kept="" bare="" minimum="" impact="" combined="" projections="" make="" transformer-like="" blocks.="" transformer="" block="" consists="" blocks="" feed-forward="" an="" block,="" input="" projected="" into="" three="" sub-spaces="" projection="" matrices="" –="" q,="" k,="" v.="" naive="" implementation,="" these="" performed="" separately="" input.="" horizontally="" combine="" matrix="" shot.="" increases="" size="" matmuls="" (to="" discussed="" next).="" enabling="" kind="" line="" pipe.fuse_qkv_projections()="" advantage="" projections.="" cross-attention="" layers,="" only="" key="" value="" matrices.="" learn="" more,="" you="" official="" documentation="" here.="" it’s="" worth="" noting="" leverage="" pytorch’s="" here="" internally.="" techniques="" 2.52="" dynamic="" int8="" selectively="" apply="" because="" adds="" conversion="" hopefully="" made="" up="" (dynamic="" quantization).="" too="" small,="" may="" degrade="" performance.="" experimentation,="" certain="" linear="" layers="" quantization.="" check="" code="" filtering="" those="" (referred="" dynamic_quant_filter_fn="" below).="" ultra-lightweight="" pure="" library="" user-friendly="" apis="" quantization:="" torchao.quantization="" apply_dynamic_quant="" apply_dynamic_quant(pipe.unet,="" dynamic_quant_filter_fn)="" apply_dynamic_quant(pipe.vae,="" since="" support="" limited="" only,="" turn="" suitable="" pointwise="" convolution="" maximize="" benefit.="" option:="" torch._inductor.config.force_fuse_int_mm_with_mul="True" torch._inductor.config.use_mixed_mm="True" prevent="" issues="" stemming="" quantization,="" everything="" applying="" way="" 2.43="" resources="" welcome="" codebases="" reproduce="" numbers="" extend="" other="" text-to-image="" systems="" well:="" diffusion-fast="" (repository="" providing="" all="" plots="" above)="" peft="" links="" sdxl:="" improving="" models="" high-resolution="" synthesis="" fast="" improvements="" pipelines="" applied="" test="" generality="" approach.="" below="" findings:="" ssd-1b="" stable="" v1-5="" pixart-alpha="" pixart-xl-2-1024-ms="" transformer-based="" architecture="" process="" instead="" unet.="" note="" pixart-alpha,="" didn’t="" explore="" best="" shape="" combination="" criteria="" might="" possible="" get="" better="" combination.="" collectively,="" methods="" presented="" offer="" substantial="" speedup="" over="" degradation="" quality.="" believe="" complement="" optimization="" popular="" community="" deepcache,="" fast,="" etc.).="" conclusion="" steps="" post,="" basket="" simple="" yet="" effective="" help="" pytorch.="" summary:="" scaled-dot="" product="" efficiently="" combining="" together="" computing="" there’s="" lot="" explored="" terms="" system.="" exhaustively="" opportunities="" further="" speed="" things="" being="" targeted="" text="" encoders="" untouched="" than="" optimizing="" lead="" acknowledgements="" thanks="" ollin="" boer="" bohan="" whose="" was="" throughout="" benchmarking="" numerically="" under="" precisions.="" hugo="" larcher="" hugging="" face="" helping="" infrastructure.="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -181,7 +181,7 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -189,7 +189,7 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -198,27 +198,27 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -229,21 +229,27 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -251,18 +257,20 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -273,12 +281,12 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -289,28 +297,28 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -324,7 +332,7 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -360,7 +368,7 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2024年1月3日</p>
+            <p class="featured-post">2024 年 1 月 3 日</p>
             <h1>
                 <a class="blog-title">加速生成式 AI 第三部分：扩散、快速</a>
             </h1>
@@ -373,7 +381,7 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由 Sayak Paul 和 Patrick von Platen（Hugging Face 🤗）撰写</p>
-                    <p>本文是关于如何使用纯原生 PyTorch 加速生成式 AI 模型的系列博客的第三部分。我们很高兴地分享一系列新发布的 PyTorch 性能特性，以及实际示例，以展示我们可以将 PyTorch 原生性能提升到何种程度。在第一部分中，我们展示了如何仅使用纯原生 PyTorch 将 <a href="https://maskerprc.github.io/blog/accelerating-generative-ai/">Segment Anything</a> 加速 8 倍。在第二部分中，我们展示了如何仅使用原生 PyTorch 优化将 <a href="https://maskerprc.github.io/blog/accelerating-generative-ai-2/">Llama-7B</a> 加速近 10 倍。在本篇博客中，我们将关注如何将文本到图像扩散模型的速度提升至 3 倍。</p>
+                    <p>本文是关于如何使用纯原生 PyTorch 加速生成式 AI 模型的系列博客的第三部分。我们很高兴与大家分享一系列新发布的 PyTorch 性能特性，并通过实际示例展示我们可以将 PyTorch 原生性能提升到何种程度。在第一部分中，我们展示了如何仅使用纯原生 PyTorch 将 Segment Anything 加速超过 8 倍。在第二部分中，我们展示了如何仅使用原生 PyTorch 优化将 Llama-7B 加速近 10 倍。在本篇博客中，我们将重点关注如何将文本到图像扩散模型的速度提升至 3 倍。</p>
 
 <p>我们将利用一系列优化，包括：</p>
 
@@ -387,34 +395,34 @@ Since we use an A100 GPU (Ampere architecture) here, we can specify torch.set_fl
 
 <p>我们将主要关注 Stable Diffusion XL（SDXL），展示 3 倍的延迟提升。这些技术是 PyTorch 原生，这意味着您无需依赖任何第三方库或任何 C++代码即可利用它们。</p>
 
-<p>使用🤗Diffusers 库启用这些优化只需几行代码。如果您已经兴奋不已，迫不及待想要查看代码，请查看随附的仓库：[https://github.com/huggingface/diffusion-fast](https://github.com/huggingface/diffusion-fast)。</p>
+<p>使用🤗Diffusers 库启用这些优化只需几行代码。如果您已经兴奋不已，迫不及待想要查看代码，请查看随附的仓库：https://github.com/huggingface/diffusion-fast。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg1.png" alt="SDXL Chart" style="width:100%;"></p>
 
-<p><em>（所讨论的技术并非 SDXL 专用，可以用于加速其他文本到图像扩散系统，如后文所示。）</em></p>
+<p><em>（所讨论的技术并非 SDXL 专用，可以用于加速其他文本到图像的扩散系统，如后文所示。）</em></p>
 
 <p>以下您可以找到一些关于类似主题的博客文章：</p>
 
 <ul>
-  <li><a href="https://maskerprc.github.io/blog/accelerated-diffusers-pt-20/">使用 PyTorch 2.0 加速 Diffusers</a></li>
+  <li><a href="https://pytorch.org/blog/accelerated-diffusers-pt-20/">使用 PyTorch 2.0 加速 Diffusers</a></li>
   <li><a href="https://huggingface.co/blog/simple_sdxl_optimizations">探索 SDXL 的简单优化</a></li>
-  <li><a href="https://maskerprc.github.io/blog/accelerated-generative-diffusion-models/">使用 PyTorch 2 加速生成式扩散模型</a></li>
+  <li><a href="https://pytorch.org/blog/accelerated-generative-diffusion-models/">使用 PyTorch 2 加速生成式扩散模型</a></li>
 </ul>
 
 <h2 id="setup">设置</h2>
 
-<p>我们将使用🤗<a href="https://github.com/huggingface/diffusers">Diffusers 库</a>演示这些优化及其相应的加速增益。除此之外，我们还将使用以下 PyTorch 原生库和环境：</p>
+<p>我们将使用🤗 Diffusers 库演示优化及其相应的加速增益。除此之外，我们还将使用以下 PyTorch 原生库和环境：</p>
 
 <ul>
-  <li>火炬夜间版（以利用最快的内核实现高效的注意力；2.3.0.dev20231218+cu121）</li>
+  <li>Torch 夜间版本（以利用高效的注意力核；2.3.0.dev20231218+cu121）</li>
   <li>🤗 PEFT（版本：0.7.1）</li>
-  <li>torchao（提交 SHA：54bcd5a10d0abbe7b0c045052029257099f83fd9）</li>
+  <li>火烧 (提交 SHA: 54bcd5a10d0abbe7b0c045052029257099f83fd9)</li>
   <li>CUDA 12.1</li>
 </ul>
 
-<p>为了更简单的复现环境，您还可以参考此 <a href="https://github.com/huggingface/sdxl-fast/blob/main/Dockerfile"> Dockerfile</a>。本文中展示的基准测试数据来自 400W 80GB A100 GPU（其时钟频率设置为最大容量）。</p>
+<p>为了更简单的复现环境，您也可以参考这个 Dockerfile。本文中展示的基准测试数据来自 400W 80GB A100 GPU（其时钟频率设置为最大容量）。</p>
 
-<p>由于这里使用的是 A100 GPU（Ampere 架构），我们可以指定 <code class="language-plaintext highlighter-rouge">torch.set_float32_matmul_precision("high")</code> 来利用 <a href="https://blogs.nvidia.com/blog/tensorfloat-32-precision-format/">TF32 精度格式 </a>。</p>
+<p>由于我们在这里使用 A100 GPU（Ampere 架构），我们可以指定 <code class="language-plaintext highlighter-rouge">torch.set_float32_matmul_precision("high")</code> 以利用 TF32 精度格式。</p>
 
 <h2 id="run-inference-using-a-reduced-precision">使用降低精度运行推理</h2>
 
@@ -433,11 +441,11 @@ prompt = "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k"
 image = pipe(prompt, num_inference_steps=30).images[0]
 </code></pre></div></div>
 
-<p>但这并不实用，因为它需要 <strong>7.36 秒 </strong> 来生成一张包含 30 步的单个图像。这是我们基线，我们将一步步尝试优化。</p>
+<p>但这并不实用，因为使用 30 步生成一张图片需要 7.36 秒。这是我们基准，我们将一步步尝试优化。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg2.png" alt="SDXL Chart" style="width:100%;"></p>
 
-<p>在这里，我们以全精度运行管道。我们可以通过使用降低精度的方法，例如 <a href="https://cloud.google.com/tpu/docs/bfloat16">bfloat16</a>，立即减少推理时间。此外，现代 GPU 配备了用于运行加速计算的专用核心，这有助于降低精度。要使用 bfloat16 精度运行管道的计算，我们只需在初始化管道时指定数据类型即可：</p>
+<p>在这里，我们使用全精度运行管道。我们可以通过使用降低精度，如 bfloat16，立即减少推理时间。此外，现代 GPU 配备了用于运行加速计算的专用核心，从而受益于降低精度。要使用 bfloat16 精度运行管道的计算，我们只需在初始化管道时指定数据类型即可：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from diffusers import StableDiffusionXLPipeline
 
@@ -454,21 +462,21 @@ image = pipe(prompt, num_inference_steps=30).images[0]
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg3.png" alt="SDXL Chart" style="width:100%;"></p>
 
-<p>通过使用降低精度，我们可以将推理延迟从 &lt;强 id=0&gt;7.36 秒减少到 4.63 秒 。</p>
+<p>通过使用降低精度，我们能够将推理延迟从 7.36 秒减少到 4.63 秒。</p>
 
-<p><strong>关于使用 bfloat16 的一些注意事项</strong></p>
+<p><strong>关于使用 bfloat16 的一些笔记</strong></p>
 
 <ul>
-  <li>使用降低的数值精度（如 float16、bfloat16）进行推理不会影响生成质量，但可以显著提高延迟。</li>
-  <li>与 float16 相比，使用数值精度的优势取决于硬件。现代 GPU 的代际往往更倾向于 bfloat16。</li>
-  <li>此外，在我们的实验中，我们发现与 float16 相比，使用量化时 bfloat16 的鲁棒性要强得多。</li>
+  <li>使用降低的数值精度（如 float16、bfloat16）进行推理不会影响生成质量，但会显著提高延迟。</li>
+  <li>与 float16 相比，使用 bfloat16 数值精度的优势取决于硬件。现代 GPU 的生成代数通常更倾向于 bfloat16。</li>
+  <li>此外，在我们的实验中，我们发现与 float16 相比，bfloat16 在量化使用时具有更高的鲁棒性。</li>
 </ul>
 
-<p><em>（我们后来在 float16 上进行了实验，发现 torchao 的最新版本不会因为 float16 而产生数值问题。）</em></p>
+<p><em>我们后来在 float16 上运行了实验，发现 torchao 的最新版本不会因为 float16 而产生数值问题。</em></p>
 
 <h2 id="use-sdpa-for-performing-attention-computations">使用 SDPA 进行注意力计算</h2>
 
-<p>默认情况下，Diffusers 使用 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention</code> (SDPA) 在使用 PyTorch 2 时执行与注意力相关的计算。SDPA 提供了更快、更高效的内核来运行密集的注意力相关操作。要运行 SDPA 管道，我们只需不设置任何注意力处理器，如下所示：</p>
+<p>默认情况下，Diffusers 在 PyTorch 2 中使用 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention</code> （SDPA）进行与注意力相关的计算。SDPA 提供了更快、更高效的内核来运行密集的注意力相关操作。要运行 SDPA 管道，我们只需不设置任何注意力处理器，如下所示：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from diffusers import StableDiffusionXLPipeline
 
@@ -480,13 +488,13 @@ prompt = "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k"
 image = pipe(prompt, num_inference_steps=30).images[0]
 </code></pre></div></div>
 
-<p>SDPA 将时间从 <strong>4.63 秒提升到 3.31 秒 </strong>。</p>
+<p>SDPA 将性能提升了 4.63 秒到 3.31 秒。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg4.png" alt="SDXL Chart" style="width:100%;"></p>
 
 <h2 id="compiling-the-unet-and-vae">编译 UNet 和 VAE</h2>
 
-<p>我们可以通过使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 让 PyTorch 执行一些低级优化（例如操作融合和通过 CUDA 图启动更快的内核）。对于 <code class="language-plaintext highlighter-rouge">StableDiffusionXLPipeline</code>，我们编译去噪器（UNet）和 VAE：</p>
+<p>我们可以通过使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 来请求 PyTorch 执行一些低级优化（例如操作融合和通过 CUDA 图启动更快的内核）。对于 <code class="language-plaintext highlighter-rouge">StableDiffusionXLPipeline</code> ，我们编译去噪器（UNet）和 VAE：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from diffusers import StableDiffusionXLPipeline
 import torch
@@ -505,15 +513,15 @@ prompt = "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k"
 image = pipe(prompt, num_inference_steps=30).images[0]
 </code></pre></div></div>
 
-<p>使用 SDPA 注意力机制并编译 UNet 和 VAE，将延迟从 3.31 秒降低到 2.54 秒。</p>
+<p>使用 SDPA 注意力并编译 UNet 和 VAE 将延迟从 3.31 秒降低到 2.54 秒。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg5.png" alt="SDXL Chart" style="width:100%;"></p>
 
-<p><strong>关于 <code>torch.compile</code> 的笔记</strong></p>
+<p><strong>关于 <code>torch.compile</code> 的注意事项</strong></p>
 
-<p><code class="language-plaintext highlighter-rouge">torch.compile</code> 提供了不同的后端和模式。由于我们追求最大的推理速度，我们选择使用“max-autotune”的 inductor 后端。 “max-autotune”使用 CUDA 图，并针对延迟优化编译图。使用 CUDA 图大大减少了启动 GPU 操作的开销。它通过使用一种机制，通过单个 CPU 操作启动多个 GPU 操作来节省时间。</p>
+<p>提供不同的后端和模式。为了实现最大的推理速度，我们选择使用“max-autotune”的感应器后端。“max-autotune”使用 CUDA 图，并针对延迟优化编译图。使用 CUDA 图大大减少了启动 GPU 操作的开销。通过使用一种机制，通过单个 CPU 操作启动多个 GPU 操作，从而节省时间。</p>
 
-<p>将 <code class="language-plaintext highlighter-rouge">fullgraph</code> 设置为 <code class="language-plaintext highlighter-rouge">True</code> 确保底层模型中没有图断开，从而确保 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的最大潜力。在我们的案例中，以下编译器标志也至关重要，需要明确设置：</p>
+<p>将 <code class="language-plaintext highlighter-rouge">fullgraph</code> 指定为 <code class="language-plaintext highlighter-rouge">True</code> 确保底层模型中没有图断开，从而确保 <code class="language-plaintext highlighter-rouge">torch.compile</code> 的最大潜力。在我们的案例中，以下编译器标志也被明确设置是很重要的：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch._inductor.config.conv_1x1_as_mm = True
 torch._inductor.config.coordinate_descent_tuning = True
@@ -521,9 +529,9 @@ torch._inductor.config.epilogue_fusion = False
 torch._inductor.config.coordinate_descent_check_all_directions = True
 </code></pre></div></div>
 
-<p>关于完整的编译器标志列表，请参阅<a href="https://github.com/pytorch/pytorch/blob/main/torch/_inductor/config.py">此文件。</a></p>
+<p>有关编译器标志的完整列表，请参阅此文件。</p>
 
-<p>我们在编译 UNet 和 VAE 时，也将它们的内存布局更改为“channels_last”，以确保最大速度：</p>
+<p>我们还在编译 UNet 和 VAE 时将内存布局更改为“channels_last”，以确保最大速度：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pipe.unet.to(memory_format=torch.channels_last)
 pipe.vae.to(memory_format=torch.channels_last)
@@ -533,42 +541,42 @@ pipe.vae.to(memory_format=torch.channels_last)
 
 <h2 id="additional-optimizations">其他优化</h2>
 
-<h3 id="no-graph-breaks-during-torchcompile">在使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 时没有图断开</h3>
+<h3 id="no-graph-breaks-during-torchcompile">在 <code class="language-plaintext highlighter-rouge">torch.compile</code> 期间没有图断开</h3>
 
-<p>确保底层模型/方法可以完全编译对于性能至关重要（使用 <code class="language-plaintext highlighter-rouge">torch.compile</code> 并设置 <code class="language-plaintext highlighter-rouge">fullgraph=True</code>）。这意味着没有图断开。我们通过更改访问返回变量的方式，为 UNet 和 VAE 做到了这一点。以下是一个示例：</p>
+<p>确保底层模型/方法可以完全编译对于性能至关重要（ <code class="language-plaintext highlighter-rouge">torch.compile</code> 与 <code class="language-plaintext highlighter-rouge">fullgraph=True</code> ）。这意味着没有图断开。我们通过改变访问返回变量的方式对 UNet 和 VAE 进行了修改。以下是一个示例：</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg5b.jpg" alt="code example" style="width:100%;"></p>
 
-<h3 id="getting-rid-of-gpu-syncs-after-compilation">编译后移除 GPU 同步</h3>
+<h3 id="getting-rid-of-gpu-syncs-after-compilation">编译后去除 GPU 同步</h3>
 
-<p>在迭代反向扩散过程中，每次在去噪器预测出更无噪声的潜在嵌入后，我们都会在调度器上调用 <a href="https://github.com/huggingface/diffusers/blob/1d686bac8146037e97f3fd8c56e4063230f71751/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L1228">call</a><code class="language-plaintext highlighter-rouge">step()</code>。在 <code class="language-plaintext highlighter-rouge">step()</code> 中，<code class="language-plaintext highlighter-rouge">sigmas</code> 变量被 <a href="https://github.com/huggingface/diffusers/blob/1d686bac8146037e97f3fd8c56e4063230f71751/src/diffusers/schedulers/scheduling_euler_discrete.py#L476"> 索引 </a>。如果将 <code class="language-plaintext highlighter-rouge">sigmas</code> 数组放置在 GPU 上，索引会导致 CPU 和 GPU 之间的通信同步。这会导致延迟，当去噪器已经被编译时，这种现象更为明显。</p>
+<p>在迭代反向扩散过程中，每次在降噪器预测出更少的噪声潜在嵌入后，我们都会在调度器上调用 <code class="language-plaintext highlighter-rouge">step()</code> 。在 <code class="language-plaintext highlighter-rouge">step()</code> 中，对 <code class="language-plaintext highlighter-rouge">sigmas</code> 变量进行索引。如果将 <code class="language-plaintext highlighter-rouge">sigmas</code> 数组放置在 GPU 上，索引会导致 CPU 和 GPU 之间的通信同步。这会导致延迟，当降噪器已经被编译时，这种现象更为明显。</p>
 
-<p>但如果 <code class="language-plaintext highlighter-rouge">sigmas</code> 数组始终停留在 CPU 上（参见<a href="https://github.com/huggingface/diffusers/blob/35a969d297cba69110d175ee79c59312b9f49e1e/src/diffusers/schedulers/scheduling_euler_discrete.py#L240">此行 </a>），则不会进行此同步，从而提高了延迟。一般来说，任何 CPU &lt;-&gt; GPU 通信同步都应该是无的或保持最小，因为它可能会影响推理延迟。</p>
+<p>但如果 <code class="language-plaintext highlighter-rouge">sigmas </code> 数组始终保持在 CPU 上（参考此行），则不会发生此同步，从而提高了延迟。一般来说，任何 CPU &lt;-&gt; GPU 通信同步都应该是无的或保持最小，因为它会影响推理延迟。</p>
 
-<h3 id="using-combined-projections-for-attention-ops">使用结合投影进行注意力操作</h3>
+<h3 id="using-combined-projections-for-attention-ops">使用组合投影进行注意力操作</h3>
 
-<p>SDXL 中使用的 UNet 和 VAE 都使用了类似 Transformer 的块。Transformer 块由注意力块和前馈块组成。</p>
+<p>SDXL 中使用的 UNet 和 VAE 都采用了类似 Transformer 的模块。一个 Transformer 模块由注意力模块和前馈模块组成。</p>
 
-<p>在注意力块中，输入通过三个不同的投影矩阵——Q、K 和 V——投影到三个子空间。在原始实现中，这些投影是分别对输入进行的。但我们可以将投影矩阵水平组合成一个单一的矩阵，并一次性进行投影。这增加了输入投影的 matmuls 大小，并提高了量化的影响（将在下一节讨论）。</p>
+<p>在注意力模块中，输入通过三个不同的投影矩阵 Q、K 和 V 被投影到三个子空间。在原始实现中，这些投影是分别对输入进行的。但我们可以将投影矩阵水平组合成一个单一的矩阵，并一次性进行投影。这增加了输入投影的 matmuls 大小，并提高了量化的影响（将在下文中讨论）。</p>
 
 <p>在 Diffusers 中启用这种计算只需一行代码：</p>
 
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>pipe.fuse_qkv_projections()</code>
-</font></font></font></pre></div></div>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pipe.fuse_qkv_projections()
+</code></pre></div></div>
 
-<p>这将使 UNet 和 VAE 的注意力操作都能利用组合投影。对于交叉注意力层，我们只组合键和值矩阵。想了解更多，您可以参考官方文档<a href="https://huggingface.co/docs/diffusers/main/en/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLPipeline.fuse_qkv_projections">这里 </a>。值得注意的是，我们<a href="https://github.com/huggingface/diffusers/blob/35a969d297cba69110d175ee79c59312b9f49e1e/src/diffusers/models/attention_processor.py#L1356">利用 </a>PyTorch 的 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention</code> 在这里内部实现。</p>
+<p>这将使 UNet 和 VAE 的注意力操作都能利用组合投影。对于交叉注意力层，我们只组合键和值矩阵。想了解更多，可以参考官方文档。值得注意的是，我们在这里内部使用了 PyTorch 的 <code class="language-plaintext highlighter-rouge">scaled_dot_product_attention</code> 。</p>
 
-<p>这些额外技术将推理延迟从 <strong>2.54 秒降低到 2.52 秒 </strong>。</p>
+<p>这些额外技术将推理延迟从 2.54 秒降低到 2.52 秒。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg6.png" alt="SDXL Chart" style="width:100%;"></p>
 
 <h2 id="dynamic-int8-quantization">动态 int8 量化</h2>
 
-<p>我们有选择地将 <a href="https://maskerprc.github.io/tutorials/recipes/recipes/dynamic_quantization.html"> 动态 int8 量化 </a> 应用到 UNet 和 VAE 中。这是因为量化给模型增加了额外的转换开销，但希望这些开销可以通过更快的 matmuls（动态量化）来弥补。如果 matmuls 太小，这些技术可能会降低性能。</p>
+<p>我们有选择地将动态 int8 量化应用于 UNet 和 VAE。这是因为量化给模型增加了额外的转换开销，但希望这些开销可以通过更快的 matmuls（动态量化）来弥补。如果 matmuls 太小，这些技术可能会降低性能。</p>
 
-<p>通过实验，我们发现 UNet 和 VAE 中的某些线性层并不从动态 int8 量化中受益。您可以在此处查看过滤这些层的完整代码 <a href="https://github.com/huggingface/diffusion-fast/blob/0f169640b1db106fe6a479f78c1ed3bfaeba3386/utils/pipeline_utils.py#L16"> 这里 </a>（以下称为 <code class="language-plaintext highlighter-rouge">dynamic_quant_filter_fn</code>）。</p>
+<p>通过实验，我们发现 UNet 和 VAE 中的某些线性层并不受益于动态 int8 量化。您可以在此处查看过滤这些层的完整代码（以下称为 <code class="language-plaintext highlighter-rouge">dynamic_quant_filter_fn</code> ）。</p>
 
-<p>我们利用超轻量级的纯 PyTorch 库 <a href="https://github.com/pytorch-labs/ao">torchao</a>，使用其用户友好的 API 进行量化：</p>
+<p>我们利用超轻量级的纯 PyTorch 库 torchao，使用其用户友好的 API 进行量化：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>from torchao.quantization import apply_dynamic_quant
 
@@ -576,24 +584,24 @@ apply_dynamic_quant(pipe.unet, dynamic_quant_filter_fn)
 apply_dynamic_quant(pipe.vae, dynamic_quant_filter_fn)
 </code></pre></div></div>
 
-<p>由于这种量化支持仅限于线性层，我们还把合适的点卷积层转换为线性层，以最大化效益。使用此选项时，我们还指定以下编译器标志：</p>
+<p>由于这种量化支持仅限于线性层，我们还把合适的点卷积层转换为线性层以最大化效益。在使用此选项时，我们还指定了以下编译器标志：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch._inductor.config.force_fuse_int_mm_with_mul = True
 torch._inductor.config.use_mixed_mm = True
 </code></pre></div></div>
 
-<p>为了防止量化引起的任何数值问题，我们以 bfloat16 格式运行所有内容。</p>
+<p>为了防止量化引起的任何数值问题，我们以 bfloat16 格式运行所有操作。</p>
 
-<p>以这种方式应用量化将延迟从 <strong>2.52 秒降低到 2.43 秒 </strong>。</p>
+<p>以这种方式应用量化将延迟从 2.52 秒降低到 2.43 秒。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-3/fg7.png" alt="SDXL Chart" style="width:100%;"></p>
 
 <h2 id="resources">资源</h2>
 
-<p>我们欢迎您查看以下代码库以重现这些数字，并将这些技术扩展到其他文本到图像扩散系统：</p>
+<p>欢迎您查看以下代码库以复现这些数字，并将这些技术扩展到其他文本到图像扩散系统中：</p>
 
 <ul>
-  <li><a href="https://github.com/huggingface/diffusion-fast">diffusion-fast</a>（提供重现上述数字和图表所需所有代码的仓库）</li>
+  <li>diffusion-fast（提供复现上述数字和图表所需所有代码的仓库）</li>
   <li><a href="https://github.com/pytorch-labs/ao">torchao 库</a></li>
   <li><a href="https://github.com/huggingface/diffusers">Diffusers 库</a></li>
   <li><a href="https://github.com/huggingface/peft">PEFT 库</a></li>
@@ -626,15 +634,15 @@ torch._inductor.config.use_mixed_mm = True
 
 <p>注意，对于 Stable Diffusion v1-5 和 PixArt-Alpha，我们没有探索应用动态 int8 量化的最佳形状组合标准。可能通过更好的组合可以得到更好的数值。</p>
 
-<p>我们提出的这些方法总体上在生成质量没有下降的情况下，比基线方法提供了显著的加速。此外，我们相信这些方法应该补充社区中流行的其他优化方法（如 <a href="https://github.com/horseee/DeepCache">DeepCache</a>，<a href="https://github.com/chengzeyi/stable-fast">Stable Fast</a> 等）。</p>
+<p>我们提出的这些方法总体上在生成质量没有下降的情况下，比基线方法提供了显著的加速。此外，我们相信这些方法应该补充社区中流行的其他优化方法（如 DeepCache、Stable Fast 等）。</p>
 
 <h2 id="conclusion-and-next-steps">结论和下一步</h2>
 
-<p>在本文中，我们介绍了一系列简单而有效的技术，可以帮助提高纯 PyTorch 中文本到图像扩散模型的推理延迟。总的来说：</p>
+<p>在这篇文章中，我们介绍了一系列简单而有效的技术，可以帮助提高纯 PyTorch 中文本到图像扩散模型的推理延迟。总之：</p>
 
 <ul>
-  <li>使用降低精度来执行我们的计算</li>
-  <li>使用缩放点积注意力机制来高效运行注意力块</li>
+  <li>使用降低精度进行我们的计算</li>
+  <li>缩放点积注意力，以高效运行注意力块</li>
   <li>使用“max-autotune”编译 torch 以提升延迟</li>
   <li>将不同的投影组合起来进行注意力计算</li>
   <li>动态 int8 量化</li>
@@ -642,11 +650,11 @@ torch._inductor.config.use_mixed_mm = True
 
 <p>我们相信在如何将量化应用于文本到图像的扩散系统方面还有很多可以探索的空间。我们没有彻底探索 UNet 和 VAE 中哪些层倾向于从动态量化中受益。可能有机会通过更好地组合目标量化层来进一步加快速度。</p>
 
-<p>我们保留了 SDXL 的文本编码器，除了在 bfloat16 模式下运行外，没有对其进行优化。优化它们也可能导致延迟的改进。</p>
+<p>我们保留了 SDXL 的文本编码器，除了在 bfloat16 模式下运行之外，没有对其进行修改。优化它们也可能导致延迟的改进。</p>
 
 <h2 id="acknowledgements">致谢</h2>
 
-<p>感谢 <a href="https://madebyoll.in/"> 奥林·博尔·博汉 </a>，其 <a href="https://huggingface.co/madebyollin/sdxl-vae-fp16-fix">VAE</a> 在整个基准测试过程中被使用，因为它在降低数值精度下具有更高的数值稳定性。</p>
+<p>感谢 Ollin Boer Bohan，其 VAE 在整个基准测试过程中被使用，因为它在降低数值精度下数值更稳定。</p>
 
 <p>感谢来自 Hugging Face 的 Hugo Larcher 在基础设施方面的帮助。</p>
 
@@ -664,14 +672,14 @@ torch._inductor.config.use_mixed_mm = True
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -688,7 +696,7 @@ torch._inductor.config.use_mixed_mm = True
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -701,7 +709,7 @@ torch._inductor.config.use_mixed_mm = True
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -709,7 +717,7 @@ torch._inductor.config.use_mixed_mm = True
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -738,9 +746,7 @@ torch._inductor.config.use_mixed_mm = True
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -750,7 +756,7 @@ torch._inductor.config.use_mixed_mm = True
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -772,22 +778,22 @@ torch._inductor.config.use_mixed_mm = True
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -814,17 +820,17 @@ torch._inductor.config.use_mixed_mm = True
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -859,7 +865,7 @@ torch._inductor.config.use_mixed_mm = True
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -873,7 +879,7 @@ torch._inductor.config.use_mixed_mm = True
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -941,7 +947,7 @@ torch._inductor.config.use_mixed_mm = True
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

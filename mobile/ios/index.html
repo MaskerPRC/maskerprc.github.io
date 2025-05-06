@@ -82,8 +82,8 @@ Let’s begin with image loading.
 
 let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resizedimage="image.resized(to:" cgsize(width:="" 224,="" height:="" 224))="" guard="" var="" pixelbuffer="resizedImage.normalized()" else="" {="" return="" }="" we="" first="" load="" the="" image="" from="" our="" bundle="" and="" resize="" it="" to="" 224x224.="" then="" call="" this="" normalized()="" category="" method="" normalize="" pixel="" buffer.="" let’s="" take="" a="" closer="" look="" at="" code="" below.="" normalizedbuffer:="" [float32]="[Float32](repeating:" 0,="" count:="" w="" *="" h="" 3)="" buffer="" see="" https:="" pytorch.org="" hub="" pytorch_vision_resnet="" for="" more="" detail="" i="" in="" 0="" ..&lt;="" normalizedbuffer[i]="(Float32(rawBytes[i" 4="" +="" 0])="" 255.0="" -="" 0.485)="" 0.229="" r="" normalizedbuffer[w="" i]="(Float32(rawBytes[i" 1])="" 0.456)="" 0.224="" g="" 2="" 2])="" 0.406)="" 0.225="" b="" might="" weird="" glance,="" but="" it’ll="" make="" sense="" once="" understand="" model.="" input="" data="" is="" 3-channel="" rgb="" of="" shape="" (3="" x="" w),="" where="" are="" expected="" be="" least="" 224.="" has="" loaded="" range="" [0,="" 1]="" normalized="" using="" mean="[0.485," 0.456,="" 0.406]="" std="[0.229," 0.224,="" 0.225].="" torchscript="" module="" now="" that="" have="" preprocessed="" pre-trained="" model,="" next="" step="" use="" them="" run="" prediction.="" do="" that,="" we’ll="" model="" into="" application.="" private="" lazy="" module:="" torchmodule="{" if="" filepath="Bundle.main.path(forResource:" "model",="" oftype:="" "pt"),="" filepath)="" fatalerror("can't="" find="" file!")="" }()="" note="" class="" an="" objective-c="" wrapper="" torch::jit::mobile::module.="" torch::jit::mobile::module="" since="" swift="" can="" not="" talk="" c++="" directly,="" either="" as="" bridge,="" or="" create="" c="" library.="" demo="" purpose,="" we’re="" going="" wrap="" everything="" class.="" inference="" it’s="" time="" get="" results.="" outputs="module.predict(image:" unsafemutablerawpointer(&amp;pixelbuffer))="" again,="" predict="" just="" wrapper.="" under="" hood,="" calls="" forward="" function.="" how="" implemented.="" at::tensor="" tensor="torch::from_blob(imageBuffer," {1,="" 3,="" 224},="" at::kfloat);="" c10::inferencemode="" guard;="" auto="" outputtensor="_impl.forward({tensor}).toTensor();" float*="" floatbuffer="outputTensor.data_ptr<float>();" function="" torch::from_blob="" will="" {1,3,224,224}="" which="" represents="" {n,="" c,="" h,="" w}="" discussed="" above="" section.="" line="" tells="" pytorch="" only.="" finally,="" output="" convert="" float="" collect="" results="" one-dimensional="" array="" 1x1000,="" each="" value="" confidence="" label="" predicted="" image.="" below="" sorts="" retrieves="" top="" three="" zippedresults="zip(labels.indices," outputs)="" sortedresults="zippedResults.sorted" $0.1.floatvalue="" &gt;="" $1.1.floatvalue="" }.prefix(3)="" app="" complex="" cases,="" recommend="" check="" out="" contains="" two="" showcases.="" camera="" runs="" quantized="" images="" coming="" device’s="" rear-facing="" real="" time.="" text-based="" uses="" text="" classification="" topic="" string.="" ios="" apps="" segmentation="" demonstrates="" python="" script="" converts="" deeplabv3="" mobile="" segment="" images.="" object="" detection="" popular="" yolov5="" on="" detects="" objects="" pictures="" your="" photos,="" taken="" with="" camera,="" live="" camera.="" neural="" machine="" translation="" sequence-to-sequence="" trained="" nmt="" tutorial="" french-english="" translation.="" question="" answering="" powerful="" transformer="" qa="" answer="" questions="" about="" more.="" vision="" facebook’s="" latest="" deit="" classification,="" another="" perform="" handwritten="" digit="" recognition.="" speech="" recognition="" facebook="" ai’s="" wav2vec="" 2.0,="" one="" leading="" models="" recognition,="" scripted="" video="" torchvideo="" available="" newly="" released="" pytorchvideo,="" results,="" updated="" per="" second="" while="" plays,="" tested="" videos,="" videos="" photos="" library,="" even="" real-time="" videos.="" recipes="" comprehensive="" step-by-step="" prepare="" ios.="" performance="" list="" optimizations="" mobile.="" fuse="" modules="" recipe="" learn="" single="" reduce="" size="" before="" quantization.="" quantization="" faster="" without="" losing="" much="" accuracy.="" optimize="" torchscipt="" (optional)="" apps.="" preparation="" add="" project="" pod="" build="" libraries="" source="" track="" updates="" ios,="" you="" code.="" git="" clone="" --recursive="" github.com="" cd="" #="" updating="" existing="" checkout="" submodule="" sync="" update="" --init="" sure="" cmake="" installed="" correctly="" local="" machine.="" following="" github="" page="" set="" up="" development="" environment="" libtorch-lite="" simulators="" open="" terminal="" navigate="" root="" directory.="" command="" (if="" already="" devices="" (see="" below),="" rm="" -rf="" build_ios="" first):="" build_pytorch_mobile="1" ios_platform="SIMULATOR" .="" scripts="" build_ios.sh="" after="" succeeds,="" all="" static="" header="" files="" generated="" install="" arm64="" simulators,="" ios_arch="arm64" xcode="" setup="" xcode,="" go="" target’s="" phases="" link="" binaries="" libraries,="" click="" sign="" library="" located="" lib.="" settings,="" search="" paths="" include="" other="" linker="" flags.="" custom="" flag="" -all_load="" built="" project,="" replace="" #import="" &lt;libtorch-lite="" libtorch-lite.h&gt;="" (in="" torchmodule.mm)="" needed="" when="" via="" cocoapods="" below:="" #include="" &lt;torch="" csrc="" jit="" import.h&gt;="" module.h&gt;="" script.h&gt;="" disable="" bitcode="" target="" by="" selecting="" searching="" enable="" bitcode,="" no.="" nightly="" want="" try="" features="" added="" libtorch-lite-nightly="" podfile,="" includes="" libraries:="" 'libtorch-lite-nightly'="" project.="" wish="" newer="" one,="" version.="" aware="" may="" need="" used="" quick="" commands="" like="" pip="" --pre="" torch="" torchvision="" -f="" download.pytorch.org="" whl="" cpu="" torch_nightly.html="" avoid="" possible="" version="" mismatch="" errors="" running="" starting="" 1.4.0,="" supports="" build.="" only="" operators="" follow="" steps="" 1.="" verify="" 1.4.0="" above.="" checking="" torch.__version__.="" 2.="" dump="" say="" mobilenetv2,="" lines="" code:="" import="" torch,="" yaml="" ops="torch.jit.export_opnames(model)" open('mobilenetv2.yaml',="" 'w')="" output:="" yaml.dump(ops,="" output)="" snippet="" above,="" scriptmodule.="" then,="" export_opnames="" operator="" names="" scriptmodule="" its="" submodules.="" lastly,="" save="" result="" file.="" 3.="" locally="" prepared="" operators,="" pass="" file="" generate="" last="" variable="" selected_op_list.="" also="" arguments,="" specify="" well="" platform="" architechture="" type.="" example,="" should="" be:="" selected_op_list="MobileNetV2.yaml" 4.="" integrate="" section="" 5.="" forward.="" because="" default="" some="" (fusion="" example),="" break="" consistency="" dumped="" torch::jit::graphoptimizerenabledguard="" guard(false);="" interpreter="" 1.9="" (a="" size-efficient).="" still="" supported="" 1.9,="" cocoapods:="" 'libtorch',="" '~&gt;1.9.0'="" tutorials="" watch="" partner="" engineer="" brad="" heintz="" walks="" through="" setting="" runtime="" projects:="" corresponding="" found="" here.="" additionally,="" cover="" helped="" benchmarking.="" api="" docs="" currently,="" framework="" front-end="" apis="" directly.="" document="" it,="" exploring="" webpage.="" issues="" contribution="" any="" contribute="" pytorch,="" please="" feel="" free="" drop="" pull="" request="" touch.="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -240,14 +240,14 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 <!-- End Google Tag Manager (noscript) -->
 
     <div class="hello-bar">
-  <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+  <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
 </div>
 <div class="container-fluid header-holder mobile-header">
   <div class="container">
     
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -259,24 +259,24 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
             <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">PyTorch 基金会新手</span><p></p>
           </a>
         </div>
       </div>
@@ -287,21 +287,27 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -314,15 +320,15 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -333,12 +339,12 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -349,28 +355,28 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -384,7 +390,7 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -425,7 +431,7 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
     <div class="jumbotron jumbotron-fluid on-dark-background">
       <div class="container">
-        <h1>PyTorch 移动端</h1>
+        <h1>PyTorch 移动</h1>
 
         <p class="lead">从训练到部署的端到端工作流程，适用于 iOS 和 Android 移动设备</p>
       </div>
@@ -469,17 +475,17 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
               <div class="article-wrapper" data-id="">
                 <article class="pytorch-article">
                   <div class="note-card">
-<h4>笔记</h4>
-<p>PyTorch Mobile 已不再积极维护。请查看 <a href="/executorch-overview">ExecuTorch</a>，PyTorch 全新的设备端推理库。您还可以查看 <a href="https://maskerprc.github.io/executorch/stable/demo-apps-ios.html"> 此页面 </a> 了解如何使用 ExecuTorch 构建 iOS 应用的相关信息。</p>
+<h4>备注</h4>
+<p>PyTorch Mobile 已不再积极支持。请查看 ExecuTorch，PyTorch 全新的设备端推理库。您还可以查看此页面了解如何使用 ExecuTorch 构建 iOS 应用的相关信息。</p>
 </div>
 
 <h1 id="ios">iOS</h1>
 
-<p>要开始使用 iOS 上的 PyTorch，我们建议探索以下 <a href="https://github.com/pytorch/ios-demo-app/tree/master/HelloWorld">HelloWorld</a>。</p>
+<p>要开始使用 iOS 上的 PyTorch，我们建议探索以下 HelloWorld。</p>
 
 <h2 id="quickstart-with-a-hello-world-example">使用 Hello World 示例快速入门</h2>
 
-<p>HelloWorld 是一个简单的图像分类应用程序，演示了如何在 iOS 上使用 PyTorch C++库。代码是用 Swift 编写的，并使用 Objective-C 作为桥梁。</p>
+<p>HelloWorld 是一个简单的图像分类应用，演示了如何在 iOS 上使用 PyTorch C++库。代码是用 Swift 编写的，并使用 Objective-C 作为桥梁。</p>
 
 <h3 id="requirements">要求</h3>
 
@@ -490,34 +496,34 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
 <h3 id="model-preparation">模型准备</h3>
 
-<p>让我们从模型准备开始。如果您熟悉 PyTorch，您可能已经知道如何训练和保存模型。如果您不熟悉，我们将使用一个预训练的图像分类模型 - <a href="https://maskerprc.github.io/hub/pytorch_vision_mobilenet_v2/">MobileNet v2</a>，它已经包含在 <a href="https://maskerprc.github.io/vision/stable/index.html">TorchVision</a> 中。要安装它，请运行以下命令。</p>
+<p>让我们从模型准备开始。如果你熟悉 PyTorch，你可能已经知道如何训练和保存你的模型。如果你不熟悉，我们将使用一个预训练的图像分类模型 - MobileNet v2，它已经包含在 TorchVision 中。要安装它，请运行以下命令。</p>
 
 <blockquote>
-  <p>我们强烈建议您访问 <a href="https://github.com/pytorch/pytorch">Pytorch Github 页面</a>以在您的本地机器上设置 Python 开发环境。</p>
+  <p>我们强烈建议您关注 PyTorch 的 GitHub 页面，以在您的本地机器上设置 Python 开发环境。</p>
 </blockquote>
 
-<div class="language-shell highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>pip <span class="nb">install </span>torchvision</code>
-</font></font></font></pre></div></div>
+<div class="language-shell highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip <span class="nb">install </span>torchvision
+</code></pre></div></div>
 
-<p>一旦成功安装了 TorchVision，请导航到 HelloWorld 文件夹并运行 <code class="language-plaintext highlighter-rouge">trace_model.py</code> 脚本。该脚本包含追踪和保存可以在移动设备上运行的 <a href="https://maskerprc.github.io/tutorials/beginner/Intro_to_TorchScript_tutorial.html">torchscript 模型</a>的代码。</p>
+<p>一旦我们成功安装了 TorchVision，让我们导航到 HelloWorld 文件夹并运行 <code class="language-plaintext highlighter-rouge">trace_model.py</code> 。该脚本包含用于在移动设备上运行的 torchscript 模型的跟踪和保存代码。</p>
 
-<div class="language-shell highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>python trace_model.py</code>
-</font></font></font></pre></div></div>
+<div class="language-shell highlighter-rouge"><div class="highlight"><pre class="highlight"><code>python trace_model.py
+</code></pre></div></div>
 
-<p>如果一切顺利，<code class="language-plaintext highlighter-rouge">model.pt</code> 应该生成并保存在 <code class="language-plaintext highlighter-rouge">HelloWorld/HelloWorld/model</code> 文件夹中。</p>
+<p>如果一切顺利， <code class="language-plaintext highlighter-rouge">model.pt</code> 应该被生成并保存在 <code class="language-plaintext highlighter-rouge">HelloWorld/HelloWorld/model</code> 文件夹中。</p>
 
 <blockquote>
-  <p>想了解更多关于 TorchScript 的详细信息，请访问 <a href="https://maskerprc.github.io/tutorials/advanced/cpp_export.html">pytorch.org 上的教程</a></p>
+  <p>想了解更多关于 TorchScript 的详细信息，请访问 pytorch.org 上的教程</p>
 </blockquote>
 
 <h3 id="install-libtorch-lite-via-cocoapods">通过 Cocoapods 安装 LibTorch-Lite</h3>
 
-<p>PyTorch C++ 库在 <a href="https://cocoapods.org/">Cocoapods</a> 中可用，要将它集成到我们的项目中，只需运行</p>
+<p>PyTorch C++库在 Cocoapods 中可用，要将它集成到我们的项目中，只需运行</p>
 
 <div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">pod</span> <span class="n">install</span>
 </code></pre></div></div>
 
-<p>现在是时候在 XCode 中打开 <code class="language-plaintext highlighter-rouge">HelloWorld.xcworkspace</code>，选择一个 iOS 模拟器并启动它（cmd + R）。如果一切正常，我们应该在模拟器屏幕上看到一张狼的图片以及预测结果。</p>
+<p>现在是时候在 XCode 中打开 <code class="language-plaintext highlighter-rouge">HelloWorld.xcworkspace</code> ，选择一个 iOS 模拟器并启动它（cmd + R）。如果一切正常，我们应该在模拟器屏幕上看到一张狼的图片以及预测结果。</p>
 
 <p><img src="https://github.com/pytorch/ios-demo-app/blob/master/HelloWorld/screenshot.png?raw=true" width="50%"></p>
 
@@ -527,7 +533,7 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
 <h4 id="image-loading">图片加载</h4>
 
-<p>让我们从图像加载开始。</p>
+<p>让我们从图片加载开始。</p>
 
 <div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">let</span> <span class="nv">image</span> <span class="o">=</span> <span class="kt">UIImage</span><span class="p">(</span><span class="nv">named</span><span class="p">:</span> <span class="s">"image.jpg"</span><span class="p">)</span><span class="o">!</span>
 <span class="n">imageView</span><span class="o">.</span><span class="n">image</span> <span class="o">=</span> <span class="n">image</span>
@@ -541,7 +547,7 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
 <div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">var</span> <span class="nv">normalizedBuffer</span><span class="p">:</span> <span class="p">[</span><span class="kt">Float32</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="kt">Float32</span><span class="p">](</span><span class="nv">repeating</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="nv">count</span><span class="p">:</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span> <span class="o">*</span> <span class="mi">3</span><span class="p">)</span>
 <span class="c1">// normalize the pixel buffer</span>
-<span class="c1">// see https://maskerprc.github.io/hub/pytorch_vision_resnet/ for more detail</span>
+<span class="c1">// see https://pytorch.org/hub/pytorch_vision_resnet/ for more detail</span>
 <span class="k">for</span> <span class="n">i</span> <span class="k">in</span> <span class="mi">0</span> <span class="o">..&lt;</span> <span class="n">w</span> <span class="o">*</span> <span class="n">h</span> <span class="p">{</span>
     <span class="n">normalizedBuffer</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>             <span class="o">=</span> <span class="p">(</span><span class="kt">Float32</span><span class="p">(</span><span class="n">rawBytes</span><span class="p">[</span><span class="n">i</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="mf">255.0</span> <span class="o">-</span> <span class="mf">0.485</span><span class="p">)</span> <span class="o">/</span> <span class="mf">0.229</span> <span class="c1">// R</span>
     <span class="n">normalizedBuffer</span><span class="p">[</span><span class="n">w</span> <span class="o">*</span> <span class="n">h</span> <span class="o">+</span> <span class="n">i</span><span class="p">]</span>     <span class="o">=</span> <span class="p">(</span><span class="kt">Float32</span><span class="p">(</span><span class="n">rawBytes</span><span class="p">[</span><span class="n">i</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">+</span> <span class="mi">1</span><span class="p">])</span> <span class="o">/</span> <span class="mf">255.0</span> <span class="o">-</span> <span class="mf">0.456</span><span class="p">)</span> <span class="o">/</span> <span class="mf">0.224</span> <span class="c1">// G</span>
@@ -549,11 +555,11 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 <span class="p">}</span>
 </code></pre></div></div>
 
-<p>乍一看，代码可能看起来很奇怪，但一旦我们理解了我们的模型，它就会变得有意义。输入数据是一个形状为(3 x H x W)的 3 通道 RGB 图像，其中 H 和 W 至少为 224。图像必须加载到 <code class="language-plaintext highlighter-rouge">[0, 1]</code> 的范围内，然后使用 <code class="language-plaintext highlighter-rouge">mean = [0.485, 0.456, 0.406]</code> 和 <code class="language-plaintext highlighter-rouge">std = [0.229, 0.224, 0.225]</code> 进行归一化。</p>
+<p>乍一看代码可能看起来很奇怪，但一旦我们理解了我们的模型，它就会变得有意义。输入数据是一个形状为(3 x H x W)的 3 通道 RGB 图像，其中 H 和 W 至少应为 224。图像必须加载到 <code class="language-plaintext highlighter-rouge">[0, 1]</code> 范围内，然后使用 <code class="language-plaintext highlighter-rouge">mean = [0.485, 0.456, 0.406]</code> 和 <code class="language-plaintext highlighter-rouge">std = [0.229, 0.224, 0.225]</code> 进行归一化。</p>
 
 <h4 id="torchscript-module">TorchScript 模块</h4>
 
-<p>现在我们已经预处理了输入数据，并且有了预训练的 TorchScript 模型，下一步就是使用它们来运行预测。为此，我们首先将模型加载到应用程序中。</p>
+<p>现在我们已经预处理了输入数据，并且有一个预训练的 TorchScript 模型，下一步是使用它们来运行预测。为此，我们首先将我们的模型加载到应用程序中。</p>
 
 <div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">private</span> <span class="kd">lazy</span> <span class="k">var</span> <span class="nv">module</span><span class="p">:</span> <span class="kt">TorchModule</span> <span class="o">=</span> <span class="p">{</span>
     <span class="k">if</span> <span class="k">let</span> <span class="nv">filePath</span> <span class="o">=</span> <span class="kt">Bundle</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="nf">path</span><span class="p">(</span><span class="nv">forResource</span><span class="p">:</span> <span class="s">"model"</span><span class="p">,</span> <span class="nv">ofType</span><span class="p">:</span> <span class="s">"pt"</span><span class="p">),</span>
@@ -564,11 +570,11 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
     <span class="p">}</span>
 <span class="p">}()</span>
 </code></pre></div></div>
-<p>注意，<code class="language-plaintext highlighter-rouge">TorchModule</code> 类是 <code class="language-plaintext highlighter-rouge">torch::jit::mobile::Module</code> 的 Objective-C 封装。</p>
+<p>注意， <code class="language-plaintext highlighter-rouge">TorchModule</code> 类是 <code class="language-plaintext highlighter-rouge">torch::jit::mobile::Module</code> 的 Objective-C 封装。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">torch</span><span class="o">::</span><span class="n">jit</span><span class="o">::</span><span class="n">mobile</span><span class="o">::</span><span class="n">Module</span> <span class="n">module</span> <span class="o">=</span> <span class="n">torch</span><span class="o">::</span><span class="n">jit</span><span class="o">::</span><span class="n">_load_for_mobile</span><span class="p">(</span><span class="n">filePath</span><span class="p">.</span><span class="n">UTF8String</span><span class="p">);</span>
 </code></pre></div></div>
-<p>由于 Swift 不能直接与 C++通信，我们不得不使用 Objective-C 类作为桥梁，或者为 C++库创建 C 封装。为了演示目的，我们将所有内容都封装在这个 Objective-C 类中。</p>
+<p>由于 Swift 无法直接与 C++ 通信，我们不得不使用 Objective-C 类作为桥梁，或者为 C++ 库创建 C 封装。为了演示目的，我们将在这个 Objective-C 类中封装一切。</p>
 
 <h4 id="run-inference">运行推理</h4>
 
@@ -578,20 +584,20 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
     <span class="k">return</span>
 <span class="p">}</span>
 </code></pre></div></div>
-<p>再次强调，<code class="language-plaintext highlighter-rouge">predict</code> 方法只是一个 Objective-C 包装器。在底层，它调用 C++ 的 <code class="language-plaintext highlighter-rouge">forward</code> 函数。让我们看看它是如何实现的。</p>
+<p>再次强调， <code class="language-plaintext highlighter-rouge">predict</code> 方法只是一个 Objective-C 的封装。在底层，它调用 C++ 的 <code class="language-plaintext highlighter-rouge">forward</code> 函数。让我们看看它是如何实现的。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">at</span><span class="o">::</span><span class="n">Tensor</span> <span class="n">tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">::</span><span class="n">from_blob</span><span class="p">(</span><span class="n">imageBuffer</span><span class="p">,</span> <span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">224</span><span class="p">,</span> <span class="mi">224</span><span class="p">},</span> <span class="n">at</span><span class="o">::</span><span class="n">kFloat</span><span class="p">);</span>
 <span class="n">c10</span><span class="o">::</span><span class="n">InferenceMode</span> <span class="n">guard</span><span class="p">;</span>
 <span class="k">auto</span> <span class="n">outputTensor</span> <span class="o">=</span> <span class="n">_impl</span><span class="p">.</span><span class="n">forward</span><span class="p">({</span><span class="n">tensor</span><span class="p">}).</span><span class="n">toTensor</span><span class="p">();</span>
 <span class="kt">float</span><span class="o">*</span> <span class="n">floatBuffer</span> <span class="o">=</span> <span class="n">outputTensor</span><span class="p">.</span><span class="n">data_ptr</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">();</span>
 </code></pre></div></div>
-<p>C++ 函数 <code class="language-plaintext highlighter-rouge">torch::from_blob</code> 将从像素缓冲区创建一个输入张量。请注意，张量的形状是 <code class="language-plaintext highlighter-rouge">{1,3,224,224}</code>，它代表 <code class="language-plaintext highlighter-rouge">{N, C, H, W}</code>，正如我们在上一节中讨论的那样。</p>
+<p>C++ 函数 <code class="language-plaintext highlighter-rouge">torch::from_blob</code> 将从像素缓冲区创建一个输入张量。请注意，张量的形状是 <code class="language-plaintext highlighter-rouge">{1,3,224,224}</code> ，它代表我们在上一节中讨论的 <code class="language-plaintext highlighter-rouge">{N, C, H, W}</code> 。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">c10</span><span class="o">::</span><span class="n">InferenceMode</span> <span class="n">guard</span><span class="p">;</span>
 </code></pre></div></div>
-<p>上述行指示 PyTorch 仅进行推理。</p>
+<p>上面的行告诉 PyTorch 只进行推理。</p>
 
-<p>最后，我们可以调用这个 <code class="language-plaintext highlighter-rouge">forward</code> 函数来获取输出张量并将其转换为<code class="language-plaintext highlighter-rouge">浮点</code>缓冲区。</p>
+<p>最后，我们可以调用这个 <code class="language-plaintext highlighter-rouge">forward</code> 函数来获取输出张量并将其转换为 <code class="language-plaintext highlighter-rouge">float</code> 缓冲区。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">outputTensor</span> <span class="o">=</span> <span class="n">_impl</span><span class="p">.</span><span class="n">forward</span><span class="p">({</span><span class="n">tensor</span><span class="p">}).</span><span class="n">toTensor</span><span class="p">();</span>
 <span class="kt">float</span><span class="o">*</span> <span class="n">floatBuffer</span> <span class="o">=</span> <span class="n">outputTensor</span><span class="p">.</span><span class="n">data_ptr</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">();</span>
@@ -599,7 +605,7 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
 <h3 id="collect-results">收集结果</h3>
 
-<p>输出张量是一个形状为 1x1000 的一维浮点数组，其中每个值代表从图像中预测出的标签的置信度。下面的代码对数组进行排序并检索前三个结果。</p>
+<p>输出的张量是一个形状为 1x1000 的一维浮点数组，其中每个值代表从图像中预测出的标签的置信度。下面的代码对数组进行排序并检索前三个结果。</p>
 
 <div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">let</span> <span class="nv">zippedResults</span> <span class="o">=</span> <span class="nf">zip</span><span class="p">(</span><span class="n">labels</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="n">outputs</span><span class="p">)</span>
 <span class="k">let</span> <span class="nv">sortedResults</span> <span class="o">=</span> <span class="n">zippedResults</span><span class="o">.</span><span class="n">sorted</span> <span class="p">{</span> <span class="nv">$0</span><span class="o">.</span><span class="mi">1</span><span class="o">.</span><span class="n">floatValue</span> <span class="o">&gt;</span> <span class="nv">$1</span><span class="o">.</span><span class="mi">1</span><span class="o">.</span><span class="n">floatValue</span> <span class="p">}</span><span class="o">.</span><span class="nf">prefix</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
@@ -607,67 +613,67 @@ let image = UIImage(named: " image.jpg")!="" imageview.image="image" let="" resi
 
 <h2 id="pytorch-demo-app">PyTorch 演示应用</h2>
 
-<p>对于更复杂的使用场景，我们建议查看 <a href="https://github.com/pytorch/ios-demo-app">PyTorch 演示应用程序 </a>。该演示应用包含两个展示。一个相机应用，它运行量化模型以实时预测来自设备后置摄像头的图像。还有一个基于文本的应用，它使用文本分类模型来预测输入字符串的主题。</p>
+<p>对于更复杂的使用场景，我们建议查看 PyTorch 演示应用程序。该演示应用包含两个展示。一个相机应用，它运行量化模型以实时预测来自设备后置摄像头的图像。还有一个基于文本的应用，它使用文本分类模型来预测输入字符串的主题。</p>
 
 <h2 id="more-pytorch-ios-demo-apps">更多 PyTorch iOS 演示应用</h2>
 
 <h3 id="image-segmentation">图像分割</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/ImageSegmentation">图像分割</a>演示了一个 Python 脚本，该脚本将 PyTorch <a href="https://maskerprc.github.io/hub/pytorch_vision_deeplabv3_resnet101/">DeepLabV3</a> 模型转换为适用于移动应用，并展示了如何使用 iOS 应用程序来分割图像。</p>
+<p>图像分割演示了一个 Python 脚本，该脚本将 PyTorch DeepLabV3 模型转换为适用于移动应用的模型，并展示了如何使用 iOS 应用程序来分割图像。</p>
 
 <h3 id="object-detection">目标检测</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/ObjectDetection">目标检测</a>演示了如何将流行的 <a href="https://maskerprc.github.io/hub/ultralytics_yolov5/">YOLOv5</a> 模型转换为 iOS 应用程序，并在 iOS 应用程序中使用该模型从您的照片、相机拍摄的照片或实时相机中检测对象。</p>
+<p>目标检测演示了如何将流行的 YOLOv5 模型转换为 iOS 应用程序，并使用该应用程序从您的照片、相机拍摄的照片或实时相机中检测对象。</p>
 
 <h3 id="neural-machine-translation">神经机器翻译</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/Seq2SeqNMT">神经机器翻译</a>演示了如何将使用 <a href="https://maskerprc.github.io/tutorials/intermediate/seq2seq_translation_tutorial.html">PyTorch NMT 教程</a>中的代码训练的序列到序列神经机器翻译模型转换为 iOS 应用程序，并使用该模型进行法语-英语翻译。</p>
+<p>神经机器翻译演示了如何将使用 PyTorch NMT 教程中的代码训练的序列到序列神经机器翻译模型转换为 iOS 应用中的法语-英语翻译。</p>
 
 <h3 id="question-answering">问答</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/QuestionAnswering">问答</a>演示了如何将强大的 Transformer 问答模型转换为 iOS 应用程序，并使用该模型回答有关 PyTorch Mobile 等问题。</p>
+<p>问答演示了如何将强大的 Transformer 问答模型转换为 iOS 应用，并使用该模型回答有关 PyTorch Mobile 等问题。</p>
 
 <h3 id="vision-transformer">视觉 Transformer</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/ViT4MNIST">视觉 Transformer</a> 演示了如何使用 Facebook 最新的视觉 Transformer <a href="https://github.com/facebookresearch/deit">DeiT</a> 模型进行图像分类，以及如何将另一个视觉 Transformer 模型转换为 iOS 应用，以执行手写数字识别。</p>
+<p>视觉 Transformer 演示了如何使用 Facebook 最新的视觉 Transformer DeiT 模型进行图像分类，以及如何将另一个视觉 Transformer 模型转换为 iOS 应用以执行手写数字识别。</p>
 
 <h3 id="speech-recognition">语音识别</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/SpeechRecognition">语音识别</a>演示了如何将 Facebook AI 的 wav2vec 2.0，语音识别领域的领先模型之一，转换为 TorchScript，以及如何在 iOS 应用中使用脚本模型进行语音识别。</p>
+<p>语音识别演示了如何将 Facebook AI 的 wav2vec 2.0（语音识别领域的领先模型之一）转换为 TorchScript，以及如何在 iOS 应用程序中使用脚本模型进行语音识别。</p>
 
 <h3 id="video-classification">视频分类</h3>
 
-<p><a href="https://github.com/pytorch/ios-demo-app/tree/master/TorchVideo">TorchVideo</a> 演示了如何在 iOS 上使用预训练的视频分类模型，该模型可在新发布的 <a href="https://github.com/facebookresearch/pytorchvideo">PyTorchVideo</a> 中找到，查看视频分类结果，视频播放时每秒更新一次，在测试视频中，照片库中的视频，甚至是实时视频中。</p>
+<p>TorchVideo 演示了如何在 iOS 上使用 PyTorchVideo（新发布的 PyTorch 视频库）中提供的预训练视频分类模型，在播放测试视频、照片库中的视频或实时视频时，每秒更新视频分类结果。</p>
 
 <h2 id="pytorch-ios-tutorial-and-recipes">PyTorch iOS 教程与食谱</h2>
 
-<h3 id="image-segmentation-deeplabv3-on-ios"><a href="https://maskerprc.github.io/tutorials/beginner/deeplabv3_on_ios.html">iOS 上的图像分割 DeepLabV3</a></h3>
+<h3 id="image-segmentation-deeplabv3-on-ios"><a href="https://pytorch.org/tutorials/beginner/deeplabv3_on_ios.html">图像分割 DeepLabV3 在 iOS 上</a></h3>
 
-<p>一份全面详细的教程，教你如何在 iOS 上准备和运行 PyTorch DeepLabV3 图像分割模型。</p>
+<p>一份全面详细的教程，介绍如何在 iOS 上准备和运行 PyTorch DeepLabV3 图像分割模型。</p>
 
-<h3 id="pytorch-mobile-performance-recipes"><a href="https://maskerprc.github.io/tutorials/recipes/mobile_perf.html">PyTorch Mobile 性能秘籍</a></h3>
+<h3 id="pytorch-mobile-performance-recipes"><a href="https://pytorch.org/tutorials/recipes/mobile_perf.html">PyTorch Mobile 性能优化秘籍</a></h3>
 
-<p>使用 PyTorch 在移动设备上性能优化的食谱列表</p>
+<p>使用 PyTorch 在移动设备上性能优化的秘籍列表。</p>
 
-<h3 id="fuse-modules-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/fuse.html">模块融合食谱</a></h3>
+<h3 id="fuse-modules-recipe"><a href="https://pytorch.org/tutorials/recipes/fuse.html">模块融合秘籍</a></h3>
 
-<p>学习如何将 PyTorch 模块列表融合成一个单一模块，以在量化前减小模型大小。</p>
+<p>学习如何将一系列 PyTorch 模块融合成一个单一模块，以在量化之前减小模型大小。</p>
 
-<h3 id="quantization-for-mobile-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/quantization.html">移动量化食谱</a></h3>
+<h3 id="quantization-for-mobile-recipe"><a href="https://pytorch.org/tutorials/recipes/quantization.html">移动端食谱的量化</a></h3>
 
 <p>学习如何在不损失太多准确性的情况下减小模型大小并使其运行更快。</p>
 
-<h3 id="script-and-optimize-for-mobile"><a href="https://maskerprc.github.io/tutorials/recipes/script_optimized.html">为移动端编写和优化脚本</a></h3>
+<h3 id="script-and-optimize-for-mobile"><a href="https://pytorch.org/tutorials/recipes/script_optimized.html">脚本优化以适应移动端</a></h3>
 
-<p>学习如何将模型转换为 TorchScipt，并（可选）为移动应用进行优化。</p>
+<p>学习如何将模型转换为 TorchScript，并（可选）为移动应用优化。</p>
 
-<h3 id="model-preparation-for-ios-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/model_preparation_ios.html">iOS 模型准备食谱</a></h3>
+<h3 id="model-preparation-for-ios-recipe"><a href="https://pytorch.org/tutorials/recipes/model_preparation_ios.html">iOS 模型准备菜谱</a></h3>
 
 <p>学习如何在 iOS 项目中添加模型并使用 PyTorch pod。</p>
 
-<h2 id="build-pytorch-ios-libraries-from-source">从源代码构建 PyTorch iOS 库</h2>
+<h2 id="build-pytorch-ios-libraries-from-source">从源码构建 PyTorch iOS 库</h2>
 
-<p>跟踪 iOS 的最新更新，您可以从源代码构建 PyTorch iOS 库。</p>
+<p>要跟踪 iOS 的最新更新，您可以从源代码构建 PyTorch iOS 库。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git clone --recursive https://github.com/pytorch/pytorch
 cd pytorch
@@ -677,12 +683,12 @@ git submodule update --init --recursive
 </code></pre></div></div>
 
 <blockquote>
-  <p>确保您已正确安装 <code class="language-plaintext highlighter-rouge">cmake</code> 和 Python。我们建议您参考 <a href="https://github.com/pytorch/pytorch">PyTorch 的 GitHub 页面</a>来设置 Python 开发环境。</p>
+  <p>确保您已经在本地机器上正确安装了 <code class="language-plaintext highlighter-rouge">cmake</code> 和 Python。我们建议您参考 PyTorch 的 Github 页面来设置 Python 开发环境</p>
 </blockquote>
 
-<h3 id="build-libtorch-lite-for-ios-simulators">构建适用于 iOS 模拟器的 LibTorch-Lite。</h3>
+<h3 id="build-libtorch-lite-for-ios-simulators">构建 LibTorch-Lite 用于 iOS 模拟器</h3>
 
-<p>打开终端并导航到 PyTorch 根目录。运行以下命令（如果您已经为 iOS 设备构建了 LibTorch-Lite（见下文），请先运行 <code class="language-plaintext highlighter-rouge">rm -rf build_ios</code>）：</p>
+<p>打开终端并导航到 PyTorch 根目录。运行以下命令（如果您已经为 iOS 设备构建了 LibTorch-Lite（见下文），请先运行 <code class="language-plaintext highlighter-rouge">rm -rf build_ios</code> ）：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>BUILD_PYTORCH_MOBILE=1 IOS_PLATFORM=SIMULATOR ./scripts/build_ios.sh
 </code></pre></div></div>
@@ -690,42 +696,42 @@ git submodule update --init --recursive
 
 <h3 id="build-libtorch-lite-for-arm64-devices">为 arm64 设备构建 LibTorch-Lite</h3>
 
-<p>打开终端并导航到 PyTorch 根目录。运行以下命令（如果您已经为 iOS 模拟器构建了 LibTorch-Lite，请先运行 <code class="language-plaintext highlighter-rouge">rm -rf build_ios</code>）</p>
+<p>打开终端并导航到 PyTorch 根目录。运行以下命令（如果您已经为 iOS 模拟器构建了 LibTorch-Lite，请先运行 <code class="language-plaintext highlighter-rouge">rm -rf build_ios</code> ）：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>BUILD_PYTORCH_MOBILE=1 IOS_ARCH=arm64 ./scripts/build_ios.sh
 </code></pre></div></div>
-<p>构建成功后，所有静态库和头文件将生成在 <code class="language-plaintext highlighter-rouge">build_ios/install</code> 目录下</p>
+<p>构建成功后，所有静态库和头文件将生成在 <code class="language-plaintext highlighter-rouge">build_ios/install</code> 下</p>
 
 <h3 id="xcode-setup">XCode 设置</h3>
 
-<p>在 XCode 中打开您的项目，转到项目目标的 <code class="language-plaintext highlighter-rouge"> 构建阶段 </code> - <code class="language-plaintext highlighter-rouge"> 链接库 </code>，点击加号并添加位于 <code class="language-plaintext highlighter-rouge">build_ios/install/lib</code> 中的所有库文件。导航到项目的 <code class="language-plaintext highlighter-rouge"> 构建设置 </code>，将 <strong> 头文件搜索路径 </strong> 的值设置为 <code class="language-plaintext highlighter-rouge">build_ios/install/include</code>，并将 <strong> 库搜索路径 </strong> 设置为 <code class="language-plaintext highlighter-rouge">build_ios/install/lib</code>。</p>
+<p>在 XCode 中打开您的项目，前往项目目标的 <code class="language-plaintext highlighter-rouge">Build Phases</code> - <code class="language-plaintext highlighter-rouge">Link Binaries With Libraries</code> ，点击加号并添加位于 <code class="language-plaintext highlighter-rouge">build_ios/install/lib</code> 的所有库文件。导航到项目 <code class="language-plaintext highlighter-rouge">Build Settings</code> ，设置 Header Search Paths 的值为 <code class="language-plaintext highlighter-rouge">build_ios/install/include</code> ，Library Search Paths 的值为 <code class="language-plaintext highlighter-rouge">build_ios/install/lib</code> 。</p>
 
-<p>在构建设置中搜索 <strong> 其他链接器标志 </strong>。在下方添加自定义链接器标志</p>
+<p>在构建设置中，搜索其他链接器标志。在下方添加自定义链接器标志。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>-all_load
 </code></pre></div></div>
 
-<p>要使用项目中的自定义构建库，请将以下代码替换 <code class="language-plaintext highlighter-rouge">#import &lt;LibTorch-Lite/LibTorch-Lite.h&gt;</code>  （在 <code class="language-plaintext highlighter-rouge">TorchModule.mm</code> 中），这是使用通过 Cocoapods 的 LibTorch-Lite 时所需的代码：</p>
+<p>要在项目中使用自定义构建的库，将 <code class="language-plaintext highlighter-rouge">#import &lt;LibTorch-Lite/LibTorch-Lite.h&gt;</code> （在 <code class="language-plaintext highlighter-rouge">TorchModule.mm</code> 中）替换为以下代码，这是使用 CocoaPods 的 LibTorch-Lite 时所需的：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>#include &lt;torch/csrc/jit/mobile/import.h&gt;
 #include &lt;torch/csrc/jit/mobile/module.h&gt;
 #include &lt;torch/script.h&gt;
 </code></pre></div></div>
 
-<p>最后，通过选择构建设置，搜索 <strong> 启用 Bitcode</strong>，并将值设置为 <strong> 否 </strong> 来禁用您的目标中的 Bitcode。</p>
+<p>最后，通过选择构建设置，搜索启用位码，并将值设置为 No 来禁用您的目标位码。</p>
 
 <h2 id="using-the-nightly-pytorch-ios-libraries-in-cocoapods">在 CocoaPods 中使用 Nightly PyTorch iOS 库</h2>
-<p>如果你想尝试添加到 PyTorch iOS 中的最新功能，你可以在你的 <code class="language-plaintext highlighter-rouge">LibTorch-Lite-Nightly</code> pod 中使用，它包含每晚构建的库：</p>
+<p>如果你想尝试添加到 PyTorch iOS 的最新功能，你可以在你的 <code class="language-plaintext highlighter-rouge">Podfile</code> 中使用 <code class="language-plaintext highlighter-rouge">LibTorch-Lite-Nightly</code> pod，它包括夜间构建的库：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pod 'LibTorch-Lite-Nightly'
 </code></pre></div></div>
-<p>然后运行 <code class="language-plaintext highlighter-rouge">pod install</code> 将其添加到你的项目中。如果你想将夜间 pod 更新到最新版本，你可以运行 <code class="language-plaintext highlighter-rouge">pod update</code> 来获取最新版本。但请注意，你可能需要使用最新的 PyTorch 在移动设备上构建模型 - 使用最新的 PyTorch 代码或通过命令如 <code class="language-plaintext highlighter-rouge">pip install --pre torch torchvision -f https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html</code> 快速安装夜间版本，以避免在移动设备上运行模型时可能出现的模型版本不匹配错误。</p>
+<p>然后运行 <code class="language-plaintext highlighter-rouge">pod install</code> 将其添加到你的项目中。如果你想将夜间 pod 更新到最新版本，你可以运行 <code class="language-plaintext highlighter-rouge">pod update</code> 来获取最新版本。但请注意，你可能需要使用最新的 PyTorch 在移动设备上构建模型 - 要么使用最新的 PyTorch 代码，要么使用如 <code class="language-plaintext highlighter-rouge">pip install --pre torch torchvision -f https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html</code> 之类的命令快速安装夜间版本 - 以避免在移动设备上运行模型时可能出现的模型版本不匹配错误。</p>
 
 <h2 id="custom-build">自定义构建</h2>
 
 <p>从 1.4.0 版本开始，PyTorch 支持自定义构建。现在您可以构建只包含模型所需算子的 PyTorch 库。为此，请按照以下步骤操作</p>
 
-<p>1. 验证您的 PyTorch 版本为 1.4.0 或更高版本。您可以通过检查 <code class="language-plaintext highlighter-rouge">torch.__version__</code> 的值来完成此操作。</p>
+<p>1. 请验证您的 PyTorch 版本为 1.4.0 或更高版本。您可以通过检查 <code class="language-plaintext highlighter-rouge">torch.__version__</code> 的值来完成此操作。</p>
 
-<p>2. 要导出模型中的算子，例如 <code class="language-plaintext highlighter-rouge">MobileNetV2</code>，请运行以下 Python 代码行：</p>
+<p>2. 要导出模型中的算子，即 <code class="language-plaintext highlighter-rouge">MobileNetV2</code> ，请运行以下 Python 代码行：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span><span class="p">,</span> <span class="n">yaml</span>
 <span class="n">model</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">jit</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="s">'MobileNetV2.pt'</span><span class="p">)</span>
@@ -735,39 +741,39 @@ git submodule update --init --recursive
 </code></pre></div></div>
 <p>在上述代码片段中，您首先需要加载 ScriptModule。然后，使用 <code class="language-plaintext highlighter-rouge">export_opnames</code> 返回 ScriptModule 及其子模块的算子名称列表。最后，将结果保存到 yaml 文件中。</p>
 
-<p>3. 要在本地使用上一步生成的算子 yaml 列表运行 iOS 构建脚本，请将 yaml 文件传递给环境变量 <code class="language-plaintext highlighter-rouge">SELECTED_OP_LIST</code>。同时，在参数中指定 <code class="language-plaintext highlighter-rouge">BUILD_PYTORCH_MOBILE=1</code> 以及平台/架构类型。以 arm64 构建为例，命令应该是：</p>
+<p>3. 在本地运行 iOS 构建脚本并使用上一步准备好的操作员 yaml 列表时，请将上一步生成的 yaml 文件传递给环境变量 <code class="language-plaintext highlighter-rouge">SELECTED_OP_LIST</code> 。同时，在参数中也要指定 <code class="language-plaintext highlighter-rouge">BUILD_PYTORCH_MOBILE=1</code> 以及平台/架构类型。以 arm64 构建为例，命令应该是：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>SELECTED_OP_LIST=MobileNetV2.yaml BUILD_PYTORCH_MOBILE=1 IOS_ARCH=arm64 ./scripts/build_ios.sh
 </code></pre></div></div>
-<p>4. 构建成功后，您可以按照上面的 <a href="#xcode-setup">XCode 设置</a>部分将结果库集成到您的项目中。</p>
+<p>4. 构建成功后，您可以按照上述 XCode 设置部分将结果库集成到您的项目中。</p>
 
-<p>5. 最后一步是在运行 <code class="language-plaintext highlighter-rouge">forward</code> 之前添加一行 C++代码。这是因为默认情况下 JIT 会对运算符（例如融合）进行一些优化，这可能会破坏与我们从模型中导出的运算符的一致性。</p>
+<p>5. 最后一步是在运行 <code class="language-plaintext highlighter-rouge">forward</code> 之前添加一行 C++代码。这是因为默认情况下，JIT 会对操作符进行一些优化（例如融合），这可能会破坏与我们从模型中导出的操作符的一致性。</p>
 
 <div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">torch</span><span class="o">::</span><span class="n">jit</span><span class="o">::</span><span class="n">GraphOptimizerEnabledGuard</span> <span class="nf">guard</span><span class="p">(</span><span class="nb">false</span><span class="p">);</span>
 </code></pre></div></div>
 
 <h2 id="use-pytorch-jit-interpreter">使用 PyTorch JIT 解释器</h2>
-<p>PyTorch JIT 解释器在 1.9 版本之前是默认解释器（我们 PyTorch 解释器的一种不是特别节省空间的版本）。它将在 1.9 版本中继续得到支持，并可以在 CocoaPods 中使用：</p>
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>pod 'LibTorch', '~&gt;1.9.0'</code>
-</font></font></font></pre></div></div>
+<p>PyTorch JIT 解释器在 1.9 版本之前是默认解释器（我们 PyTorch 解释器的一种，但大小效率不高）。它将在 1.9 版本中仍然得到支持，并且可以在 CocoaPods 中使用：</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pod 'LibTorch', '~&gt;1.9.0'
+</code></pre></div></div>
 
 <h2 id="ios-tutorials">iOS 教程</h2>
 
-<p>请观看以下<a href="https://youtu.be/amTepUIR93k">视频 </a>，PyTorch 合作工程师 Brad Heintz 将为您演示设置 PyTorch 运行时在 iOS 项目中的步骤：</p>
+<p>请观看以下视频，PyTorch 合作伙伴工程师 Brad Heintz 将指导您设置 PyTorch 运行时 iOS 项目的步骤：</p>
 
 <p><a href="https://youtu.be/amTepUIR93k&quot; PyTorch Mobile Runtime for iOS&quot;"><img src="https://i.ytimg.com/vi/JFy3uHyqXn0/maxresdefault.jpg" alt="PyTorch Mobile Runtime for iOS" height="75%" width="75%"></a></p>
 
-<p>对应的代码可以在<a href="https://github.com/pytorch/workshops/tree/master/PTMobileWalkthruIOS">这里</a>找到。</p>
+<p>相应的代码可以在以下链接找到。</p>
 
-<p>此外，请查看我们的<a href="https://maskerprc.github.io/tutorials/recipes/mobile_perf.html">移动性能秘籍 </a>，这些秘籍涵盖了如何优化您的模型，并通过基准测试检查优化是否有效。</p>
+<p>此外，请查看我们的移动性能菜谱，其中涵盖了如何优化您的模型以及如何通过基准测试检查优化是否有所帮助。</p>
 
 <h2 id="api-docs">API 文档</h2>
 
-<p>目前，iOS 框架直接使用 PyTorch C++ 前端 API。C++ 文档可以在<a href="https://maskerprc.github.io/cppdocs/">这里</a>找到。要了解更多信息，我们建议您在 PyTorch 网页上探索 <a href="https://maskerprc.github.io/tutorials/advanced/cpp_frontend.html">C++ 前端教程 </a>。</p>
+<p>目前，iOS 框架直接使用 Pytorch C++ 前端 API。C++ 文档可以在此处找到。要了解更多信息，我们建议您在 PyTorch 网页上探索 C++ 前端教程。</p>
 
 <h2 id="issues-and-contribution">问题与贡献</h2>
 
-<p>如果您有任何问题或想为 PyTorch 贡献，请随时提交问题或发起拉取请求以取得联系。</p>
+<p>如果您有任何问题或想为 PyTorch 做出贡献，请随时提交问题或发起拉取请求以取得联系。</p>
 
 <!-- Do not remove the below script -->
 
@@ -787,14 +793,14 @@ git submodule update --init --recursive
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -811,7 +817,7 @@ git submodule update --init --recursive
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -824,7 +830,7 @@ git submodule update --init --recursive
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -832,7 +838,7 @@ git submodule update --init --recursive
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -861,9 +867,7 @@ git submodule update --init --recursive
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -873,7 +877,7 @@ git submodule update --init --recursive
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -898,19 +902,19 @@ git submodule update --init --recursive
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -933,7 +937,7 @@ git submodule update --init --recursive
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -947,7 +951,7 @@ git submodule update --init --recursive
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -982,7 +986,7 @@ git submodule update --init --recursive
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -996,7 +1000,7 @@ git submodule update --init --recursive
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1064,7 +1068,7 @@ git submodule update --init --recursive
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

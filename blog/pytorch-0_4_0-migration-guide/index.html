@@ -42,8 +42,8 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 >>> print(type(x))  # was torch.DoubleTensor
 " &lt;class="" 'torch.tensor'&gt;"="" &gt;&gt;&gt;="" print(x.type())="" #="" ok:="" 'torch.doubletensor'="" print(isinstance(x,="" torch.doubletensor))="" true="" when="" does="" autograd="" start="" tracking="" history="" now?="" requires_grad,="" the="" central="" flag="" for="" autograd,="" is="" now="" an="" attribute="" on="" tensors.="" same="" rules="" previously="" used="" variables="" applies="" to="" tensors;="" starts="" any="" input="" tensor="" of="" operation="" has="" requires_grad="True." example,="" x="torch.ones(1)" create="" a="" with="" (default)="" x.requires_grad="" false="" y="torch.ones(1)" another="" z="x" +="" both="" inputs="" have="" so="" output="" z.requires_grad="" then="" won't="" track="" this="" computation.="" let's="" verify!="" z.backward()="" runtimeerror:="" element="" 0="" tensors="" not="" require="" grad="" and="" grad_fn="" w="torch.ones(1," w.requires_grad="" add="" previous="" result="" that="" require_grad="False" total="w" sum="" requires="" grad!="" total.requires_grad="" can="" compute="" gradients="" as="" well="" total.backward()="" w.grad="" tensor([="" 1.])="" no="" computation="" wasted="" x,="" z,="" which="" don't="" z.grad="=" x.grad="=" y.grad="=" none="" manipulating="" other="" than="" directly="" setting="" attribute,="" you="" change="" in-place="" using="" my_tensor.requires_grad_(),="" or,="" in="" above="" at="" creation="" time="" by="" passing="" it="" argument="" (default="" false),="" e.g.,="" existing_tensor.requires_grad_()="" existing_tensor.requires_grad="" my_tensor="torch.zeros(3," 4,="" my_tensor.requires_grad="" what="" about="" .data?="" .data="" was="" primary="" way="" get="" underlying="" from="" variable.="" after="" merge,="" calling="" still="" similar="" semantics.="" will="" be="" shares="" data="" unrelated="" however,="" unsafe="" some="" cases.="" changes="" x.data="" wouldn’t="" tracked="" computed="" would="" incorrect="" if="" needed="" backward="" pass.="" safer="" alternative="" use="" x.detach(),="" also="" returns="" but="" its="" reported="" backward.="" here="" example="" difference="" between="" x.detach()="" (and="" why="" we="" recommend="" detach="" general).="" tensor.detach(),="" gradient="" guaranteed="" correct.="" out="a.sigmoid()" c="out.detach()" c.zero_()="" 0.,="" 0.])="" modified="" !!="" out.sum().backward()="" original="" value="" out,="" overwritten="" one="" been="" tensor.data="" easily="" required="" in-place.="" a.grad="" very,="" very="" wrong="" because="" `out`="" changed!="" support="" 0-dimensional="" (scalar)="" previously,="" indexing="" into="" vector="" (1-dimensional="" tensor)="" gave="" python="" number="" variable="" (inconsistently!)="" size="" (1,)!="" behavior="" existed="" reduction="" functions,="" e.g.="" tensor.sum()="" return="" number,="" variable.sum()="" (1,).="" fortunately,="" release="" introduces="" proper="" scalar="" (0-dimensional="" pytorch!="" scalars="" created="" new="" torch.tensor="" function="" (which="" explained="" more="" detail="" later;="" just="" think="" pytorch="" equivalent="" numpy.array).="" do="" things="" like:="" torch.tensor(3.1416)="" tensor(3.1416)="" torch.tensor(3.1416).size()="" torch.size([])="" torch.tensor([3]).size()="" compare="" 1="" torch.size([1])="" 6)="" 2.,="" 3.,="" 4.,="" 5.])="" vector.size()="" torch.size([4])="" vector[3]="" gives="" tensor(5.)="" vector[3].item()="" .item()="" 5.0="" mysum="torch.tensor([2," 3]).sum()="" tensor(5)="" mysum.size()="" accumulating="" losses="" consider="" widely="" pattern="" total_loss="" before="" 0.4.0.="" loss="" wrapping="" (1,),="" 0.4.0="" dimensions.="" doesn’t="" make="" sense="" (it="" warning="" now,="" hard="" error="" 0.5.0).="" loss.item()="" scalar.="" note="" don’t="" convert="" losses,="" may="" find="" increased="" memory="" usage="" your="" program.="" right-hand-side="" expression="" float,="" while="" zero-dim="" tensor.="" thus="" their="" history,="" keep="" around="" large="" graphs="" much="" longer="" necessary.="" deprecation="" volatile="" deprecated="" effect.="" involves="" autograd.="" replaced="" set="" flexible="" context="" managers="" including="" torch.no_grad(),="" torch.set_grad_enabled(grad_mode),="" others.="" torch.no_grad():="" ...="" *="" 2="" y.requires_grad="" is_train="False" torch.set_grad_enabled(is_train):="" torch.set_grad_enabled(true)="" torch.set_grad_enabled(false)="" dtypes,="" devices="" numpy-style="" functions="" versions="" pytorch,="" specify="" type="" (e.g.="" float="" vs="" double),="" device="" (cpu="" cuda)="" layout="" (dense="" sparse)="" together="" “tensor="" type”.="" torch.cuda.sparse.doubletensor="" representing="" double="" type,="" living="" cuda="" devices,="" coo="" sparse="" layout.="" release,="" introduce="" torch.dtype,="" torch.device="" torch.layout="" classes="" allow="" better="" management="" these="" properties="" via="" functions.="" torch.dtype="" below="" complete="" list="" available="" torch.dtypes="" (data="" types)="" corresponding="" types.="" types="" 32-bit="" floating="" point="" torch.float32="" or="" torch.float="" torch.*.floattensor="" 64-bit="" torch.float64="" torch.double="" torch.*.doubletensor="" 16-bit="" torch.float16="" torch.half="" torch.*.halftensor="" 8-bit="" integer="" (unsigned)="" torch.uint8="" torch.*.bytetensor="" (signed)="" torch.int8="" torch.*.chartensor="" torch.int16="" torch.short="" torch.*.shorttensor="" torch.int32="" torch.int="" torch.*.inttensor="" torch.int64="" torch.long="" torch.*.longtensor="" dtype="" access="" attribute.="" contains="" ('cpu'="" 'cuda')="" optional="" ordinal="" (id)="" type.="" initialized="" torch.device('{device_type}')="" torch.device('{device_type}:{device_ordinal}').="" present,="" represents="" current="" type;="" torch.device('cuda')="" torch.device('cuda:x')="" where="" torch.cuda.current_device().="" accessed="" currently="" torch.strided="" tensors,="" default)="" torch.sparse_coo="" (sparse="" format)="" are="" supported.="" creating="" methods="" take="" dtype,="" device,="" layout,="" options="" desired="" attributes="" returned="" 3,="" tensor([[-0.6344,="" 0.8562,="" -1.2758],="" [="" 0.8414,="" 1.7962,="" 1.0589],="" [-0.1369,="" -1.0462,="" -0.4373]],="" )="" default="" torch.tensor(data,="" ...)="" newly="" added="" methods.="" takes="" array-like="" all="" kinds="" copies="" contained="" values="" mentioned="" earlier,="" numpy’s="" numpy.arrayconstructor.="" unlike="" torch.*tensor="" methods,="" zero-dimensional="" (aka="" scalars)="" (a="" single="" treated="" methods).="" moreover,="" isn’t="" given,="" infer="" suitable="" given="" data.="" recommended="" existing="" like="" list.="" torch.tensor([[1],="" [2],="" [3]],="" tensor([[="" 1],="" 2],="" 3]],="" torch.tensor(1)="" tensor(1)="" torch.tensor([1,="" 2.3]).dtype="" inferece="" 2]).dtype="" we’ve="" them="" torch.*_like="" tensor.new_*="" variants.="" instead="" shape.="" unless="" otherwise="" specified:="" torch.zeros_like(x)="" 0.],="" torch.zeros_like(x,="" 0,="" 0],="" tensor,="" always="" shape="" argument:="" x.new_ones(2)="" 1.,="" 1.],="" x.new_ones(4,="" 1,="" shape,="" either="" tuple="" (e.g.,="" torch.zeros((2,="" 3)))="" arguments="" torch.zeros(2,="" 3))="" most="" variant="" torch.empty="" uninitialized="" ✔="" torch.zeros="" zeros="" torch.ones="" ones="" torch.full="" filled="" torch.rand="" i.i.d.="" continuous="" uniform[0,="" 1)=""  ="" torch.randn="" normal(0,="" torch.randint="" discrete="" uniform="" range="" torch.randperm="" random="" permutation="" {0,="" ...,="" n="" -="" 1}="" copied="" (list,="" numpy="" ndarray,="" etc.)="" torch.from_numpy*="" ndarray="" (sharing="" storage="" without="" copying)="" torch.arange,="" torch.range,="" torch.linspace="" uniformly="" spaced="" torch.logspace="" logarithmically="" torch.eye="" identity="" matrix="" *:="" torch.from_numpy="" only="" argument.="" writing="" device-agnostic="" code="" made="" difficult="" write="" agnostic="" (i.e.="" could="" run="" cuda-enabled="" cpu-only="" machines="" modification).="" makes="" easier="" two="" ways:="" (get_device="" works="" tensors)="" method="" modules="" move="" objects="" different="" (instead="" having="" call="" cpu()="" cuda()="" based="" context)="" following="" pattern:="" beginning="" script="" torch.cuda.is_available()="" else="" "cpu")="" whenever="" module="" copy="" they="" already="" model="MyModule(...).to(device)" edge-case="" constraints="" names="" submodules,="" parameters,="" buffers="" nn.module="" empty="" string="" "."="" permitted="" module.add_module(name,="" value),="" module.add_parameter(name,="" value)="" module.add_buffer(name,="" such="" cause="" lost="" state_dict.="" loading="" checkpoint="" containing="" names,="" please="" update="" definition="" patch="" state_dict="" it.="" samples="" (putting="" together)="" flavor="" overall="" 0.4.0,="" let’s="" look="" quick="" common="" 0.3.1="" 0.4.0:="" (old):="" use_cuda:="" train="" input,="" target="" train_loader:="" variable(target)="" hidden="Variable(torch.zeros(*h_shape))" init="" target,="" target.cuda(),="" hidden.cuda()="" optimize="" evaluate="" test_loader:="" (new):="" object="" throughout="" use_cuda="" target.to(device)="" &amp;="" `input`="" 1-element="" operations="" inside="" thank="" reading!="" refer="" our="" documentation="" notes="" details.="" happy="" pytorch-ing!="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -121,7 +121,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -129,7 +129,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -141,24 +141,24 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -169,10 +169,16 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
@@ -182,8 +188,8 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -191,18 +197,20 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -213,12 +221,12 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -226,31 +234,31 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">博客与新闻</a>
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -264,7 +272,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -300,7 +308,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2018年4月22日</p>
+            <p class="featured-post">2018 年 4 月 22 日</p>
             <h1>
                 <a class="blog-title">PyTorch 0.4.0 迁移指南</a>
             </h1>
@@ -313,24 +321,24 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由 PyTorch 团队</p>
-                    <p>欢迎阅读 PyTorch 0.4.0 迁移指南。在本版本中，我们引入了许多令人兴奋的新功能和关键错误修复 <a href="https://github.com/pytorch/pytorch/releases/tag/v0.4.0">，目标是提供更好的、更简洁的用户界面。</a> 在本指南中，我们将介绍从先前版本迁移现有代码时最重要的更改：</p>
+                    <p>欢迎阅读 PyTorch 0.4.0 迁移指南。在本版本中，我们引入了许多令人兴奋的新功能和关键错误修复，旨在为用户提供更好、更简洁的界面。在本指南中，我们将介绍从先前版本迁移现有代码时最重要的更改：</p>
 
 <ul>
-  <li><code class="language-plaintext highlighter-rouge">张量</code>和<code class="language-plaintext highlighter-rouge">变量</code>已合并</li>
-  <li>支持 0 维（标量）<code class="language-plaintext highlighter-rouge"> 张量</code></li>
+  <li> <code class="language-plaintext highlighter-rouge">Tensors</code> 和 <code class="language-plaintext highlighter-rouge">Variables</code> 已合并</li>
+  <li>支持 0 维（标量） <code class="language-plaintext highlighter-rouge">Tensors</code> </li>
   <li>废弃了 <code class="language-plaintext highlighter-rouge">volatile</code> 标志</li>
-  <li><code class="language-plaintext highlighter-rouge">dtypes</code>、<code class="language-plaintext highlighter-rouge">devices</code> 以及 Numpy 风格的 <code class="language-plaintext highlighter-rouge">Tensor</code> 创建函数</li>
+  <li> <code class="language-plaintext highlighter-rouge">dtypes</code> ， <code class="language-plaintext highlighter-rouge">devices</code> 以及 Numpy 风格的 <code class="language-plaintext highlighter-rouge">Tensor</code> 创建函数</li>
   <li>编写设备无关的代码</li>
-  <li>子模块、参数和缓冲区名称的新边缘情况约束，在 <code class="language-plaintext highlighter-rouge">nn.Module</code> 中</li>
+  <li>对 <code class="language-plaintext highlighter-rouge">nn.Module</code> 中子模块、参数和缓冲区名称的新边缘情况约束</li>
 </ul>
 
 <h2 id="merging-tensor-and-variable-and-classes">合并 <code class="language-plaintext highlighter-rouge">Tensor</code> 和 <code class="language-plaintext highlighter-rouge">Variable</code> 以及类</h2>
 
-<p><a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">torch.Tensor</code></a> 和 <code class="language-plaintext highlighter-rouge">torch.autograd.Variable</code> 现在是同一个类。更确切地说，<a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">torch.Tensor</code></a> 现在能够跟踪历史并像旧的 <code class="language-plaintext highlighter-rouge">Variable</code> 一样表现；<code class="language-plaintext highlighter-rouge">Variable</code> 包装仍然按以前的方式工作，但返回的是 <a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">torch.Tensor</code></a> 类型的对象。这意味着你不再需要在代码的每个地方都使用 <code class="language-plaintext highlighter-rouge">Variable</code> 包装器了。</p>
+<p> <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 和 <code class="language-plaintext highlighter-rouge">torch.autograd.Variable</code> 现在是同一类。更确切地说， <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 能够跟踪历史并像旧的 <code class="language-plaintext highlighter-rouge">Variable</code> 一样行为； <code class="language-plaintext highlighter-rouge">Variable</code> 的包装仍然像以前一样工作，但返回一个类型为 <code class="language-plaintext highlighter-rouge">torch.Tensor</code> 的对象。这意味着你不再需要在代码的每个地方都使用 <code class="language-plaintext highlighter-rouge">Variable</code> 包装器了。</p>
 
-<h3 id="the-type-of-a-tensor-has-changed"><code class="language-plaintext highlighter-rouge">type()</code> 的结果已经改变了 <a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">Tensor</code></a>。</h3>
+<h3 id="the-type-of-a-tensor-has-changed"> <code class="language-plaintext highlighter-rouge">type()</code> 的 <code class="language-plaintext highlighter-rouge">Tensor</code> 已更改</h3>
 
-<p>注意，现在 Tensor 的 <code class="language-plaintext highlighter-rouge">type()</code> 已经不再反映数据类型。请使用 <code class="language-plaintext highlighter-rouge">isinstance()</code> 或 <code class="language-plaintext highlighter-rouge">x.type()</code> 代替：</p>
+<p>注意，张量的 <code class="language-plaintext highlighter-rouge">type()</code> 现在不再反映数据类型。请使用 <code class="language-plaintext highlighter-rouge">isinstance()</code> 或 <code class="language-plaintext highlighter-rouge">x.type()</code> 代替：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">DoubleTensor</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="k">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">x</span><span class="p">))</span>  <span class="c1"># was torch.DoubleTensor
@@ -341,9 +349,9 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 </span><span class="bp">True</span>
 </code></pre></div></div>
 
-<h3 id="when-does-autograd-start-tracking-history-now">现在何时开始 <a href="https://pytorch.org/docs/0.4.0/autograd.html"><code class="language-plaintext highlighter-rouge">autograd</code></a> 跟踪历史？</h3>
+<h3 id="when-does-autograd-start-tracking-history-now"> <code class="language-plaintext highlighter-rouge">autograd</code> 现在何时开始跟踪历史？</h3>
 
-<p>`<code class="language-plaintext highlighter-rouge">requires_grad</code>，是 <a href="https://pytorch.org/docs/0.4.0/autograd.html"><code class="language-plaintext highlighter-rouge">autograd</code></a> 的核心标志，现在已成为 <code class="language-plaintext highlighter-rouge">Tensors</code> 的属性。之前用于 <code class="language-plaintext highlighter-rouge">Variables</code> 的相同规则现在也适用于 <code class="language-plaintext highlighter-rouge">Tensors</code>；<a href="https://pytorch.org/docs/0.4.0/autograd.html"><code class="language-plaintext highlighter-rouge">autograd</code></a> 在操作中的任何输入 <code class="language-plaintext highlighter-rouge">Tensors</code> 具有 <code class="language-plaintext highlighter-rouge">requires_grad=True</code> 时开始跟踪历史记录。例如，</p>
+<p> <code class="language-plaintext highlighter-rouge">requires_grad</code> ，作为 <code class="language-plaintext highlighter-rouge">autograd</code> 的中心标志，现在是一个属性；之前用于 <code class="language-plaintext highlighter-rouge">Variables</code> 的相同规则现在适用于 <code class="language-plaintext highlighter-rouge">Tensors</code> ；当操作中的任何输入 <code class="language-plaintext highlighter-rouge">Tensor</code> 有 <code class="language-plaintext highlighter-rouge">requires_grad=True</code> 时， <code class="language-plaintext highlighter-rouge">autograd</code> 开始跟踪历史记录。例如，</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># create a tensor with requires_grad=False (default)
 </span><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">requires_grad</span>
@@ -377,7 +385,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
 <h4 id="manipulating-requires_grad-flag">操作 <code class="language-plaintext highlighter-rouge">requires_grad</code> 标志</h4>
 
-<p>除了直接设置属性外，您还可以使用 <code class="language-plaintext highlighter-rouge">in-place</code> 方式通过 <a href="https://pytorch.org/docs/0.4.0/tensors.html#torch.Tensor.requires_grad_">my_tensor.requires_grad_() 来更改此标志，或者，如上述示例所示，在创建时通过参数传递（默认为 <code class="language-plaintext highlighter-rouge">False</code>），例如，</a></p>
+<p>除了直接设置属性外，您还可以使用 <code class="language-plaintext highlighter-rouge">my_tensor.requires_grad_()</code> 来更改此标志 <code class="language-plaintext highlighter-rouge">in-place</code> ，或者，如上述示例所示，在创建时通过参数传递（默认为 <code class="language-plaintext highlighter-rouge">False</code> ），例如，</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">existing_tensor</span><span class="p">.</span><span class="n">requires_grad_</span><span class="p">()</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">existing_tensor</span><span class="p">.</span><span class="n">requires_grad</span>
@@ -387,15 +395,15 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 <span class="bp">True</span>
 </code></pre></div></div>
 
-<h3 id="what-about-data">那么 <code class="language-plaintext highlighter-rouge">.data</code> 呢？</h3>
+<h3 id="what-about-data">那么 <code class="language-plaintext highlighter-rouge">.data?</code> 呢？</h3>
 
-<p>`<code class="language-plaintext highlighter-rouge">.data</code> 是获取底层 <code class="language-plaintext highlighter-rouge">Tensor</code> 从 <code class="language-plaintext highlighter-rouge">Variable</code> 的主要方式。在此合并之后，调用 <code class="language-plaintext highlighter-rouge">y = x.data</code> 仍然具有相似的语义。因此，<code class="language-plaintext highlighter-rouge">y</code> 将是一个与 <code class="language-plaintext highlighter-rouge">Tensor</code> 共享相同数据的 <code class="language-plaintext highlighter-rouge">x</code>，与 <code class="language-plaintext highlighter-rouge">x</code> 的计算历史无关，并且具有 <code class="language-plaintext highlighter-rouge">requires_grad=False</code>。</p>
+<p> <code class="language-plaintext highlighter-rouge">.data</code> 是获取底层 <code class="language-plaintext highlighter-rouge">Tensor</code> 的主要方式。在此合并之后，调用 <code class="language-plaintext highlighter-rouge">y = x.data</code> 仍然具有相似的语义。因此， <code class="language-plaintext highlighter-rouge">y</code> 将是一个与 <code class="language-plaintext highlighter-rouge">x</code> 共享相同数据的 <code class="language-plaintext highlighter-rouge">Tensor</code> ，与 <code class="language-plaintext highlighter-rouge">x</code> 的计算历史无关，并且具有 <code class="language-plaintext highlighter-rouge">requires_grad=False</code> 。</p>
 
-<p>然而，<code class="language-plaintext highlighter-rouge">.data</code> 在某些情况下可能不安全。对 <code class="language-plaintext highlighter-rouge">x.data</code> 的任何更改都不会被 <code class="language-plaintext highlighter-rouge">autograd</code> 跟踪，如果需要在反向传播中使用 <code class="language-plaintext highlighter-rouge">x</code>，则计算出的梯度将是不正确的。一个更安全的替代方案是使用 <a href="https://pytorch.org/docs/master/autograd.html#torch.Tensor.detach"><code class="language-plaintext highlighter-rouge">x.detach()</code></a>，它也会返回一个与 <code class="language-plaintext highlighter-rouge">Tensor</code> 共享数据且 <code class="language-plaintext highlighter-rouge">requires_grad=False</code> 的 <code class="language-plaintext highlighter-rouge">Tensor</code>，但如果需要在反向中使用 <code class="language-plaintext highlighter-rouge">x</code>，则其就地更改将由 <code id="10">autograd</code> 跟踪。</p>
+<p>然而， <code class="language-plaintext highlighter-rouge">.data</code> 在某些情况下可能不安全。对 <code class="language-plaintext highlighter-rouge">x.data</code> 的任何更改都不会被 <code class="language-plaintext highlighter-rouge">autograd</code> 跟踪，如果需要 <code class="language-plaintext highlighter-rouge">x</code> 进行反向传递，则计算出的梯度将是不正确的。一个更安全的替代方案是使用 <code class="language-plaintext highlighter-rouge">x.detach()</code> ，它也会返回一个与 <code class="language-plaintext highlighter-rouge">requires_grad=False</code> 共享数据的 <code class="language-plaintext highlighter-rouge">Tensor</code> ，但如果需要 <code class="language-plaintext highlighter-rouge">x</code> 进行反向传递，则其就地更改将由 <code class="language-plaintext highlighter-rouge">autograd</code> 报告。</p>
 
-<p>下面是 <code class="language-plaintext highlighter-rouge">.data</code> 和 <code class="language-plaintext highlighter-rouge">x.detach()</code>（以及为什么我们通常推荐使用 <code class="language-plaintext highlighter-rouge">detach</code>）之间的差异的示例。</p>
+<p>下面是 <code class="language-plaintext highlighter-rouge">.data</code> 和 <code class="language-plaintext highlighter-rouge">x.detach()</code> 之间的差异示例（以及为什么我们通常推荐使用 <code class="language-plaintext highlighter-rouge">detach</code> ）。</p>
 
-<p>如果你使用 <code class="language-plaintext highlighter-rouge">Tensor.detach()</code>，则梯度计算的准确性可以得到保证。</p>
+<p>如果你使用 <code class="language-plaintext highlighter-rouge">Tensor.detach()</code> ，则梯度计算将保证是正确的。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mf">3.</span><span class="p">],</span> <span class="n">requires_grad</span> <span class="o">=</span> <span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">out</span> <span class="o">=</span> <span class="n">a</span><span class="p">.</span><span class="n">sigmoid</span><span class="p">()</span>
@@ -410,7 +418,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 </span><span class="nb">RuntimeError</span><span class="p">:</span> <span class="n">one</span> <span class="n">of</span> <span class="n">the</span> <span class="n">variables</span> <span class="n">needed</span> <span class="k">for</span> <span class="n">gradient</span> <span class="n">computation</span> <span class="n">has</span> <span class="n">been</span> <span class="n">modified</span> <span class="n">by</span> <span class="n">an</span>
 </code></pre></div></div>
 
-<p>然而，使用 <code class="language-plaintext highlighter-rouge">Tensor.data</code> 可能是不安全的，并且当需要用于梯度计算的张量被就地修改时，很容易导致梯度计算错误。</p>
+<p>然而，使用 <code class="language-plaintext highlighter-rouge">Tensor.data</code> 可能不安全，并且当需要用于梯度计算的张量但在原地修改时，很容易导致错误的梯度。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mf">3.</span><span class="p">],</span> <span class="n">requires_grad</span> <span class="o">=</span> <span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">out</span> <span class="o">=</span> <span class="n">a</span><span class="p">.</span><span class="n">sigmoid</span><span class="p">()</span>
@@ -426,11 +434,11 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 </span><span class="n">tensor</span><span class="p">([</span> <span class="mf">0.</span><span class="p">,</span>  <span class="mf">0.</span><span class="p">,</span>  <span class="mf">0.</span><span class="p">])</span>
 </code></pre></div></div>
 
-<h2 id="support-for-0-dimensional-scalar-tensors">支持0维（标量）张量。</h2>
+<h2 id="support-for-0-dimensional-scalar-tensors">支持 0 维（标量）张量</h2>
 
-<p>以前，对 <code class="language-plaintext highlighter-rouge">Tensor</code> 向量（一维张量）进行索引会得到一个 Python 数字，而对 <code class="language-plaintext highlighter-rouge">Variable</code> 向量进行索引（不统一地！）会得到一个大小为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的向量！类似的，在减少函数中也有类似的行为，例如 <code class="language-plaintext highlighter-rouge">tensor.sum()</code> 会返回一个 Python 数字，但 <code class="language-plaintext highlighter-rouge">variable.sum()</code> 会返回一个大小为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的向量。</p>
+<p>以前，对 <code class="language-plaintext highlighter-rouge">Tensor</code> 向量（一维张量）进行索引返回 Python 数字，而对 <code class="language-plaintext highlighter-rouge">Variable</code> 向量进行索引（不一致地！）返回大小为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的向量！类似的行存在于减少函数中，例如 <code class="language-plaintext highlighter-rouge">tensor.sum()</code> 返回 Python 数字，但 <code class="language-plaintext highlighter-rouge">variable.sum()</code> 返回大小为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的向量。</p>
 
-<p>幸运的是，这次发布引入了 PyTorch 对标量（0 维张量）的支持！可以使用新的 <code class="language-plaintext highlighter-rouge">torch.tensor</code> 函数创建标量（稍后将会详细介绍；现在只需将其视为 PyTorch 的 <code class="language-plaintext highlighter-rouge">numpy.array</code> 等价物）。现在您可以执行如下操作：</p>
+<p>幸运的是，这个版本引入了 PyTorch 中的正确标量（0 维张量）支持！可以使用新的 <code class="language-plaintext highlighter-rouge">torch.tensor</code> 函数创建标量（稍后将会详细介绍；现在只需将其视为 PyTorch 的 <code class="language-plaintext highlighter-rouge">numpy.array</code> 等效物）。现在您可以执行如下操作：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">(</span><span class="mf">3.1416</span><span class="p">)</span>         <span class="c1"># create a scalar directly
 </span><span class="n">tensor</span><span class="p">(</span><span class="mf">3.1416</span><span class="p">)</span>
@@ -457,13 +465,13 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
 <h3 id="accumulating-losses">累积损失</h3>
 
-<p>考虑广泛使用的模式 <code class="language-plaintext highlighter-rouge">total_loss += loss.data[0]</code>。在 0.4.0 版本之前，<code class="language-plaintext highlighter-rouge">loss</code> 是一个包裹着大小为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的张量的 <code class="language-plaintext highlighter-rouge">Variable</code>，但在 0.4.0 版本中，<code class="language-plaintext highlighter-rouge">loss</code> 现在是一个标量，具有 <code class="language-plaintext highlighter-rouge">0</code> 维。对标量进行索引没有意义（现在会给出警告，但在 0.5.0 版本中将会是错误）。使用 <code class="language-plaintext highlighter-rouge">loss.item()</code> 从标量中获取 Python 数字。</p>
+<p>在 0.4.0 之前， <code class="language-plaintext highlighter-rouge">loss</code> 是一个 <code class="language-plaintext highlighter-rouge">Variable</code> 包裹的尺寸为 <code class="language-plaintext highlighter-rouge">(1,)</code> 的张量，但在 0.4.0 中 <code class="language-plaintext highlighter-rouge">loss</code> 现在是一个标量，具有 <code class="language-plaintext highlighter-rouge">0</code> 维度。对标量进行索引没有意义（现在会给出警告，但在 0.5.0 中将是一个硬错误）。使用 <code class="language-plaintext highlighter-rouge">loss.item()</code> 从标量获取 Python 数字。</p>
 
-<p>注意，如果在累积损失时没有将数据转换为 Python 数字，您可能会发现程序中的内存使用量增加。这是因为上述表达式的右侧原本是一个 Python 浮点数，而现在是一个零维 Tensor。因此，总损失累积了 Tensor 和它们的梯度历史，这可能会导致不必要的长时间保留大的 autograd 图。</p>
+<p>注意，如果您在累积损失时不将其转换为 Python 数字，您可能会发现程序中的内存使用量增加。这是因为上述表达式的右侧曾经是一个 Python 浮点数，而现在是零维张量。因此，总损失累积了张量和它们的梯度历史，这可能会保留比必要的更大的 autograd 图很长时间。</p>
 
 <h2 id="deprecation-of-volatile-flag">volatile 标志的弃用</h2>
 
-<p>现已弃用 <code class="language-plaintext highlighter-rouge">volatile</code> 标志，并且它不再有任何效果。之前，任何涉及 <code class="language-plaintext highlighter-rouge">Variable</code> 且 <code class="language-plaintext highlighter-rouge">volatile=True</code> 的计算都不会被 <code class="language-plaintext highlighter-rouge">autograd</code> 跟踪。这已被一组更灵活的上下文管理器所取代，包括 <code class="language-plaintext highlighter-rouge">torch.no_grad()</code>， <code class="language-plaintext highlighter-rouge">torch.set_grad_enabled(grad_mode)</code> 以及其他。</p>
+<p>“ <code class="language-plaintext highlighter-rouge">volatile</code> ” 标志现在已弃用，没有任何效果。之前，任何涉及 <code class="language-plaintext highlighter-rouge">Variable</code> 与 <code class="language-plaintext highlighter-rouge">volatile=True</code> 的计算都不会被 <code class="language-plaintext highlighter-rouge">autograd</code> 跟踪。现在已被一系列更灵活的上下文管理器所取代，包括 <code class="language-plaintext highlighter-rouge">torch.no_grad()</code> 、 <code class="language-plaintext highlighter-rouge">torch.set_grad_enabled(grad_mode)</code> 等。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="k">with</span> <span class="n">torch</span><span class="p">.</span><span class="n">no_grad</span><span class="p">():</span>
@@ -486,63 +494,63 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 <span class="bp">False</span>
 </code></pre></div></div>
 
-<h2 id="dtypes-devices-and-numpy-style-creation-functions"><a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.dtype"><code class="language-plaintext highlighter-rouge">dtypes</code></a>、<a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.device"><code class="language-plaintext highlighter-rouge">devices</code></a> 和 NumPy 风格的创建函数</h2>
+<h2 id="dtypes-devices-and-numpy-style-creation-functions"> <code class="language-plaintext highlighter-rouge">dtypes</code> 、 <code class="language-plaintext highlighter-rouge">devices</code> 以及 NumPy 风格的创建函数</h2>
 
-<p>在 PyTorch 的早期版本中，我们通常将数据类型（例如 float 与 double）、设备类型（cpu 与 cuda）和布局（稠密与稀疏）一起指定为一个“张量类型”。例如， <code class="language-plaintext highlighter-rouge">torch.cuda.sparse.DoubleTensor</code>  代表的是 <code class="language-plaintext highlighter-rouge">Tensor</code> 类型，表示 <code class="language-plaintext highlighter-rouge">double</code> 数据类型，存在于 CUDA 设备上，并且具有 <a href="https://en.wikipedia.org/wiki/Sparse_matrix#Coordinate_list_(COO)">COO 稀疏张量 </a> 布局。</p>
+<p>在 PyTorch 的早期版本中，我们通常将数据类型（例如 float 与 double）、设备类型（cpu 与 cuda）和布局（稠密与稀疏）一起指定为“张量类型”。例如， <code class="language-plaintext highlighter-rouge">torch.cuda.sparse.DoubleTensor</code> 是表示 <code class="language-plaintext highlighter-rouge">Tensor</code> 数据类型、位于 CUDA 设备上且具有 COO 稀疏张量布局的 <code class="language-plaintext highlighter-rouge">double</code> 类型。</p>
 
-<p>在本次版本中，我们引入了 <a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.dtype"><code class="language-plaintext highlighter-rouge">torch.dtype</code></a>、<a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.device"><code class="language-plaintext highlighter-rouge">torch.device</code></a> 和 <a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.layout"><code class="language-plaintext highlighter-rouge">torch.layout</code></a> 类，以便通过 NumPy 风格的创建函数更好地管理这些属性。</p>
+<p>在本次版本中，我们引入了 <code class="language-plaintext highlighter-rouge">torch.dtype</code> 、 <code class="language-plaintext highlighter-rouge">torch.device</code> 和 <code class="language-plaintext highlighter-rouge">torch.layout</code> 类，以通过 NumPy 风格的创建函数更好地管理这些属性。</p>
 
 <h3 id="torchdtype"><a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.dtype"><code class="language-plaintext highlighter-rouge">torch.dtype</code></a></h3>
 
-<p>以下是所有可用的 <a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.dtype"><code class="language-plaintext highlighter-rouge">torch.dtype</code></a>（数据类型）及其对应的张量类型列表。</p>
+<p>以下是可用的 <code class="language-plaintext highlighter-rouge">torch.dtype</code> （数据类型）及其对应的张量类型完整列表。</p>
 
 <table>
   <thead>
     <tr>
       <th>数据</th>
-      <th><code class="language-plaintext highlighter-rouge">torch.dtype 类型</code></th>
+      <th><code class="language-plaintext highlighter-rouge">type torch.dtype</code></th>
       <th>张量类型</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>32位浮点数</td>
-      <td><code class="language-plaintext highlighter-rouge">torch.float32</code> 或 <code class="language-plaintext highlighter-rouge">torch.float</code></td>
+      <td>32 位浮点数</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.float32</code> 或 <code class="language-plaintext highlighter-rouge">torch.float</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.FloatTensor</code></td>
     </tr>
     <tr>
-      <td>64位浮点数</td>
-      <td><code class="language-plaintext highlighter-rouge">torch.float64</code> 或 <code class="language-plaintext highlighter-rouge">torch.double</code></td>
+      <td>64 位浮点数</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.float64</code> 或 <code class="language-plaintext highlighter-rouge">torch.double</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.DoubleTensor</code></td>
     </tr>
     <tr>
-      <td>16位浮点数</td>
-      <td><code class="language-plaintext highlighter-rouge">torch.float16</code> 或 <code class="language-plaintext highlighter-rouge">torch.half</code></td>
+      <td>16 位浮点数</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.float16</code> 或 <code class="language-plaintext highlighter-rouge">torch.half</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.HalfTensor</code></td>
     </tr>
     <tr>
-      <td>8位无符号整数</td>
+      <td>8 位无符号整数</td>
       <td><code class="language-plaintext highlighter-rouge">torch.uint8</code></td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.ByteTensor</code></td>
     </tr>
     <tr>
-      <td>8位有符号整数</td>
-      <td>torch.int8</td>
-      <td>torch.*.CharTensor</td>
+      <td>8 位有符号整数</td>
+      <td><code class="language-plaintext highlighter-rouge">torch.int8</code></td>
+      <td><code class="language-plaintext highlighter-rouge">torch.*.CharTensor</code></td>
     </tr>
     <tr>
-      <td>16位有符号整数</td>
-      <td>torch.int16 或 torch.short</td>
+      <td>16 位有符号整数</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.int16</code> 或 <code class="language-plaintext highlighter-rouge">torch.short</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.ShortTensor</code></td>
     </tr>
     <tr>
-      <td>32位整数（有符号）</td>
-      <td><code class="language-plaintext highlighter-rouge">torch.int32</code> 或 <code class="language-plaintext highlighter-rouge">torch.int</code></td>
+      <td>32 位整数（有符号）</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.int32</code> 或 <code class="language-plaintext highlighter-rouge">torch.int</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.IntTensor</code></td>
     </tr>
     <tr>
-      <td>64位整数（有符号）</td>
-      <td><code class="language-plaintext highlighter-rouge">torch.int64</code> 或 <code class="language-plaintext highlighter-rouge">torch.long</code></td>
+      <td>64 位整数（有符号）</td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.int64</code> 或 <code class="language-plaintext highlighter-rouge">torch.long</code> </td>
       <td><code class="language-plaintext highlighter-rouge">torch.*.LongTensor</code></td>
     </tr>
   </tbody>
@@ -552,21 +560,21 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
 <h3 id="torchdevice"><a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.device"><code class="language-plaintext highlighter-rouge">torch.device</code></a></h3>
 
-<p>一个 <a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.device"><code class="language-plaintext highlighter-rouge">torch.device</code></a> 包含设备类型（<code class="language-plaintext highlighter-rouge">'cpu'</code> 或 <code class="language-plaintext highlighter-rouge">'cuda'</code>）和可选的设备序号（id）。它可以初始化为 <code class="language-plaintext highlighter-rouge">torch.device('{device_type}')</code> 或 <code class="language-plaintext highlighter-rouge">torch.device('{device_type}:{device_ordinal}')</code> 。</p>
+<p> <code class="language-plaintext highlighter-rouge">torch.device</code> 包含设备类型（ <code class="language-plaintext highlighter-rouge">'cpu'</code> 或 <code class="language-plaintext highlighter-rouge">'cuda'</code> ）以及可选的设备序号（id）用于设备类型。它可以使用 <code class="language-plaintext highlighter-rouge">torch.device('{device_type}')</code> 或 <code class="language-plaintext highlighter-rouge">torch.device('{device_type}:{device_ordinal}')</code> 初始化。</p>
 
-<p>如果没有提供设备序号，这表示该设备类型的当前设备；例如，<code class="language-plaintext highlighter-rouge">torch.device('cuda')</code> 等同于 <code class="language-plaintext highlighter-rouge">torch.device('cuda:X')</code>，其中 <code class="language-plaintext highlighter-rouge">X</code> 是 <code class="language-plaintext highlighter-rouge">torch.cuda.current_device()</code> 的结果。</p>
+<p>如果没有提供设备序号，则表示该设备类型的当前设备；例如， <code class="language-plaintext highlighter-rouge">torch.device('cuda')</code> 等同于 <code class="language-plaintext highlighter-rouge">torch.device('cuda:X')</code> ，其中 <code class="language-plaintext highlighter-rouge">X</code> 是 <code class="language-plaintext highlighter-rouge">torch.cuda.current_device()</code> 的结果。</p>
 
-<p>可以通过张量的 <code class="language-plaintext highlighter-rouge">device</code> 属性访问其设备。</p>
+<p>张量设备可以通过其 <code class="language-plaintext highlighter-rouge">device</code> 属性访问。</p>
 
 <h3 id="torchlayout"><a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.layout"><code class="language-plaintext highlighter-rouge">torch.layout</code></a></h3>
 
-<p><a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.layout"><code class="language-plaintext highlighter-rouge">torch.layout</code></a> 表示 <a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">Tensor</code></a> 的数据布局。目前支持 <code class="language-plaintext highlighter-rouge">torch.strided</code>（密集张量，默认）和 <code class="language-plaintext highlighter-rouge">torch.sparse_coo</code>（具有 COO 格式的稀疏张量）。</p>
+<p> <code class="language-plaintext highlighter-rouge">torch.layout</code> 表示 <code class="language-plaintext highlighter-rouge">Tensor</code> 的数据布局。目前支持 <code class="language-plaintext highlighter-rouge">torch.strided</code> （默认的稠密张量）和 <code class="language-plaintext highlighter-rouge">torch.sparse_coo</code> （具有 COO 格式的稀疏张量）。</p>
 
 <p>张量的布局可以通过其 <code class="language-plaintext highlighter-rouge">layout</code> 属性访问。</p>
 
 <h3 id="creating-tensors">创建张量</h3>
 
-<p><a href="https://pytorch.org/docs/0.4.0/torch.html#creation-ops">创建</a><a href="https://pytorch.org/docs/0.4.0/tensors.html"><code class="language-plaintext highlighter-rouge">张量</code></a>的方法现在也接受 <code class="language-plaintext highlighter-rouge">dtype</code>、<code class="language-plaintext highlighter-rouge">device</code>、<code class="language-plaintext highlighter-rouge">layout</code> 和 <code class="language-plaintext highlighter-rouge">requires_grad</code> 选项来指定返回的<code class="language-plaintext highlighter-rouge">张量</code>的所需属性。例如，</p>
+<p>创建 <code class="language-plaintext highlighter-rouge">Tensor</code> 的方法现在也接受 <code class="language-plaintext highlighter-rouge">dtype</code> 、 <code class="language-plaintext highlighter-rouge">device</code> 、 <code class="language-plaintext highlighter-rouge">layout</code> 和 <code class="language-plaintext highlighter-rouge">requires_grad</code> 选项来指定返回的 <code class="language-plaintext highlighter-rouge">Tensor</code> 的所需属性。例如，</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">device</span><span class="p">(</span><span class="s">"cuda:1"</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
@@ -582,7 +590,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
 <h5 id="torchtensordata-"><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.tensor"><code class="language-plaintext highlighter-rouge">torch.tensor(data, ...)</code></a></h5>
 
-<p><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.tensor"><code class="language-plaintext highlighter-rouge">torch.tensor</code></a> 是新增的<a href="https://pytorch.org/docs/0.4.0/torch.html#creation-ops">张量创建方法</a>之一。它接受各种类型的数组样式的数据，并将包含的值复制到一个新的<code class="language-plaintext highlighter-rouge">张量</code>中。如前所述，<a href="https://pytorch.org/docs/0.4.0/torch.html#torch.tensor"><code class="language-plaintext highlighter-rouge">torch.tensor</code></a> 是 PyTorch 中与 NumPy 的 <code class="language-plaintext highlighter-rouge">numpy.array</code> 构造函数等价的。与 <code class="language-plaintext highlighter-rouge">torch.*Tensor</code> 方法不同，您还可以通过这种方式创建零维<code class="language-plaintext highlighter-rouge">张量 </code>（也称为标量）（单个 Python 数字在 <code class="language-plaintext highlighter-rouge">torch.*Tensor</code> 方法中被视为 Size）。此外，如果没有提供 <code class="language-plaintext highlighter-rouge">dtype</code> 参数，它将根据数据推断合适的 <code class="language-plaintext highlighter-rouge">dtype</code>。这是从现有数据（如 Python 列表）创建张量的推荐方法。例如，</p>
+<p> <code class="language-plaintext highlighter-rouge">torch.tensor</code> 是新增的 tensor 创建方法之一。它接受各种类型的 array-like 数据，并将包含的值复制到一个新的 <code class="language-plaintext highlighter-rouge">Tensor</code> 中。如前所述， <code class="language-plaintext highlighter-rouge">torch.tensor</code> 是 NumPy 的 <code class="language-plaintext highlighter-rouge">numpy.array</code> 构造函数的 PyTorch 等价物。与 <code class="language-plaintext highlighter-rouge">torch.*Tensor</code> 方法不同，您还可以通过这种方式创建零维的 <code class="language-plaintext highlighter-rouge">Tensor</code> （即标量）（单个 Python 数字在 <code class="language-plaintext highlighter-rouge">torch.*Tensor methods</code> 中被视为 Size）。此外，如果没有提供 <code class="language-plaintext highlighter-rouge">dtype</code> 参数，它将根据数据推断合适的 <code class="language-plaintext highlighter-rouge">dtype</code> 。这是从现有数据（如 Python 列表）创建 tensor 的推荐方法。例如，</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">cuda</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">device</span><span class="p">(</span><span class="s">"cuda"</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">half</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">cuda</span><span class="p">)</span>
@@ -597,11 +605,11 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 </span><span class="n">torch</span><span class="p">.</span><span class="n">int64</span>
 </code></pre></div></div>
 
-<p>我们还增加了更多的张量创建方法。其中一些具有 <code class="language-plaintext highlighter-rouge">torch.*_like</code> 和/或 <code class="language-plaintext highlighter-rouge">tensor.new_*</code> 变体。</p>
+<p>我们还增加了更多的 tensor 创建方法。其中一些有 <code class="language-plaintext highlighter-rouge">torch.*_like</code> 和/或 <code class="language-plaintext highlighter-rouge">tensor.new_*</code> 变体。</p>
 
 <ul>
   <li>
-    <p><code class="language-plaintext highlighter-rouge">torch.*_like</code> 接收一个 <code class="language-plaintext highlighter-rouge">Tensor</code> 输入而不是形状。除非指定其他情况，否则它返回一个具有与输入 <code class="language-plaintext highlighter-rouge">Tensor</code> 相同属性的 <code class="language-plaintext highlighter-rouge">Tensor</code>：</p>
+    <p> <code class="language-plaintext highlighter-rouge">torch.*_like</code> 接受一个输入 <code class="language-plaintext highlighter-rouge">Tensor</code> 而不是形状。它返回一个默认情况下具有与输入 <code class="language-plaintext highlighter-rouge">Tensor</code> 相同属性的 <code class="language-plaintext highlighter-rouge">Tensor</code> ，除非指定其他情况：</p>
 
     <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">float64</span><span class="p">)</span>
  <span class="o">&gt;&gt;&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
@@ -611,7 +619,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 </code></pre></div>    </div>
   </li>
   <li>
-    <p><code class="language-plaintext highlighter-rouge">tensor.new_*</code> 也可以创建具有与 <code class="language-plaintext highlighter-rouge">tensor</code> 相同属性的 <code class="language-plaintext highlighter-rouge">Tensors</code>，但它始终需要一个形状参数：</p>
+    <p>也可以创建具有与 <code class="language-plaintext highlighter-rouge">tensor</code> 相同属性的 <code class="language-plaintext highlighter-rouge">Tensors</code> ，但总是需要形状参数：</p>
 
     <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="p">.</span><span class="n">float64</span><span class="p">)</span>
  <span class="o">&gt;&gt;&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">new_ones</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
@@ -622,15 +630,15 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
   </li>
 </ul>
 
-<p>要指定所需的形状，您可以使用元组（例如，<code class="language-plaintext highlighter-rouge">torch.zeros((2, 3))</code>）或变量参数（例如，<code class="language-plaintext highlighter-rouge">torch.zeros(2, 3)</code>）在大多数情况下。</p>
+<p>要指定所需的形状，您通常可以使用元组（例如， <code class="language-plaintext highlighter-rouge">torch.zeros((2, 3))</code> ）或可变参数（例如， <code class="language-plaintext highlighter-rouge">torch.zeros(2, 3)</code> ）。</p>
 
 <table>
   <thead>
     <tr>
       <th>名称</th>
-      <th>返回 <code class="language-plaintext highlighter-rouge">Tensor</code></th>
-      <th><code class="language-plaintext highlighter-rouge">torch.*_like</code> 变体</th>
-      <th><code class="language-plaintext highlighter-rouge">tensor.new_*</code> 变体</th>
+      <th>返回 <code class="language-plaintext highlighter-rouge">Tensor</code> </th>
+      <th> <code class="language-plaintext highlighter-rouge">torch.*_like</code> 变体</th>
+      <th>变体</th>
     </tr>
   </thead>
   <tbody>
@@ -648,54 +656,54 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.ones"><code class="language-plaintext highlighter-rouge">torch.ones</code></a></td>
-      <td>全部为1</td>
+      <td>全一</td>
       <td>✔</td>
       <td>✔</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.full"><code class="language-plaintext highlighter-rouge">torch.full</code></a></td>
-      <td>用给定的值填充</td>
+      <td>填充给定的值</td>
       <td>✔</td>
       <td>✔</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.rand"><code class="language-plaintext highlighter-rouge">torch.rand</code></a></td>
-      <td>独立同分布的[0, 1)上的连续均匀分布</td>
+      <td>独立同分布的[0, 1)连续均匀分布</td>
       <td>✔</td>
       <td>&nbsp;</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.randn"><code class="language-plaintext highlighter-rouge">torch.randn</code></a></td>
-      <td>独立同分布的<code class="language-plaintext highlighter-rouge">正态分布(0, 1)</code></td>
+      <td>独立同分布 <code class="language-plaintext highlighter-rouge">Normal(0, 1)</code> </td>
       <td>✔</td>
       <td>&nbsp;</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.randint"><code class="language-plaintext highlighter-rouge">torch.randint</code></a></td>
-      <td>给定范围内的独立同分布离散均匀分布</td>
+      <td>独立同分布的给定范围内的离散均匀分布</td>
       <td>✔</td>
       <td>&nbsp;</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.randperm"><code class="language-plaintext highlighter-rouge">torch.randperm</code></a></td>
-      <td><code class="language-plaintext highlighter-rouge">{0, 1, ..., n - 1}</code> 的随机排列</td>
+      <td>随机排列的 <code class="language-plaintext highlighter-rouge">{0, 1, ..., n - 1}</code> </td>
       <td>&nbsp;</td>
       <td>&nbsp;</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.tensor"><code class="language-plaintext highlighter-rouge">torch.tensor</code></a></td>
-      <td>从现有数据（列表、NumPy 数组等）复制</td>
+      <td>复制自现有数据（列表、NumPy 数组等）</td>
       <td>&nbsp;</td>
       <td>✔</td>
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.from_numpy"><code class="language-plaintext highlighter-rouge">torch.from_numpy</code>*</a></td>
-      <td>从 NumPy <code class="language-plaintext highlighter-rouge">ndarray</code>（共享存储而不复制）</td>
+      <td>来自 NumPy <code class="language-plaintext highlighter-rouge">ndarray</code> （共享存储而不复制）</td>
       <td>&nbsp;</td>
       <td>&nbsp;</td>
     </tr>
     <tr>
-      <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.arange"><code class="language-plaintext highlighter-rouge">torch.arange</code></a>、<a href="https://pytorch.org/docs/0.4.0/torch.html#torch.range"><code class="language-plaintext highlighter-rouge">torch.range</code></a> 和 <a href="https://pytorch.org/docs/0.4.0/torch.html#torch.linspace"><code class="language-plaintext highlighter-rouge">torch.linspace</code></a></td>
+      <td> <code class="language-plaintext highlighter-rouge">torch.arange</code> ， <code class="language-plaintext highlighter-rouge">torch.range</code> ，和 <code class="language-plaintext highlighter-rouge">torch.linspace</code> </td>
       <td>给定范围内的均匀分布值</td>
       <td>&nbsp;</td>
       <td>&nbsp;</td>
@@ -708,24 +716,24 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
     </tr>
     <tr>
       <td><a href="https://pytorch.org/docs/0.4.0/torch.html#torch.eye"><code class="language-plaintext highlighter-rouge">torch.eye</code></a></td>
-      <td>身份矩阵</td>
+      <td>单位矩阵</td>
       <td>&nbsp;</td>
       <td>&nbsp;</td>
     </tr>
   </tbody>
 </table>
 
-<p>*: <a href="https://pytorch.org/docs/0.4.0/torch.html#torch.from_numpy"><code class="language-plaintext highlighter-rouge">torch.from_numpy</code></a> 仅接受 NumPy <code class="language-plaintext highlighter-rouge">ndarray</code> 作为其输入参数。</p>
+<p>*: <code class="language-plaintext highlighter-rouge">torch.from_numpy</code> 仅接受 NumPy <code class="language-plaintext highlighter-rouge">ndarray</code> 作为其输入参数。</p>
 
 <h2 id="writing-device-agnostic-code">编写设备无关的代码</h2>
 
-<p>PyTorch 的早期版本使得编写设备无关的代码变得困难（即无需修改即可在支持 CUDA 的和仅 CPU 的机器上运行的代码）。</p>
+<p>PyTorch 的早期版本使得编写设备无关的代码变得困难（即无需修改即可在 CUDA 启用和仅 CPU 机器上运行的代码）。</p>
 
-<p>PyTorch 0.4.0 以两种方式使这变得更加容易：</p>
+<p>PyTorch 0.4.0 通过两种方式使这变得更加容易：</p>
 
 <ul>
-  <li>张量（Tensor）的 <code class="language-plaintext highlighter-rouge">device</code> 属性给出了所有张量的 <a href="https://pytorch.org/docs/0.4.0/tensor_attributes.html#torch.torch.device">torch.device</a>（仅 <code class="language-plaintext highlighter-rouge">get_device</code> 对 CUDA 张量有效）</li>
-  <li>张量（Tensors）和模块（Modules）的 <code class="language-plaintext highlighter-rouge">to</code> 方法可以用来轻松地将对象移动到不同的设备（而不是根据上下文调用 <code class="language-plaintext highlighter-rouge">cpu()</code> 或 <code class="language-plaintext highlighter-rouge">cuda()</code>）</li>
+  <li>张量（Tensor）的 <code class="language-plaintext highlighter-rouge">device</code> 属性给出了所有张量的 torch.device（ <code class="language-plaintext highlighter-rouge">get_device</code> 仅适用于 CUDA 张量）</li>
+  <li> <code class="language-plaintext highlighter-rouge">to</code> 方法可以轻松地将对象移动到不同的设备上（而不是根据上下文调用 <code class="language-plaintext highlighter-rouge">cpu()</code> 或 <code class="language-plaintext highlighter-rouge">cuda()</code> ）</li>
 </ul>
 
 <p>我们推荐以下模式：</p>
@@ -741,16 +749,16 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 <span class="n">model</span> <span class="o">=</span> <span class="n">MyModule</span><span class="p">(...).</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 </code></pre></div></div>
 
-<h2 id="new-edge-case-constraints-on-names-of-submodules-parameters-and-buffers-in-nnmodule">子模块、参数和缓冲区名称的新边缘情况约束，在 <code class="language-plaintext highlighter-rouge">nn.Module</code> 中</h2>
+<h2 id="new-edge-case-constraints-on-names-of-submodules-parameters-and-buffers-in-nnmodule">在 <code class="language-plaintext highlighter-rouge">nn.Module</code> 中对子模块、参数和缓冲区名称的新边缘情况约束</h2>
 
-<p><code class="language-plaintext highlighter-rouge">name</code> 为空字符串或包含 <code class="language-plaintext highlighter-rouge">"."</code> 的名称在 <code class="language-plaintext highlighter-rouge">module.add_module(name, value)</code> 、 <code class="language-plaintext highlighter-rouge">module.add_parameter(name, value)</code> 或 <code class="language-plaintext highlighter-rouge">module.add_buffer(name, value)</code> 中不再允许，因为此类名称可能导致 <code class="language-plaintext highlighter-rouge">state_dict</code> 中数据丢失。如果您正在加载包含此类名称的模块的检查点，请在加载之前更新模块定义并修补 <code class="language-plaintext highlighter-rouge">state_dict</code>。</p>
+<p>如果 <code class="language-plaintext highlighter-rouge">name</code> 是空字符串或包含 <code class="language-plaintext highlighter-rouge">"."</code> ，则不再允许在 <code class="language-plaintext highlighter-rouge">module.add_module(name, value)</code> 、 <code class="language-plaintext highlighter-rouge">module.add_parameter(name, value)</code> 或 <code class="language-plaintext highlighter-rouge">module.add_buffer(name, value)</code> 中使用，因为这些名称可能导致 <code class="language-plaintext highlighter-rouge">state_dict</code> 中数据丢失。如果您正在加载包含此类名称的模块的检查点，请在加载之前更新模块定义并修补 <code class="language-plaintext highlighter-rouge">state_dict</code> 。</p>
 
 <h2 id="code-samples-putting-it-all-together">代码示例（综合应用）</h2>
 
-<p>要了解 0.4.0 版本中推荐的总体更改，让我们快速查看 0.3.1 和 0.4.0 中常见代码模式的示例：</p>
+<p>为了了解 0.4.0 版本中推荐的总体更改，让我们快速看一下 0.3.1 和 0.4.0 中常见代码模式的示例：</p>
 
 <ul>
-  <li>0.3.1 (旧版):<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">MyRNN</span><span class="p">()</span>
+  <li>0.3.1（旧版本）：<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">model</span> <span class="o">=</span> <span class="n">MyRNN</span><span class="p">()</span>
 <span class="k">if</span> <span class="n">use_cuda</span><span class="p">:</span>
     <span class="n">model</span> <span class="o">=</span> <span class="n">model</span><span class="p">.</span><span class="n">cuda</span><span class="p">()</span>
 
@@ -772,7 +780,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
     <span class="p">...</span>
 </code></pre></div>    </div>
   </li>
-  <li>0.4.0 (新版):<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># torch.device object used throughout this script
+  <li>0.4.0（新版本）：<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># torch.device object used throughout this script
 </span><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">device</span><span class="p">(</span><span class="s">"cuda"</span> <span class="k">if</span> <span class="n">use_cuda</span> <span class="k">else</span> <span class="s">"cpu"</span><span class="p">)</span>
 
 <span class="n">model</span> <span class="o">=</span> <span class="n">MyRNN</span><span class="p">().</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
@@ -793,7 +801,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
   </li>
 </ul>
 
-<p>感谢阅读！请参阅我们的<a href="https://pytorch.org/docs/0.4.0/index.html">文档</a>和<a href="https://github.com/pytorch/pytorch/releases/tag/v0.4.0">发行说明</a>获取更多详细信息。</p>
+<p>感谢阅读！请参阅我们的文档和发行说明以获取更多详细信息。</p>
 
 <p>祝您 PyTorch 愉快！</p>
 
@@ -811,14 +819,14 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -835,7 +843,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -848,7 +856,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -856,7 +864,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -885,9 +893,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -897,7 +903,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -922,19 +928,19 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手指南 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -957,11 +963,11 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -971,7 +977,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -987,7 +993,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
         </ul>
 
         <li class="resources-mobile-menu-title">
-          <a>博客与新闻</a>
+          <a>博客 &amp; 新闻</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -1006,7 +1012,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1020,7 +1026,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1088,7 +1094,7 @@ Note also that the type() of a Tensor no longer reflects the data type. Use isin
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

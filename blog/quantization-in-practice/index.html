@@ -137,8 +137,8 @@ fig, axs = plt.subplots(2,2)
 plot(axs[0, 0], act, 'affine')
 axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],="" act,="" 'symmetric')="" axs[0,="" 1].set_title("activation,="" symmetric-quantized")="" plot(axs[1,="" 0],="" weights,="" 'affine')="" axs[1,="" 0].set_title("weights,="" 1].set_title("weights,="" plt.show()="" fig="" 2.="" clipping="" ranges="" (in="" purple)="" for="" affine="" and="" symmetric="" schemes="" in="" pytorch,="" you="" can="" specify="" or="" while="" initializing="" the="" observer.="" note="" that="" not="" all="" observers="" support="" both="" schemes.="" qscheme="" [torch.per_tensor_affine,="" torch.per_tensor_symmetric]:="" obs="MovingAverageMinMaxObserver(qscheme=qscheme)" x="" inputs:="" obs(x)="" print(f"qscheme:="" {qscheme}="" |="" {obs.calculate_qparams()}")="" #="" &gt;&gt;&gt;&gt;&gt;="" qscheme:="" torch.per_tensor_affine="" (tensor([0.0101]),="" tensor([139],="" dtype="torch.int32))" torch.per_tensor_symmetric="" (tensor([0.0109]),="" tensor([128]))="" per-tensor="" per-channel="" quantization="" parameters="" be="" calculated="" layer’s="" entire="" weight="" tensor="" as="" a="" whole,="" separately="" each="" channel.="" per-tensor,="" same="" range="" is="" applied="" to="" channels="" layer="" 3.="" uses="" one="" set="" of="" qparams="" tensor.="" weights="" quantization,="" symmetric-per-channel="" provides="" better="" accuracies;="" performs="" poorly,="" possibly="" due="" high="" variance="" conv="" across="" from="" batchnorm="" folding="" [3].="" torch.quantization.observer="" import="" movingaverageperchannelminmaxobserver="" calculate="" `c`="" print(obs.calculate_qparams())="" (tensor([0.0090,="" 0.0075,="" 0.0055]),="" tensor([125,="" 187,="" 82],="" backend="" engine="" currently,="" quantized="" operators="" run="" on="" x86="" machines="" via="" fbgemm="" backend,="" use="" qnnpack="" primitives="" arm="" machines.="" server="" gpus="" (via="" tensorrt="" cudnn)="" coming="" soon.="" learn="" more="" about="" extending="" custom="" backends:="" rfc-0019.="" if="" else="" 'qnnpack'="" qconfig="torch.quantization.get_default_qconfig(backend)" torch.backends.quantized.engine="backend" (code)="" namedtuple="" stores="" used="" quantize="" activations="" weights.="" sure="" pass="" observer="" class="" (not="" instance),="" callable="" return="" instances.="" with_args()="" override="" default="" arguments.="" my_qconfig="torch.quantization.QConfig(" activation="MovingAverageMinMaxObserver.with_args(qscheme=torch.per_tensor_affine)," )="" qconfig(activation="functools.partial(<class" 'torch.ao.quantization.observer.movingaverageminmaxobserver'&gt;,="" 'torch.ao.quantization.observer.movingaverageperchannelminmaxobserver'&gt;,="" pytorch="" allows="" few="" different="" ways="" your="" model="" depending="" prefer="" flexible="" but="" manual,="" restricted="" automagic="" process="" (eager="" mode="" v="" s="" fx="" graph="" mode)="" quantizing="" (layer="" outputs)="" are="" precomputed="" inputs,="" afresh="" with="" input="" (static="" dynamic),="" computed="" without="" retraining="" (quantization-aware="" training="" post-training="" quantization)="" automatically="" fuses="" eligible="" modules,="" inserts="" quant="" dequant="" stubs,="" calibrates="" returns="" module="" -="" two="" method="" calls="" only="" networks="" symbolic="" traceable.="" examples="" below="" contain="" using="" eager="" comparison.="" dnns,="" candidates="" fp32="" parameters)="" outputs).="" reduces="" size.="" typically="" result="" faster="" inference.="" an="" example,="" 50-layer="" resnet="" network="" has="" ~26="" million="" computes="" ~16="" forward="" pass.="" dynamic="" weight-only="" here="" model’s="" pre-quantized;="" on-the-fly="" (“dynamic”)="" during="" simplest="" approaches,="" it="" line="" api="" call="" torch.quantization.quantize_dynamic.="" currently="" linear="" recurrent="" (lstm,="" gru,="" rnn)="" layers="" supported="" quantization.="" (+)="" higher="" accuracies="" since="" exactly="" calibrated="" [1].="" preferred="" models="" like="" lstms="" transformers="" where="" writing="" retrieving="" memory="" dominate="" bandwidths="" [4].="" (-)="" calibrating="" at="" runtime="" add="" compute="" overhead.="" torch="" nn="" toy="" m="nn.Sequential(" nn.conv2d(2,="" 64,="" (8,)),="" nn.relu(),="" nn.linear(16,10),="" nn.lstm(10,="" 10))="" m.eval()="" ##="" torch.quantization="" quantize_dynamic="" model_quantized="quantize_dynamic(" qconfig_spec="{nn.LSTM," nn.linear},="" inplace="False" quantize_fx="" qconfig_dict="{&quot;&quot;:" torch.quantization.default_dynamic_qconfig}="" empty="" key="" denotes="" modules="" model_prepared="quantize_fx.prepare_fx(m," qconfig_dict)="" static="" (ptq)="" ptq="" also="" pre-quantizes="" instead="" on-the-fly,="" pre-calibrated="" fixed="" (“static”)="" validation="" data.="" stay="" precision="" between="" operations="" 100="" mini-batches="" representative="" data="" sufficient="" calibrate="" [2].="" random="" calibration="" convenience="" application="" will="" bad="" qparams.="" 4.="" steps="" fusion="" combines="" multiple="" sequential="" (eg:="" [conv2d,="" batchnorm,="" relu])="" into="" one.="" fusing="" means="" compiler="" needs="" kernel="" many;="" this="" speeds="" things="" up="" improves="" accuracy="" by="" reducing="" error.="" inference="" than="" because="" eliminates="" float&lt;-&gt;int="" conversion="" costs="" layers.="" may="" need="" regular="" re-calibration="" robust="" against="" distribution-drift.="" consists="" following="" steps:="" fuse="" insert="" stubs="" prepare="" fused="" (insert="" before="" after="" layers)="" prepared="" (pass="" data)="" convert="" (replace="" version)="" copy="" running="" cpu.="" "qnnpack"="" arm.="" nn.conv2d(2,64,3),="" nn.conv2d(64,="" 128,="" 3),="" nn.relu()="" """fuse="" replaces="" first="" sequence="" module,="" rest="" identity="" """="" torch.quantization.fuse_modules(m,="" ['0','1'],="" conv-relu="" pair="" ['2','3'],="" second="" """insert="" stubs"""="" *m,="" torch.quantization.dequantstub())="" """prepare"""="" m.qconfig="torch.quantization.get_default_qconfig(backend)" torch.quantization.prepare(m,="" """calibrate="" example="" convenience.="" (validation)="" instead.="" torch.inference_mode():="" _="" range(10):="" 28,="" 28)="" m(x)="" """convert"""="" torch.quantization.convert(m,="" """check"""="" print(m[[1]].weight().element_size())="" 1="" byte="" 4="" bytes="" torch.quantization.get_default_qconfig(backend)}="" model_prepared(x)="" quantization-aware="" (qat)="" 5.="" approach="" great="" large="" models,="" suffers="" smaller="" [[6]].="" course="" loss="" numerical="" when="" adapting="" int8="" realm="" (figure="" 6(a)).="" qat="" tackles="" including="" error="" loss,="" thereby="" int8-first="" model.="" 6.="" comparison="" convergence="" [3]="" biases="" stored="" fp32,="" backpropagation="" happens="" usual.="" however="" pass,="" internally="" simulated="" fakequantize="" modules.="" they="" called="" fake="" immediately="" dequantize="" data,="" adding="" noise="" similar="" what="" might="" encountered="" final="" thus="" accounts="" any="" expected="" errors.="" optimizing="" identify="" wider="" region="" function="" 6(b)),="" such="" them="" does="" significantly="" affect="" accuracy.="" 7.="" backward="" image="" source:="" https:="" developer.nvidia.com="" blog="" achieving-fp32-accuracy-for-int8-inference-using-quantization-aware-training-with-tensorrt="" yields="" ptq.="" learned="" fine-grained="" (see="" learnablefakequantize)="" computational="" cost="" several="" hundred="" epochs="" [1]="" follows="" ptq,="" exception="" loop="" actually="" its="" version="" nn.conv2d(2,64,8),="" 8),="" """fuse"""="" m.train()="" torch.quantization.prepare_qat(m,="" """training="" loop"""="" n_epochs="10" opt="torch.optim.SGD(m.parameters()," lr="0.1)" loss_fn="lambda" out,="" tgt:="" torch.pow(tgt-out,="" 2).mean()="" epoch="" range(n_epochs):="" out="m(x)" torch.rand_like(out))="" opt.zero_grad()="" loss.backward()="" opt.step()="" sensitivity="" analysis="" respond="" equally,="" some="" sensitive="" drops="" others.="" identifying="" optimal="" combination="" minimizes="" drop="" time-consuming,="" so="" suggest="" one-at-a-time="" which="" most="" sensitive,="" retaining="" those.="" their="" experiments,="" skipping="" just="" 2="" (out="" total="" 28="" mobilenet="" v1)="" give="" near-fp32="" mode,="" we="" create="" qconfigs="" do="" easily:="" quantized_layer,="" model.named_modules():="" print("only="" layer:="" ",="" quantized_layer)="" module_name="" module-specific="" qconfigs.="" none,="" "module_name":[(quantized_layer,="" torch.quantization.get_default_qconfig(backend))]}="" evaluate(model)="" another="" compare="" statistics="" layers;="" commonly="" metrics="" these="" sqnr="" (signal="" ratio)="" mean-squre-error.="" comparative="" help="" guiding="" further="" optimizations.="" 8.="" comparing="" tools="" under="" numeric="" suite.="" suite="" full="" tutorial.="" extract="" pytorch.org="" tutorials="" prototype="" numeric_suite_tutorial.html="" torch.quantization._numeric_suite="" ns="" def="" sqnr(x,="" y):="" ps="torch.norm(x)" pn="torch.norm(x-y)" 20*torch.log10(ps="" pn)="" wt_compare_dict="ns.compare_weights(fp32_model.state_dict()," int8_model.state_dict())="" wt_compare_dict:="" print(key,="" compute_error(wt_compare_dict[key]['float'],="" wt_compare_dict[key]['quantized'].dequantize()))="" act_compare_dict="ns.compare_model_outputs(fp32_model," int8_model,="" input_data)="" act_compare_dict:="" compute_error(act_compare_dict[key]['float'][0],="" act_compare_dict[key]['quantized'][0].dequantize()))="" recommendations="" workflow="" 9.="" suggested="" click="" larger="" points="" (10m+="" [2]="" checkpoint="" scratch.[2]="" profiling="" optional="" bottleneck="" easy="" step,="" especially="" many="" minmax="" affine-per-tensor="" movingaverageminmax="" activations[2,="" 3]="" suscpetible="" turn="" off="" fine-tune="" around="" 10%="" original="" schedule="" annealing="" learning="" rate="" starting="" 1%="" initial="" rate.="" above="" didn’t="" work="" you,="" want="" know="" more.="" post="" thread="" details="" code="" (model="" architecture,="" metric,="" techniques="" tried).="" feel="" free="" cc="" me="" @suraj.pt.="" was="" lot="" digest,="" congratulations="" sticking="" it!="" next,="" we’ll="" take="" look="" “real-world”="" control="" structures="" (if-else,="" loops).="" elements="" disallow="" tracing="" model,="" makes="" bit="" tricky="" directly="" box.="" next="" series,="" get="" our="" hands="" dirty="" chock="" loops="" if-else="" blocks,="" even="" third-party="" libraries="" call.="" cover="" cool="" new="" feature="" define-by-run,="" tries="" ease="" constraint="" needing="" subsets="" flow.="" check="" define-by-run="" poster="" ptdd’21="" preview.="" references="" gholami,="" a.,="" kim,="" s.,="" dong,="" z.,="" yao,="" mahoney,="" m.="" w.,="" &amp;="" keutzer,="" k.="" (2021).="" survey="" methods="" efficient="" neural="" arxiv="" preprint="" arxiv:2103.13630.="" krishnamoorthi,="" r.="" (2018).="" deep="" convolutional="" inference:="" whitepaper.="" arxiv:1806.08342.="" wu,="" h.,="" judd,="" p.,="" zhang,="" x.,="" isaev,="" m.,="" micikevicius,="" p.="" (2020).="" integer="" principles="" empirical="" evaluation.="" arxiv:2004.09602.="" [4]="" docs="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/">
-  <meta name="twitter:image" content="http://localhost:4000/">
+  <meta property="og:image" content="https://maskerprc.github.io/">
+  <meta name="twitter:image" content="https://maskerprc.github.io/">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -406,7 +406,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -414,7 +414,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -426,24 +426,24 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
             <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -454,21 +454,27 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -481,15 +487,15 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -500,12 +506,12 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -516,28 +522,28 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -551,7 +557,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -587,7 +593,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2022年2月8日</p>
+            <p class="featured-post">2022 年 2 月 8 日</p>
             <h1>
                 <a class="blog-title">PyTorch 中的实用量化</a>
             </h1>
@@ -612,55 +618,55 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
       <li><a href="#mapping-function" id="markdown-toc-mapping-function">映射函数</a></li>
       <li><a href="#quantization-parameters" id="markdown-toc-quantization-parameters">量化参数</a></li>
       <li><a href="#calibration" id="markdown-toc-calibration">校准</a></li>
-      <li><a href="#affine-and-symmetric-quantization-schemes" id="markdown-toc-affine-and-symmetric-quantization-schemes">斜放和对称量化方案</a></li>
-      <li><a href="#per-tensor-and-per-channel-quantization-schemes" id="markdown-toc-per-tensor-and-per-channel-quantization-schemes">每张量和每通道量化方案</a></li>
+      <li><a href="#affine-and-symmetric-quantization-schemes" id="markdown-toc-affine-and-symmetric-quantization-schemes">线性及对称量化方案</a></li>
+      <li><a href="#per-tensor-and-per-channel-quantization-schemes" id="markdown-toc-per-tensor-and-per-channel-quantization-schemes">每张张量及每通道量化方案</a></li>
       <li><a href="#backend-engine" id="markdown-toc-backend-engine">后端引擎</a></li>
-      <li><a href="#qconfig" id="markdown-toc-qconfig">QConfig</a></li>
+      <li><a href="#qconfig" id="markdown-toc-qconfig">Q 配置</a></li>
     </ul>
   </li>
   <li><a href="#in-pytorch" id="markdown-toc-in-pytorch">在 PyTorch 中</a>    <ul>
-      <li><a href="#post-training-dynamicweight-only-quantization" id="markdown-toc-post-training-dynamicweight-only-quantization">训练后动态/仅权重量化</a></li>
+      <li><a href="#post-training-dynamicweight-only-quantization" id="markdown-toc-post-training-dynamicweight-only-quantization">训练后动态/权重量化</a></li>
       <li><a href="#post-training-static-quantization-ptq" id="markdown-toc-post-training-static-quantization-ptq">训练后静态量化（PTQ）</a></li>
       <li><a href="#quantization-aware-training-qat" id="markdown-toc-quantization-aware-training-qat">量化感知训练（QAT）</a></li>
     </ul>
   </li>
   <li><a href="#sensitivity-analysis" id="markdown-toc-sensitivity-analysis">敏感性分析</a></li>
-  <li><a href="#recommendations-for-your-workflow" id="markdown-toc-recommendations-for-your-workflow">工作流程推荐</a>    <ul>
+  <li><a href="#recommendations-for-your-workflow" id="markdown-toc-recommendations-for-your-workflow">工作流程建议</a>    <ul>
       <li><a href="#points-to-note" id="markdown-toc-points-to-note">注意事项</a></li>
     </ul>
   </li>
-  <li><a href="#references" id="markdown-toc-references">参考文献列表</a></li>
+  <li><a href="#references" id="markdown-toc-references">参考文献</a></li>
 </ul>
 <h2 id="fundamentals-of-quantization">量化基础</h2>
 
 <blockquote>
-  <p>如果有人问你几点了，你不会回答“10:14:34:430705”，但你可能会说“十点过一刻”。</p>
+  <p>如果有人问你现在是几点，你不会回答“10:14:34:430705”，但你可能会说“十点一刻”。</p>
 </blockquote>
 
-<p>量化有信息压缩的根源；在深度网络中，它指的是降低其权重和/或激活的数值精度。</p>
+<p>量化起源于信息压缩；在深度网络中，它指的是降低其权重和/或激活的数值精度。</p>
 
-<p>过参数化的深度神经网络具有更多的自由度，这使得它们成为信息压缩的良好候选者[<a href="https://arxiv.org/pdf/2103.13630.pdf">1</a>]。当你量化一个模型时，通常会发生两件事——模型变得更小，运行效率更高。硬件供应商明确允许对 8 位数据进行更快处理（比 32 位数据），从而实现更高的吞吐量。较小的模型具有更低的内存占用和功耗[<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>]，这对于边缘部署至关重要。</p>
+<p>过度参数化的深度神经网络具有更多的自由度，这使得它们成为信息压缩的良好候选者[1]。当你量化一个模型时，通常会发生两件事——模型变得更小，运行效率更高。硬件供应商明确允许对 8 位数据进行更快处理（相对于 32 位数据），从而实现更高的吞吐量。较小的模型具有更低的内存占用和功耗[2]，这对于边缘部署至关重要。</p>
 
 <h3 id="mapping-function">映射函数</h3>
-<p>映射函数可能正如你所猜测的那样 - 一个将浮点数映射到整数空间的函数。一个常用的映射函数是一个线性变换，表示为 <img height="19" width="186" src="https://latex.codecogs.com/gif.latex?Q(r) = round(r/S + Z)"> ，其中 <img height="8" width="8" src="https://latex.codecogs.com/gif.latex?r"> 是输入， <img height="17" width="32" src="https://latex.codecogs.com/gif.latex?S, Z"> 是<strong>量化参数 。</strong></p>
+<p>映射函数正如你所猜测的那样——一个将浮点值映射到整数空间的函数。一个常用的映射函数是一个线性变换，表示为 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?Q(r) = round(r/S + Z)"> ，其中 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?r"> 是输入， <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?S, Z"> 是量化参数。</p>
 
-<p>要重新转换为浮点数空间，逆函数表示为 <img height="19" width="144" src="https://latex.codecogs.com/gif.latex?\tilde r = (Q(r) - Z) \cdot S"> 。</p>
+<p>要重新转换为浮点空间，逆函数表示为 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\tilde r = (Q(r) - Z) \cdot S"> 。</p>
 
-<p> <img height="17" width="41" src="https://latex.codecogs.com/gif.latex?\tilde r \neq r"> 及其差构成了<em>量化误差 </em>。</p>
+<p>，它们的差构成了量化误差。</p>
 
 <h3 id="quantization-parameters">量化参数</h3>
-<p>映射函数由 <strong> 缩放因子 </strong> <img height="13" width="12" src="https://latex.codecogs.com/gif.latex?S"> 和 <strong> 零点 </strong> <img height="13" width="12" src="https://latex.codecogs.com/gif.latex?Z"> 参数化。</p>
+<p>映射函数由缩放因子 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?S"> 和零点 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?Z"> 进行参数化。</p>
 
-<p> <img height="13" width="12" src="https://latex.codecogs.com/gif.latex?S"> 简单来说就是输入范围与输出范围 <img height="43" width="96" src="https://latex.codecogs.com/gif.latex?S = \frac{\beta - \alpha}{\beta_q - \alpha_q}"> 的比值。</p>
+<p> <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?S"> 是输入范围与输出范围 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?S = \frac{\beta - \alpha}{\beta_q - \alpha_q}"> 的比值</p>
 
-<p>其中 [ <img height="17" width="31" src="https://latex.codecogs.com/gif.latex?\alpha, \beta"> ] 是输入的裁剪范围，即允许输入的边界。[ <img height="19" width="43" src="https://latex.codecogs.com/gif.latex?\alpha_q, \beta_q"> ] 是映射到量化输出空间中的范围。对于 8 位量化，输出范围 <img height="22" width="156" src="https://latex.codecogs.com/gif.latex?\beta_q - \alpha_q <= (2^8 - 1)"> 。</p>
+<p>其中 [ <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\alpha, \beta"> ] 是输入的裁剪范围，即允许输入的边界。[ <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\alpha_q, \beta_q"> ] 是映射到量化输出空间中的范围。对于 8 位量化，输出范围 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\beta_q - \alpha_q <= (2^8 - 1)"> 。</p>
 
-<p> <img height="13" width="12" src="https://latex.codecogs.com/gif.latex?Z"> 作为偏置，确保输入空间中的 0 完美映射到量化空间中的 0。 <img height="33" width="120" src="https://latex.codecogs.com/gif.latex?Z = -(\frac{\alpha}{S} - \alpha_q)"> </p>
+<p> <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?Z"> 作为偏置，以确保输入空间中的 0 完美映射到量化空间中的 0。 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?Z = -(\frac{\alpha}{S} - \alpha_q)"> </p>
 
 <h3 id="calibration">校准</h3>
-<p>选择输入裁剪范围的过程称为 <strong> 校准 </strong>。最简单的技术（也是 PyTorch 中的默认设置）是记录运行中的最小值和最大值，并将它们分配给 <img height="8" width="11" src="https://latex.codecogs.com/gif.latex?\alpha"> 和 <img height="17" width="11" src="https://latex.codecogs.com/gif.latex?\beta"> 。TensorRT 也使用熵最小化（KL 散度）、均方误差最小化或输入范围的分位数。</p>
+<p>选择输入裁剪范围的过程称为校准。最简单的技术（也是 PyTorch 中的默认设置）是记录运行中的最小值和最大值，并将它们分配给 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\alpha"> 和 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\beta"> 。TensorRT 还使用熵最小化（KL 散度）、均方误差最小化或输入范围的分位数。</p>
 
-<p>在 PyTorch 中，<code class="language-plaintext highlighter-rouge">Observer</code> 模块 (<a href="https://github.com/PyTorch/PyTorch/blob/748d9d24940cd17938df963456c90fa1a13f3932/torch/ao/quantization/observer.py#L88"> 代码 </a>) 收集输入值的统计信息并计算 qparams <img height="17" width="32" src="https://latex.codecogs.com/gif.latex?S, Z"> 。不同的校准方案会导致不同的量化输出，最好通过实验验证哪种方案最适合您的应用程序和架构（更多内容将在后面介绍）。</p>
+<p>在 PyTorch 中， <code class="language-plaintext highlighter-rouge">Observer</code> 模块（代码）收集输入值的统计信息并计算 qparams <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?S, Z"> 。不同的校准方案会导致不同的量化输出，最好通过实验验证哪种方案最适合您的应用程序和架构（更多内容将在后面介绍）。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.quantization.observer</span> <span class="kn">import</span> <span class="n">MinMaxObserver</span><span class="p">,</span> <span class="n">MovingAverageMinMaxObserver</span><span class="p">,</span> <span class="n">HistogramObserver</span>
 <span class="n">C</span><span class="p">,</span> <span class="n">L</span> <span class="o">=</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span>
@@ -688,10 +694,10 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 # HistogramObserver (tensor([0.0100]), tensor([106], dtype=torch.int32))
 </span></code></pre></div></div>
 
-<h3 id="affine-and-symmetric-quantization-schemes">仿射和对称量化方案</h3>
-<p><strong>仿射或非对称量化</strong>方案将输入范围分配给观察到的最小和最大值。仿射方案通常提供更紧密的裁剪范围，适用于量化非负激活（如果您的输入张量从不为负，则不需要输入范围包含负值）。范围计算为 <img height="19" width="191" src="https://latex.codecogs.com/gif.latex?\alpha = min(r), \beta = max(r)"> 。当用于权重张量时，仿射量化会导致推理计算成本更高[<a href="https://arxiv.org/abs/2004.09602">3</a>]。</p>
+<h3 id="affine-and-symmetric-quantization-schemes">线性或对称量化方案</h3>
+<p>线性或非对称量化方案将输入范围分配给观察到的最小和最大值。线性方案通常提供更紧的裁剪范围，适用于量化非负激活（如果您的输入张量永远不会为负，则不需要输入范围包含负值）。范围计算如下 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?\alpha = min(r), \beta = max(r)"> 。当用于权重张量时，线性量化会导致更昂贵的推理[3]。</p>
 
-<p><strong>对称量化</strong>方案将输入范围围绕 0 中心化，消除了计算零点偏移的需要。范围计算为 <img height="19" width="273" src="https://latex.codecogs.com/gif.latex?-\alpha = \beta = max(|max(r)|,|min(r)|)"> 。对于偏斜信号（如非负激活），这可能导致量化分辨率不佳，因为裁剪范围包括在输入中从未出现过的值（见下面的 pyplot）。</p>
+<p>对称量化方案将输入范围围绕 0 中心化，消除了计算零点偏移的需要。范围计算如下 <img height="16" width="16" src="https://latex.codecogs.com/gif.latex?-\alpha = \beta = max(|max(r)|,|min(r)|)"> 。对于偏斜信号（如非负激活），这可能导致量化分辨率不佳，因为裁剪范围包括输入中从未出现过的值（请参见下面的 pyplot）。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">act</span> <span class="o">=</span>  <span class="n">torch</span><span class="p">.</span><span class="n">distributions</span><span class="p">.</span><span class="n">pareto</span><span class="p">.</span><span class="n">Pareto</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">).</span><span class="n">sample</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">1024</span><span class="p">))</span>
 <span class="n">weights</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">distributions</span><span class="p">.</span><span class="n">normal</span><span class="p">.</span><span class="n">Normal</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.12</span><span class="p">).</span><span class="n">sample</span><span class="p">((</span><span class="mi">3</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">7</span><span class="p">)).</span><span class="n">flatten</span><span class="p">()</span>
@@ -726,9 +732,9 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
 <p align="center">
   <img src="/assets/images/quantization-practice/affine-symmetric.png" width="100%">
-  <br>图2.仿射和对称方案的裁剪范围（紫色）</p>
+  <br>图 2.仿射和对称方案的裁剪范围（紫色）</p>
 
-<p>在 PyTorch 中，您可以在初始化 Observer 时指定仿射或对称方案。请注意，并非所有观察者都支持这两种方案。</p>
+<p>在 PyTorch 中，初始化 Observer 时可以指定仿射或对称方案。请注意，并非所有观察者都支持这两种方案。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">for</span> <span class="n">qscheme</span> <span class="ow">in</span> <span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">per_tensor_affine</span><span class="p">,</span> <span class="n">torch</span><span class="p">.</span><span class="n">per_tensor_symmetric</span><span class="p">]:</span>
   <span class="n">obs</span> <span class="o">=</span> <span class="n">MovingAverageMinMaxObserver</span><span class="p">(</span><span class="n">qscheme</span><span class="o">=</span><span class="n">qscheme</span><span class="p">)</span>
@@ -741,13 +747,13 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 </span></code></pre></div></div>
 
 <h3 id="per-tensor-and-per-channel-quantization-schemes">每张量和每通道量化方案</h3>
-<p>量化参数可以针对层的整个权重张量整体计算，也可以分别针对每个通道计算。在每张量量化中，相同的裁剪范围应用于层中所有通道</p>
+<p>可以对层的整个权重张量作为一个整体计算量化参数，或者分别对每个通道进行计算。在每张量方案中，相同的裁剪范围应用于层的所有通道</p>
 
 <p align="center">
   <img src="/assets/images/quantization-practice/per-channel-tensor.svg" width="60%">
-  <br>图 3. 每通道使用每通道一组 qparams。每张量使用整个张量相同的 qparams。</p>
+  <br>图 3. 每个通道使用一组 qparams，而每个张量使用相同的 qparams。</p>
 
-<p>对于权重量化，对称的每通道量化提供了更好的精度；每张量量化表现不佳，可能由于批归一化折叠导致的通道间卷积权重的高方差[<a href="https://arxiv.org/abs/2004.09602">3</a>]。</p>
+<p>对于权重量化，对称通道量化提供了更好的精度；张量量化表现不佳，可能由于批归一化折叠导致的通道间卷积权重方差较大[3]。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="nn">torch.quantization.observer</span> <span class="kn">import</span> <span class="n">MovingAveragePerChannelMinMaxObserver</span>
 <span class="n">obs</span> <span class="o">=</span> <span class="n">MovingAveragePerChannelMinMaxObserver</span><span class="p">(</span><span class="n">ch_axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>  <span class="c1"># calculate qparams for all `C` channels separately
@@ -759,7 +765,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 </span></code></pre></div></div>
 
 <h3 id="backend-engine">后端引擎</h3>
-<p>目前，量化算子通过 <a href="https://github.com/pytorch/FBGEMM">FBGEMM 后端 </a> 在 x86 机器上运行，或在 ARM 机器上使用 <a href="https://github.com/pytorch/QNNPACK">QNNPACK</a> 原语。服务器 GPU 的后端支持（通过 TensorRT 和 cuDNN）即将推出。了解如何扩展量化到自定义后端的更多信息： <a href="https://github.com/pytorch/rfcs/blob/master/RFC-0019-Extending-PyTorch-Quantization-to-Custom-Backends.md">RFC-0019</a>。</p>
+<p>目前，量化算子通过 FBGEMM 后端在 x86 机器上运行，或在 ARM 机器上使用 QNNPACK 原语。服务器 GPU（通过 TensorRT 和 cuDNN）的后端支持即将推出。了解更多关于扩展量化到自定义后端的信息：RFC-0019。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">backend</span> <span class="o">=</span> <span class="s">'fbgemm'</span> <span class="k">if</span> <span class="n">x86</span> <span class="k">else</span> <span class="s">'qnnpack'</span>
 <span class="n">qconfig</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">quantization</span><span class="p">.</span><span class="n">get_default_qconfig</span><span class="p">(</span><span class="n">backend</span><span class="p">)</span>  
@@ -768,7 +774,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
 <h3 id="qconfig">QConfig</h3>
 
-<p><code class="language-plaintext highlighter-rouge">QConfig</code> (<a href="https://github.com/PyTorch/PyTorch/blob/d6b15bfcbdaff8eb73fa750ee47cef4ccee1cd92/torch/ao/quantization/qconfig.py#L165"> 代码 </a>) 命名元组存储用于量化激活和权重的观察者和量化方案。</p>
+<p>该 <code class="language-plaintext highlighter-rouge">QConfig</code> （代码）NamedTuple 存储了用于量化激活和权重的观察者和量化方案。</p>
 
 <p>请确保传递 Observer 类（而非实例），或一个可以返回 Observer 实例的可调用对象。使用 <code class="language-plaintext highlighter-rouge">with_args()</code> 来覆盖默认参数。</p>
 
@@ -782,27 +788,27 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
 <h2 id="in-pytorch">在 PyTorch 中</h2>
 
-<p>PyTorch 允许您以几种不同的方式量化您的模型</p>
+<p>PyTorch 允许您以几种不同的方式量化您的模型，具体取决于</p>
 <ul>
-  <li>如果您更喜欢灵活但手动的过程，或者受限制的自动过程（<em> 即时模式</em>与 <em>FX 图模式 </em>）</li>
-  <li>如果量化激活（层输出）的 qparams 对所有输入是预先计算的，或者每个输入都重新计算（<em> 静态</em>与<em>动态 </em>），</li>
-  <li>如果 qparams 是在重新训练或不重新训练的情况下计算的（<em> 量化感知训练</em>与<em>训练后量化 </em>）</li>
+  <li>您是否更喜欢灵活但手动的方式，或者受限的自动过程（急切模式与 FX 图模式）</li>
+  <li>如果量化参数（层输出）是针对所有输入预先计算的，还是每个输入都重新计算（静态与动态），</li>
+  <li>如果量化参数是在重新训练或无重新训练的情况下计算（量化感知训练与后训练量化）</li>
 </ul>
 
-<p>FX 图模式自动融合符合条件的模块，插入量化/去量化占位符，校准模型，并在两次方法调用中返回量化模块 - 但仅适用于可符号跟踪的网络。下面的示例包含使用 Eager 模式与 FX 图模式进行对比的调用。</p>
+<p>FX 图模式自动融合符合条件的模块，插入量化和去量化占位符，校准模型并返回量化模块 - 所有操作仅需两次方法调用 - 但仅适用于可符号追踪的网络。以下示例包含使用急切模式和 FX 图模式进行对比的调用。</p>
 
-<p>在 DNN 中，符合条件的量化候选者是 FP32 权重（层参数）和激活（层输出）。量化权重可以减小模型大小。量化激活通常会导致推理速度更快。</p>
+<p>在深度神经网络中，可量化的候选对象是 FP32 权重（层参数）和激活（层输出）。量化权重可以减小模型大小。量化激活通常会导致推理速度更快。</p>
 
-<p>例如，50 层的 ResNet 网络有约 2600 万个权重参数，在正向传播中计算约 1600 万个激活。</p>
+<p>例如，50 层的 ResNet 网络大约有 2600 万个权重参数，在正向传播中计算大约 1600 万个激活。</p>
 
 <h3 id="post-training-dynamicweight-only-quantization">训练后动态/仅权重量化</h3>
-<p>在这里，模型的权重是预先量化的；激活在推理过程中动态量化。这是所有方法中最简单的一种，它有一个简单的 API 调用 <code class="language-plaintext highlighter-rouge">torch.quantization.quantize_dynamic</code> 。目前仅支持线性层和循环层（<code class="language-plaintext highlighter-rouge">LSTM</code>、<code class="language-plaintext highlighter-rouge">GRU</code>、<code class="language-plaintext highlighter-rouge">RNN</code>）进行动态量化。</p>
+<p>模型的权重预先量化；激活量在推理过程中动态量化（动态量化）。这是所有方法中最简单的一种，API 调用只需一行代码 <code class="language-plaintext highlighter-rouge">torch.quantization.quantize_dynamic</code> 。目前仅支持线性层和循环层（ <code class="language-plaintext highlighter-rouge">LSTM</code> ， <code class="language-plaintext highlighter-rouge">GRU</code> ， <code class="language-plaintext highlighter-rouge">RNN</code> ）进行动态量化。</p>
 
-<p><strong>(+)</strong> 由于每个输入的剪裁范围都进行了精确校准，因此可以提高准确率[<a href="https://arxiv.org/pdf/2103.13630.pdf">1</a>]。</p>
+<p>(+) 由于剪裁范围针对每个输入进行了精确校准，因此可以提高准确率 [1]。</p>
 
-<p><strong>(+)</strong> 动态量化更适合 LSTM 和 Transformer 等模型，因为这些模型在从内存中写入/读取模型权重时带宽占主导地位 [<a href="https://pytorch.org/docs/stable/quantization.html#prototype-fx-graph-mode-quantization">4</a>].</p>
+<p>(+) 对于 LSTMs 和 Transformers 等模型，动态量化更受欢迎，因为这些模型中写入/读取模型权重占主导带宽 [4]。</p>
 
-<p><strong>(-)</strong> 在运行时对每层的激活进行校准和量化会增加计算开销。</p>
+<p>(-) 在运行时对每层的激活量进行校准和量化会增加计算开销。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">import</span> <span class="nn">torch</span>
 <span class="kn">from</span> <span class="nn">torch</span> <span class="kn">import</span> <span class="n">nn</span>
@@ -830,17 +836,17 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 </code></pre></div></div>
 
 <h3 id="post-training-static-quantization-ptq">训练后静态量化（PTQ）</h3>
-<p>PTQ 也预先量化模型权重，但与动态校准激活不同，它使用验证数据预先校准和固定（“静态”）剪裁范围。在推理过程中，激活保持在量化精度之间。大约 100 个具有代表性的数据的小批量足以校准观察者 [<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>]。以下示例为了方便起见使用随机数据进行校准 - 在您的应用程序中使用该数据将导致 q 参数不良。</p>
+<p>PTQ 也预先量化模型权重，但与动态校准激活不同，这里的剪裁范围是预先校准并固定的（静态）使用验证数据。推理过程中激活保持在量化精度之间。大约 100 个具有代表性的数据的小批量就足以校准观察者[2]。以下示例使用随机数据在校准中方便起见 - 在您的应用程序中使用该数据将导致不良的 q 参数。</p>
 
 <p align="center">
   <img src="/assets/images/quantization-practice/ptq-flowchart.svg" alt="PTQ flowchart" width="60%">
-  <br>图 4. 静态量化步骤</p>
+  <br>图 4.训练后静态量化步骤</p>
 
-<p><a href="https://maskerprc.github.io/tutorials/recipes/fuse.html">模块融合 </a> 将多个连续模块（例如：<code class="language-plaintext highlighter-rouge">[卷积 2d, 批标准化, ReLU]</code>）合并为一个。融合模块意味着编译器只需要运行一个内核而不是多个；这样可以加快速度并提高准确性，通过减少量化误差。</p>
+<p>模块融合将多个连续模块（例如： <code class="language-plaintext highlighter-rouge">[Conv2d, BatchNorm, ReLU]</code> ）合并为一个。融合模块意味着编译器只需要运行一个内核而不是多个；这可以加快速度并提高准确性，通过减少量化误差。</p>
 
-<p><strong>(+)</strong> 静态量化比动态量化具有更快的推理速度，因为它消除了层之间的浮点数与整数的转换成本。</p>
+<p>(+) 静态量化比动态量化具有更快的推理速度，因为它消除了层之间的浮点数与整数的转换成本。</p>
 
-<p><strong>(-)</strong> 静态量化模型可能需要定期重新校准，以保持对分布漂移的鲁棒性。</p>
+<p>(-) 静态量化模型可能需要定期重新校准，以保持对分布漂移的鲁棒性。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Static quantization of a model consists of the following steps:
 </span>
@@ -915,25 +921,25 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 <h3 id="quantization-aware-training-qat">量化感知训练（QAT）</h3>
 <p align="center">
   <img src="/assets/images/quantization-practice/qat-flowchart.svg" alt="QAT flowchart" width="60%">
-  <br>图5. 量化感知训练步骤</p>
+  <br>图 5. 量化感知训练步骤</p>
 
-<p>PTQ 方法非常适合大型模型，但在小型模型中准确性会受到影响 [[6]]。这当然是由于将模型从 FP32 转换为 INT8 领域时数值精度的损失造成的 <em>(图 6(a))</em>。QAT 通过将量化误差包含在训练损失中，从而训练一个以 INT8 为主的模型来解决这个问题。</p>
+<p>PTQ 方法非常适合大型模型，但在小型模型中准确性会受到影响[[6]]。这当然是由于将模型从 FP32 领域转换为 INT8 领域时数值精度的损失（图 6(a)）。QAT 通过将量化误差包含在训练损失中来解决这一问题，从而训练一个以 INT8 为主的模型。</p>
 
 <p align="center">
   <img src="/assets/images/quantization-practice/ptq_vs_qat.png" alt="Fig. 6: Comparison of PTQ and QAT" width="100%">
-  <br>图 6. PTQ 和 QAT 收敛性比较 [3]</p>
+  <br>图 6. PTQ 和 QAT 收敛性比较[3]</p>
 
-<p>所有权重和偏置都存储在 FP32 中，反向传播按常规进行。然而，在正向传播过程中，通过 <code class="language-plaintext highlighter-rouge">FakeQuantize</code> 模块内部模拟量化。它们被称为“假”量化，因为它们对数据进行量化和去量化，并添加类似于量化推理过程中可能遇到的量化噪声。因此，最终的损失考虑了任何预期的量化误差。通过优化这一点，模型可以识别损失函数中更广泛的区域 <em>(图 6(b))</em>，并识别 FP32 参数，这样将它们量化为 INT8 不会显著影响精度。</p>
+<p>所有权重和偏差都存储在 FP32 中，反向传播过程与通常一样。然而，在正向传播过程中，通过 <code class="language-plaintext highlighter-rouge">FakeQuantize</code> 模块内部模拟量化。它们被称为“假”量化，因为它们量化数据后立即反量化，添加与量化推理过程中可能遇到的类似的量化噪声。因此，最终的损失考虑了任何预期的量化误差。在此优化允许模型在损失函数中识别更广泛的区域（图 6(b)），并识别 FP32 参数，将它们量化为 INT8 不会显著影响准确性。</p>
 
 <p align="center">
   <img src="/assets/images/quantization-practice/qat-fake-quantization.png" alt="Fake Quantization in the forward and backward pass" width="100%">
-  <br>图7. 正向和反向传播中的假量化</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">图片来源：https://developer.nvidia.com/blog/achieving-fp32-accuracy-for-int8-inference-using-quantization-aware-training-with-tensorrt</p>
+  <br>图 7. 正向和反向传播过程中的假量化</font></font></font><br><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">图像来源：https://developer.nvidia.com/blog/achieving-fp32-accuracy-for-int8-inference-using-quantization-aware-training-with-tensorrt</p>
 
-<p><strong>(+)</strong> QAT 比 PTQ 具有更高的准确率。</p>
+<p>(+) QAT 的准确率高于 PTQ。</p>
 
-<p><strong>(+)</strong> Qparams 可在模型训练期间学习，以实现更精细的精度（参见 <a href="https://github.com/pytorch/pytorch/blob/master/torch/ao/quantization/_learnable_fake_quantize.py"> 可学习伪量化 </a>）</p>
+<p>(+) Qparams 可在模型训练期间学习，以获得更精细的准确度（参见 LearnableFakeQuantize）。</p>
 
-<p><strong>(-)</strong> 在 QAT 中重新训练模型的计算成本可能需要数百个 epoch [<a href="https://arxiv.org/pdf/2103.13630.pdf">1</a>]</p>
+<p>(-) 在 QAT 中重新训练模型的计算成本可能需要数百个 epoch [1]。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># QAT follows the same steps as PTQ, with the exception of the training loop before you actually convert the model to its quantized version
 </span>
@@ -981,7 +987,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 </code></pre></div></div>
 
 <h2 id="sensitivity-analysis">敏感性分析</h2>
-<p>并非所有层对量化都有相同的响应，有些层对精度下降更敏感。确定最小化精度下降的最佳层组合是耗时的工作，因此 [<a href="https://arxiv.org/abs/2004.09602">3</a>] 建议进行逐层敏感性分析以确定哪些层最敏感，并保留这些层的 FP32 精度。在他们的实验中，仅跳过 MobileNet v1 中的 2 个卷积层（总共 28 个层）就能达到接近 FP32 的精度。使用 FX Graph 模式，我们可以轻松创建自定义 qconfig 来完成此操作：</p>
+<p>并非所有层对量化都同等敏感，有些层比其他层更容易受到精度下降的影响。确定最小化精度下降的最佳层组合是一个耗时的过程，因此[3]建议进行逐层敏感性分析以确定哪些层最敏感，并保留这些层的 FP32 精度。在他们的实验中，仅跳过 MobileNet v1 中的 2 个卷积层（总共 28 个）就能达到接近 FP32 的精度。使用 FX Graph 模式，我们可以轻松创建自定义 qconfigs 来完成这项工作：</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># ONE-AT-A-TIME SENSITIVITY ANALYSIS 
 </span>
@@ -998,15 +1004,15 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
   <span class="c1"># evaluate(model)
 </span></code></pre></div></div>
 
-<p>另一种方法是比较 FP32 和 INT8 层的统计数据；这些常用的指标包括 SQNR（信噪比）和均方误差。这种比较分析也可能有助于指导进一步的优化。</p>
+<p>另一种方法是比较 FP32 和 INT8 层的统计信息；这些常用的指标是 SQNR（信噪比）和均方误差。这种比较分析也可能有助于指导进一步的优化。</p>
 
 <p align="center">
   <img src="/assets/images/quantization-practice/compare_output_ns.png" alt="Fig 8. Comparing model weights and activations" width="100%" align="center">
-  <br>图8. 比较模型权重和激活</p>
+  <br>图 8. 比较模型权重和激活</p>
 
-<p>PyTorch 在 Numeric Suite 中提供了帮助进行此分析的工具。更多关于使用 Numeric Suite 的信息，请参阅<a href="https://maskerprc.github.io/tutorials/prototype/numeric_suite_tutorial.html">完整教程 </a>。</p>
+<p>PyTorch 提供了在数值套件下帮助进行此分析的工具。从完整教程中了解更多关于使用数值套件的信息。</p>
 
-<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># extract from https://maskerprc.github.io/tutorials/prototype/numeric_suite_tutorial.html
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># extract from https://pytorch.org/tutorials/prototype/numeric_suite_tutorial.html
 </span><span class="kn">import</span> <span class="nn">torch.quantization._numeric_suite</span> <span class="k">as</span> <span class="n">ns</span>
 
 <span class="k">def</span> <span class="nf">SQNR</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
@@ -1033,28 +1039,28 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
 <h3 id="points-to-note">注意事项</h3>
 <ul>
-  <li>大型（10M+参数）模型对量化误差更稳健。[<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>]</li>
-  <li>从 FP32 检查点量化模型比从头开始训练 INT8 模型具有更高的精度。[<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>]</li>
+  <li>大型（10M+参数）模型对量化误差的鲁棒性更强。[2]</li>
+  <li>将模型从 FP32 检查点量化比从头开始训练 INT8 模型提供更好的精度。[2]</li>
   <li>分析模型运行时间是可选的，但它可以帮助识别瓶颈层。</li>
-  <li>动态量化是一个简单的第一步，特别是如果你的模型有很多线性或循环层。</li>
-  <li>使用对称通道量化与 <code class="language-plaintext highlighter-rouge">MinMax</code> 观察器对权重进行量化。使用仿射张量量化与 <code class="language-plaintext highlighter-rouge">MovingAverageMinMax</code> 观察器对激活进行量化[<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>, <a href="https://arxiv.org/abs/2004.09602">3</a>]</li>
+  <li>动态量化是一个简单的第一步，尤其是如果你的模型包含许多线性或循环层。</li>
+  <li>使用对称通道量化与 <code class="language-plaintext highlighter-rouge">MinMax</code> 观察者来量化权重。使用仿射张量量化与 <code class="language-plaintext highlighter-rouge">MovingAverageMinMax</code> 观察者来量化激活[2, 3]。</li>
   <li>使用如 SQNR 等指标来识别哪些层最容易受到量化误差的影响。在这些层上关闭量化。</li>
-  <li>使用 QAT 在约 10%的原训练计划中进行微调，学习率衰减计划从初始训练学习率的 1%开始。 [<a href="https://arxiv.org/abs/2004.09602">3</a>]</li>
-  <li>如果上述工作流程对您不起作用，我们想了解更多。请发布一个包含您的代码细节（模型架构、准确度指标、尝试的技术）的帖子。欢迎@suraj.pt 回复我。</li>
+  <li>使用 QAT 进行微调，大约需要原训练计划的 10%，并从初始训练学习率的 1%开始使用退火学习率计划。[3]</li>
+  <li>如果上述工作流程对您不起作用，我们想了解更多。请发布一个包含您代码细节（模型架构、准确度指标、尝试的技术）的帖子。请随意@suraj.pt 联系我。</li>
 </ul>
 
-<p>这需要消化很多信息，恭喜您坚持下来！接下来，我们将查看量化使用动态控制结构（if-else、循环）的“真实世界”模型。这些元素不允许对模型进行符号跟踪，这使得直接量化模型变得有些棘手。在系列文章的下一篇文章中，我们将深入一个充满循环和 if-else 块的模型，甚至在该模型的 <code class="language-plaintext highlighter-rouge">forward</code> 调用中使用第三方库。</p>
+<p>这需要消化很多东西，恭喜您坚持下来！接下来，我们将探讨对使用动态控制结构（if-else、循环）的“真实世界”模型进行量化。这些元素不允许对模型进行符号跟踪，这使得直接量化模型变得有些棘手。在系列文章的下一篇文章中，我们将深入探讨一个充满循环和 if-else 块的模型，甚至使用了 <code class="language-plaintext highlighter-rouge">forward</code> 调用中的第三方库。</p>
 
-<p>我们还将介绍 PyTorch 量化中的一个酷炫新特性，称为“运行时定义”，它试图通过只需要模型计算图的子集不包含动态流来放宽这一限制。查看 PTDD’21 上的 <a href="https://s3.amazonaws.com/assets.pytorch.org/ptdd2021/posters/C8.png">“运行时定义”海报</a>以获取预览。</p>
+<p>我们还将介绍 PyTorch 量化中的一个新特性——运行时定义，它试图通过只需要模型计算图的子集不包含动态流程来放宽这一限制。查看 PTDD’21 上的 Define-by-Run 海报以获取预览。</p>
 
 <h2 id="references">参考文献列表</h2>
-<p>[<a href="https://arxiv.org/pdf/2103.13630.pdf">1</a>] Gholami, A., Kim, S., Dong, Z., Yao, Z., Mahoney, M. W., &amp; Keutzer, K. (2021). 高效神经网络推理的量化方法综述。arXiv 预印本 arXiv:2103.13630。</p>
+<p>[ 1] Gholami, A.，Kim, S.，Dong, Z.，Yao, Z.，Mahoney, M. W.，&amp; Keutzer, K. (2021). 高效神经网络推理量化方法的综述。arXiv 预印本 arXiv:2103.13630。</p>
 
-<p>[<a href="https://arxiv.org/pdf/1806.08342.pdf">2</a>] Krishnamoorthi, R. (2018). 高效推理的深度卷积神经网络量化：白皮书。arXiv 预印本 arXiv:1806.08342。</p>
+<p>[2] 克里希纳穆尔蒂，R. (2018)。高效推理的深度卷积神经网络量化：一份白皮书。arXiv 预印本 arXiv:1806.08342。</p>
 
-<p>[<a href="https://arxiv.org/abs/2004.09602">3</a>] Wu, H., Judd, P., Zhang, X., Isaev, M., &amp; Micikevicius, P. (2020). 深度学习推理的整数量化：原理和实证评估。arXiv 预印本 arXiv:2004.09602。</p>
+<p>[3] 吴，H.，朱德，P.，张，X.，伊萨耶夫，M.，&amp; 米基凯维丘斯，P. (2020)。深度学习推理的整数量化：原理和实证评估。arXiv 预印本 arXiv:2004.09602。</p>
 
-<p>[<a href="https://pytorch.org/docs/stable/quantization.html#prototype-fx-graph-mode-quantization">4</a>] PyTorch 量化文档</p>
+<p>[4] PyTorch 量化文档</p>
 
 
                 </article>
@@ -1071,14 +1077,14 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -1095,7 +1101,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -1108,7 +1114,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -1116,7 +1122,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -1145,9 +1151,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -1157,7 +1161,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -1182,19 +1186,19 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1217,7 +1221,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1231,7 +1235,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1266,7 +1270,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1280,7 +1284,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1348,7 +1352,7 @@ axs[0, 0].set_title(" activation,="" affine-quantized")="" plot(axs[0,="" 1],=""
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

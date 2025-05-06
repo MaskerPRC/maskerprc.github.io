@@ -67,8 +67,8 @@ Code Snippet (for full code sample, see Appendix A):
    try:
        torch.cuda.memory._dump_snapshot(f" {file_prefix}.pickle")="" except="" exception="" as="" e:="" logger.error(f"failed="" to="" capture="" memory="" snapshot="" {e}")="" #="" stop="" recording="" history.="" torch.cuda.memory._record_memory_history(enabled="None)" visualize="" the="" file,="" we="" have="" a="" tool="" hosted="" at="" https:="" pytorch.org="" memory_viz.="" there,="" you="" can="" drag="" and="" drop="" your="" saved="" file="" it="" will="" plot="" each="" allocation="" over="" time.="" privacy="" note:="" not="" save="" snapshot.="" alternatively,="" generate="" an="" html="" from="" .pickle="" by="" using="" script="" pytorch="" torch="" cuda="" _memory_viz.py,="" here="" is="" example:="" python="" _memory_viz.py="" trace_plot="" snapshot.pickle="" -o="" snapshot.html="" debugging="" ooms="" let’s="" look="" how="" use="" answer:="" why="" did="" oom="" happen?="" where="" gpu="" being="" used?="" resnet50="" with="" bug="" we’ve="" taken="" properly="" working="" model="" in="" first="" now,="" take="" training="" example="" bug,="" see="" snapshot:="" notice="" second="" iteration="" uses="" far="" more="" than="" iteration.="" if="" this="" were="" much="" larger,="" could="" oom’d="" without="" insight="" into="" why.="" when="" examining="" further,="" clearly="" that="" several="" tensors="" are="" staying="" alive="" later="" iterations.="" mouse="" one="" of="" these="" tensors,="" would="" show="" stack="" trace="" suggesting="" gradient="" tensors.="" indeed="" go="" code,="" doesn’t="" clear="" cleared="" them="" before="" forward.="" before:="" for="" _="" range(num_iters):="" pred="model(inputs)" loss_fn(pred,="" labels).backward()="" optimizer.step()="" after:="" add="" line="" grad="" optimizer.zero_grad(set_to_none="True)" simply="" instruction="" (more="" details="" about="" need="" zero="" gradients="" here:="" tutorials="" recipes="" zeroing_out_gradients.html).="" simplification="" found="" complicated="" programs="" tool.="" encourage="" try="" out="" on="" problems="" let="" us="" know="" goes.="" after="" fix="" applying="" fix,="" seems="" be="" clearing="" now.="" now="" model.="" code="" yourself="" (see="" sample="" appendix="" a).="" but="" may="" wondering,="" there="" still="" increase="" iteration?="" answer="" this,="" visit="" profiler="" next="" section.="" categorized="" usage="" added="" feature="" categorizes="" rely="" traces="" deep="" dives="" allocations.="" timeline,="" snippet="" (full="" b):="" initialize="" context="" record_shapes,="" profile_memory,="" with_stack="" set="" true.="" torch.profiler.profile(="" activities="[" torch.profiler.profileractivity.cpu,="" torch.profiler.profileractivity.cuda,="" ],="" schedule="torch.profiler.schedule(wait=0," warmup="0," active="6," repeat="1)," record_shapes="True," profile_memory="True," on_trace_ready="trace_handler," )="" prof:="" run="" inside="" profile="" context.="" range(5):="" prof.step()="" record_function("##="" forward="" ##"):="" backward="" optimizer="" construct="" timeline="" plot.="" prof.export_memory_timeline(f"{file_prefix}.html",="" device="cuda:0" further="" reference,="" docs="" main="" profiler.html.="" automatically="" generates="" categories="" based="" graph="" tensor="" operations="" recorded="" during="" profiling.="" collected="" profiler,="" same="" before.="" observe="" blue="" also="" state="" yellow="" allocated="" iteration,="" kept="" constant="" rest="" job.="" reason="" behind="" second.="" b).="" helps="" improve="" understanding="" so="" authors="" figure="" which="" most="" memory.="" i="" find="" tools?="" hope="" tools="" greatly="" ability="" debug="" understand="" category.="" available="" v2.1="" release="" experimental="" features.="" information="" here.="" feedback="" hearing="" any="" enhancements,="" bugs="" or="" stories="" our="" helped="" solve!="" always,="" please="" feel="" free="" open="" new="" issues="" pytorch’s="" github="" page.="" contributions="" oss="" community,="" tag="" aaron="" shi="" zachary="" devito="" prs="" reviews.="" acknowledgements="" really="" appreciate="" reviewers,="" mark="" saroufim="" gregory="" chanan,="" reviewing="" post="" improving="" its="" readability.="" reviews="" adnan="" aziz="" lei="" tian.="" -="" (c)="" meta="" platforms,="" inc.="" affiliates.="" import="" logging="" socket="" datetime="" datetime,="" timedelta="" torchvision="" models="" logging.basicconfig(="" format="%(levelname)s:%(asctime)s %(message)s" ,="" level="logging.INFO," datefmt="%Y-%m-%d %H:%M:%S" logger:="" logging.logger="logging.getLogger(__name__)" logger.setlevel(level="logging.INFO)" time_format_str:="" str="%b_%d_%H_%M_%S" keep="" max="" 100,000="" alloc="" events="" history="" leading="" up="" max_num_of_mem_events_per_snapshot:="" int="100000" def="" start_record_memory_history()="" -&gt;="" none:="" torch.cuda.is_available():="" logger.info("cuda="" unavailable.="" history")="" return="" logger.info("starting="" record_memory_history")="" torch.cuda.memory._record_memory_history(="" max_entries="MAX_NUM_OF_MEM_EVENTS_PER_SNAPSHOT" stop_record_memory_history()="" logger.info("stopping="" export_memory_snapshot()="" exporting="" snapshot")="" prefix="" names.="" host_name="socket.gethostname()" timestamp="datetime.now().strftime(TIME_FORMAT_STR)" file_prefix="f&quot;{host_name}_{timestamp}&quot;" try:="" logger.info(f"saving="" local="" file:="" torch.cuda.memory._dump_snapshot(f"{file_prefix}.pickle")="" simple="" demonstrate="" visuals.="" run_resnet50(num_iters="5," ):="" inputs="torch.randn(1," 3,="" 224,="" labels="torch.rand_like(model(inputs))" lr="1e-2," momentum="0.9)" loss_fn="torch.nn.CrossEntropyLoss()" start="" create="" __name__="=" "__main__":="" run_resnet50()="" b="" torch.autograd.profiler="" record_function="" trace_handler(prof:="" torch.profiler.profile):="" file.="" prof.export_chrome_trace(f"{file_prefix}.json.gz")="" warm="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -196,7 +196,7 @@ Code Snippet (for full code sample, see Appendix A):
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -204,7 +204,7 @@ Code Snippet (for full code sample, see Appendix A):
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -216,24 +216,24 @@ Code Snippet (for full code sample, see Appendix A):
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
             <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -244,21 +244,27 @@ Code Snippet (for full code sample, see Appendix A):
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -271,15 +277,15 @@ Code Snippet (for full code sample, see Appendix A):
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -290,12 +296,12 @@ Code Snippet (for full code sample, see Appendix A):
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -306,28 +312,28 @@ Code Snippet (for full code sample, see Appendix A):
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -341,7 +347,7 @@ Code Snippet (for full code sample, see Appendix A):
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -377,7 +383,7 @@ Code Snippet (for full code sample, see Appendix A):
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2023年12月14日</p>
+            <p class="featured-post">2023 年 12 月 14 日</p>
             <h1>
                 <a class="blog-title">理解 GPU 内存 1：随时间可视化所有分配</a>
             </h1>
@@ -399,23 +405,23 @@ Code Snippet (for full code sample, see Appendix A):
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig1.png" alt="Memory Timeline" style="width:100%;"></p>
 
-<p><strong>内存快照 </strong> 工具提供了对调试 GPU OOM 的细粒度 GPU 内存可视化。捕获的内存快照将显示内存事件，包括分配、释放和 OOM，以及它们的堆栈跟踪。</p>
+<p>内存快照工具提供了对调试 GPU 内存不足的精细 GPU 内存可视化。捕获的内存快照将显示内存事件，包括分配、释放和内存不足，以及它们的堆栈跟踪。</p>
 
-<p>在快照中，每个张量的内存分配都分别用颜色编码。x 轴是时间，y 轴是 GPU 内存的 MB 数。快照是交互式的，因此我们可以通过鼠标悬停来观察任何分配的堆栈跟踪。请亲自尝试 <a href="https://github.com/pytorch/pytorch.github.io/blob/site/assets/images/understanding-gpu-memory-1/snapshot.html">https://github.com/pytorch/pytorch.github.io/blob/site/assets/images/understanding-gpu-memory-1/snapshot.html</a>。</p>
+<p>在快照中，每个张量的内存分配都分别用颜色编码。x 轴是时间，y 轴是 GPU 内存的 MB 数。该快照是交互式的，因此我们可以通过鼠标悬停来观察任何分配的堆栈跟踪。您可以在 https://github.com/pytorch/pytorch.github.io/blob/site/assets/images/understanding-gpu-memory-1/snapshot.html 尝试它。</p>
 
-<p>在这个快照中，有 3 个峰值显示了 3 次训练迭代中的内存分配（这是可配置的）。在观察峰值时，很容易看到在正向传递中内存的上升以及反向传递中的下降，因为此时正在计算梯度。还可以看到程序在迭代之间的内存使用模式是相同的。值得注意的是，内存中有许多<strong>微小的峰值 </strong>，通过鼠标悬停，我们可以看到它们是卷积算子临时使用的缓冲区。</p>
+<p>在这个快照中，有 3 个峰值显示了 3 次训练迭代中的内存分配（这是可配置的）。观察峰值时，很容易看到正向传播期间内存的增加和反向传播期间（计算梯度时）的下降。还可以看到程序在迭代之间具有相同的内存使用模式。一个引人注目的是内存中有许多微小的峰值，通过鼠标悬停，我们可以看到它们是卷积运算符临时使用的缓冲区。</p>
 
 <h3 id="capturing-memory-snapshots">捕获内存快照</h3>
 
-<p>捕获内存快照的 API 相当简单，可在 torch.cuda.memory 中找到。</p>
+<p>捕获内存快照的 API 相当简单，可在 torch.cuda.memory 中找到：</p>
 
 <ul>
-  <li><strong>开始:</strong> <code class="language-plaintext highlighter-rouge">torch.cuda.memory._record_memory_history(max_entries=100000)</code> </li>
-  <li><strong>保存:</strong> <code class="language-plaintext highlighter-rouge">torch.cuda.memory._dump_snapshot(file_name)</code> </li>
-  <li><strong>停止:</strong> <code class="language-plaintext highlighter-rouge">torch.cuda.memory._record_memory_history(enabled=None)</code> </li>
+  <li>开始： <code class="language-plaintext highlighter-rouge">torch.cuda.memory._record_memory_history(max_entries=100000)</code> </li>
+  <li>保存： <code class="language-plaintext highlighter-rouge">torch.cuda.memory._dump_snapshot(file_name)</code> </li>
+  <li>停止： <code class="language-plaintext highlighter-rouge">torch.cuda.memory._record_memory_history(enabled=None)</code> </li>
 </ul>
 
-<p><strong>代码片段 </strong>（完整代码示例，请参阅 <strong> 附录 A</strong>）:</p>
+<p>代码片段（完整代码示例见附录 A）：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   # Start recording memory snapshot history, initialized with a buffer
    # capacity of 100,000 memory events, via the `max_entries` field.
@@ -444,11 +450,11 @@ Code Snippet (for full code sample, see Appendix A):
    torch.cuda.memory._record_memory_history(enabled=None)
 </code></pre></div></div>
 
-<p>为了可视化快照文件，我们有一个托管在 <a href="https://maskerprc.github.io/memory_viz">https://maskerprc.github.io/memory_viz</a> 的工具。在那里，您可以拖放您的保存的快照文件，它将绘制每个分配随时间的变化。 <strong> 隐私说明：</strong> 工具不会保存您的快照。</p>
+<p>为了可视化快照文件，我们有一个托管在 https://pytorch.org/memory_viz 的工具。在那里，您可以拖放您的保存的快照文件，它将按时间绘制每个分配。隐私提示：该工具不会保存您的快照。</p>
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig2.png" alt="Memory Timeline" style="width:100%;"></p>
 
-<p>或者，您可以使用 pytorch/torch/cuda/_memory_viz.py 脚本将.pkl 文件生成 HTML，以下是一个示例：</p>
+<p>或者，您可以使用 pytorch/torch/cuda/_memory_viz.py 脚本将 .pickle 文件生成 HTML，以下是一个示例：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>python torch/cuda/_memory_viz.py trace_plot snapshot.pickle -o snapshot.html
 </code></pre></div></div>
@@ -458,23 +464,23 @@ Code Snippet (for full code sample, see Appendix A):
 <p>让我们看看我们如何使用内存快照工具来回答：</p>
 
 <ol>
-  <li>为什么会发生 <strong>CUDA OOM</strong>？</li>
-  <li><strong>GPU 内存</strong>在哪里被使用？</li>
+  <li>为什么会发生 CUDA OOM？</li>
+  <li>GPU 内存在哪里被使用？</li>
 </ol>
 
-<h3 id="resnet50-with-a-bug">带有错误的 ResNet50</h3>
+<h3 id="resnet50-with-a-bug">ResNet50 存在 bug</h3>
 
-<p>我们已经查看了一个在第一张快照中正常工作的模型。现在，让我们看看一个带有错误的训练示例，请看快照：</p>
+<p>我们已经查看了一个在第一张快照中正常工作的模型。现在，让我们看看一个有 bug 的训练示例，请看快照：</p>
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig3.png" alt="Memory Timeline" style="width:100%;"></p>
 
-<p>注意第二个迭代使用的内存比第一个迭代多得多。如果这个模型更大，它可能在第二个迭代就因为 CUDA OOM 而崩溃，而无需深入了解原因。</p>
+<p>注意第二个迭代使用的内存远比第一个迭代多。如果这个模型更大，第二个迭代可能会因为 CUDA 内存不足而崩溃，而无需深入了解原因。</p>
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig4.png" alt="Memory Timeline" style="width:100%;"></p>
 
-<p>当进一步检查这个快照时，我们可以清楚地看到，有几个张量从第一个迭代持续到第二个迭代以及之后的迭代。如果我们鼠标悬停在这些张量之一上，它会显示一个<em>堆栈跟踪，表明这些是梯度张量 </em>。</p>
+<p>进一步检查这个快照，我们可以清楚地看到，从第一个迭代到第二个迭代以及之后的迭代，有几个张量一直处于活跃状态。如果我们鼠标悬停在这些张量之一上，它会显示一个堆栈跟踪，表明这些是梯度张量。</p>
 
-<p>确实，如果我们查看代码，我们可以看到<em>它没有清除梯度张量 </em>，而它本可以在<em>前向传播之前清除它们 </em>。</p>
+<p>事实上，如果我们查看代码，我们可以看到它没有在正向传播之前清除梯度张量。</p>
 
 <p>之前：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        for _ in range(num_iters):
@@ -492,25 +498,25 @@ Code Snippet (for full code sample, see Appendix A):
           optimizer.zero_grad(set_to_none=True)
 </code></pre></div></div>
 
-<p>我们可以简单地添加一个 <code class="language-plaintext highlighter-rouge">optimizer.zero_grad(set_to_none=True)</code> 指令来清除梯度张量，以便在每次迭代之间（更多关于为什么需要将梯度置零的详细信息请参阅：[链接](https://maskerprc.github.io/tutorials/recipes/recipes/zeroing_out_gradients.html)）。</p>
+<p>我们可以简单地添加一个 <code class="language-plaintext highlighter-rouge">optimizer.zero_grad(set_to_none=True)</code> 指令来清除梯度张量，以便在每次迭代之间（更多关于为什么需要将梯度置零的详细信息请参阅：https://pytorch.org/tutorials/recipes/recipes/zeroing_out_gradients.html）。</p>
 
 <p>这是我们在这个工具使用更复杂的程序中发现的 bug 的简化。我们鼓励您尝试在您的 GPU 内存问题上使用内存快照，并告诉我们结果如何。</p>
 
 <h3 id="resnet50-after-bug-fix">修复 bug 后的 ResNet50</h3>
 
-<p>修复后，快照现在似乎正在清除梯度。</p>
+<p>应用修复后，快照现在似乎正在清除梯度。</p>
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig5.png" alt="Memory Timeline" style="width:100%;"></p>
 
 <p>现在我们有了正常工作的 ResNet50 模型的快照。试试看代码吧（见附录 A 中的代码示例）。</p>
 
-<p>但你可能想知道，<strong> 为什么在第一次迭代后内存仍然增加？</strong> 为了回答这个问题，让我们在下一节访问<strong>内存分析器 。</strong></p>
+<p>但你可能想知道，为什么在第一次迭代后内存仍然会增加？为了回答这个问题，让我们在下一节中访问内存分析器。</p>
 
 <h2 id="categorized-memory-usage">分类内存使用</h2>
 
-<p>The <strong> 内存分析器</strong>是 PyTorch 分析器的一个新增功能，它可以对随时间变化的内存使用情况进行分类。我们仍然依赖内存快照来获取堆栈跟踪，以便进行深入内存分配的探究。</p>
+<p>内存分析器是 PyTorch 分析器的一个附加功能，它按时间分类内存使用情况。我们仍然依赖内存快照来获取内存分配的堆栈跟踪，以便进行深入分析。</p>
 
-<p>要生成内存时间线，以下是一个代码片段（完整代码示例见<strong>附录 B）：</strong></p>
+<p>要生成内存时间线，请参考以下代码片段（完整代码示例见附录 B）：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   # Initialize the profiler context with record_shapes, profile_memory,
    # and with_stack set to True.
@@ -542,15 +548,15 @@ Code Snippet (for full code sample, see Appendix A):
    prof.export_memory_timeline(f"{file_prefix}.html", device="cuda:0")
 </code></pre></div></div>
 
-<p>更多信息，请参阅 <a href="https://pytorch.org/docs/main/profiler.html">https://pytorch.org/docs/main/profiler.html。</a></p>
+<p>更多信息请参阅 https://pytorch.org/docs/main/profiler.html。</p>
 
-<p>内存分析器会根据分析期间记录的张量操作图自动生成分类。</p>
+<p>内存分析器会根据分析期间记录的张量操作图自动生成类别。</p>
 
 <p><img src="/assets/images/understanding-gpu-memory-1/fig6.png" alt="Memory Timeline" style="width:100%;"></p>
 
-<p>在使用内存分析器收集的此内存时间轴中，我们看到了之前相同的训练示例。我们可以观察到，蓝色中的&lt;强 id=0&gt;梯度现在在迭代之间被清除 。我们还可以注意到，黄色中的&lt;强 id=1&gt;优化器状态在第一次迭代之后被分配，并且在整个作业中保持不变。</p>
+<p>在使用内存分析器收集的此内存时间线中，我们看到了之前相同的训练示例。我们可以观察到蓝色梯度现在在迭代之间被清除。我们还可以注意到黄色优化器状态在第一次迭代后分配，并在整个作业中保持不变。</p>
 
-<p>这个优化器状态是导致 GPU 内存从第一次迭代到第二次迭代增加的原因。自己尝试一下代码（见附录 B 中的代码示例）。内存分析器有助于提高对训练&lt;强 id=1&gt;内存理解 ，以便模型作者可以找出哪些类别使用了最多的 GPU 内存。</p>
+<p>这个优化器状态是导致 GPU 内存从第一次迭代到第二次迭代增加的原因。请亲自尝试代码（见附录 B 中的代码示例）。内存分析器有助于提高对训练内存的理解，以便模型作者可以找出哪些类别使用了最多的 GPU 内存。</p>
 
 <h2 id="where-can-i-find-these-tools">我在哪里可以找到这些工具？</h2>
 
@@ -559,21 +565,21 @@ Code Snippet (for full code sample, see Appendix A):
 <p>PyTorch v2.1 版本中提供了内存快照和内存分析器作为实验性功能。</p>
 
 <ul>
-  <li>更多关于内存快照的信息可以在 <a href="https://pytorch.org/docs/main/torch_cuda_memory.html">PyTorch 内存文档</a>中找到。</li>
-  <li>更多关于内存分析器的详细信息可以在 <a href="https://pytorch.org/docs/main/profiler.html">PyTorch 分析器文档</a>中找到。</li>
+  <li>更多关于内存快照的信息可以在 PyTorch 内存文档中找到。</li>
+  <li>更多关于内存分析器的详细信息可以在 PyTorch 分析器文档中找到。</li>
 </ul>
 
 <h2 id="feedback">反馈</h2>
 
-<p>我们期待听到您关于任何增强功能、错误或内存问题，我们的工具帮助解决的反馈！一如既往，请随时在 PyTorch 的 GitHub 页面上提交新问题。</p>
+<p>我们期待听到您关于任何增强、错误或我们的工具帮助解决的内存故事的反馈！一如既往，请随时在 PyTorch 的 GitHub 页面上提交新问题。</p>
 
-<p>我们也欢迎开源社区的贡献，请随意在 Github PR 中@Aaron Shi<a href="https://github.com/aaronenyeshi"> 和@Zachary DeVito</a><a href="https://github.com/zdevito"> 进行审查。</a></p>
+<p>我们也欢迎开源社区的贡献，请随意在 Github PR 中标记 Aaron Shi 和 Zachary DeVito 进行审查。</p>
 
 <h2 id="acknowledgements">致谢</h2>
 
-<p>非常感谢内容审查员 <a href="mailto:marksaroufim@meta.com">Mark Saroufim</a><a href="mailto:gchanan@meta.com"> 和 Gregory Chanan</a><a href="mailto:gchanan@meta.com"> 对这篇帖子的审查，提高了其可读性。</a></p>
+<p>非常感谢内容审查员 Mark Saroufim 和 Gregory Chanan 对这篇帖子的审查，提高了其可读性。</p>
 
-<p>非常感谢 <a href="mailto:adnanaziz@meta.com">Adnan Aziz</a><a href="mailto:ltian@meta.com"> 和 Lei Tian</a><a href="mailto:ltian@meta.com"> 的代码审查和反馈。</a></p>
+<p>非常感谢 Adnan Aziz 和 Lei Tian 的代码审查和反馈。</p>
 
 <h2 id="appendix">附录</h2>
 
@@ -750,14 +756,14 @@ if __name__ == "__main__":
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -774,7 +780,7 @@ if __name__ == "__main__":
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -787,7 +793,7 @@ if __name__ == "__main__":
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -795,7 +801,7 @@ if __name__ == "__main__":
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -824,9 +830,7 @@ if __name__ == "__main__":
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -836,7 +840,7 @@ if __name__ == "__main__":
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -861,19 +865,19 @@ if __name__ == "__main__":
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -896,7 +900,7 @@ if __name__ == "__main__":
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -910,7 +914,7 @@ if __name__ == "__main__":
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -945,7 +949,7 @@ if __name__ == "__main__":
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -959,7 +963,7 @@ if __name__ == "__main__":
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1027,7 +1031,7 @@ if __name__ == "__main__":
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

@@ -61,8 +61,8 @@ def backward(
     if inputs is not None and len(inputs) == 0:
         raise RuntimeError(" 'inputs'="" argument="" to="" backward()="" cannot="" be="" empty.")="" tensors="(tensors,)" if="" isinstance(tensors,="" torch.tensor)="" else="" tuple(tensors)="" inputs="(inputs,)" isinstance(inputs,="" \="" tuple(inputs)="" is="" not="" none="" tuple()="" grad_tensors_="_tensor_or_tensors_to_tuple(grad_tensors," len(tensors))="" grad_tensors_)="" retain_graph="" none:="" variable._execution_engine.run_backward(="" tensors,="" grad_tensors_,="" retain_graph,="" create_graph,="" inputs,="" allow_unreachable="True," accumulate_grad="True)" #="" flag="" first,="" whether="" the="" grad_tensors="" was="" specified="" or="" not,="" there="" a="" call="" _make_grads="" function.="" this="" used="" check="" provided="" specify="" default="" value="" for="" them="" by="" looking="" at="" values’="" shapes.="" first="" blog="" post="" details="" on="" of="" backward="" pass.="" function="" just="" provides="" vector="" jacobian="" product="" it="" initially="" specified.="" in="" above="" code,="" variable="" has="" an="" _execution_engine="" attribute="" that="" defined="" torch.autograd.variable="" type="" imperativeengine;="" c++="" engine="" exported="" python="" and="" declared="" torch="" csrc="" autograd="" python_engine.cpp.="" following="" sections,="" we="" explain="" detail="" how="" object="" executes="" note="" torch.autograd.backward="" optional="" argument.="" when="" want="" calculate="" .grad="" field="" only="" subset="" input="" forward="" &gt;&gt;&gt;="" x="torch.tensor([0.5," 0.75],="" requires_grad="True)" y="torch.tensor([0.1," 0.90],="" z="torch.exp(x" *="" y).sum()="" torch.autograd.backward([z],="" x.grad="" tensor([0.1051,="" 1.7676])="" y.grad="" using="" torch.autograd.grad="" alternative="" use="" torch.autograd.grad().="" main="" difference="" grad()="" returns="" tuple="" with="" gradients="" outputs="" w.r.t.="" kwargs="" instead="" storing="" tensors.="" as="" you="" can="" see,="" code="" shown="" below="" very="" similar="" backward.="" def="" grad(="" outputs:="" _tensorortensors,="" inputs:="" grad_outputs:="" optional[_tensorortensors]="None," retain_graph:="" optional[bool]="None," create_graph:="" bool="False," only_inputs:="" allow_unused:="" is_grads_batched:="" )="" -&gt;="" tuple[torch.tensor,="" ...]:="" isinstance(outputs,="" tuple(outputs)="" overridable_args="outputs" +="" has_torch_function(overridable_args):="" return="" handle_torch_function(="" grad,="" overridable_args,="" outputs,="" grad_outputs="grad_outputs," create_graph="create_graph," only_inputs="only_inputs," allow_unused="allow_unused," grad_outputs_="_tensor_or_tensors_to_tuple(grad_outputs," len(outputs))="" grad_outputs_)="" ….="" will="" covered="" here="" else:="" grad_outputs_,="" allow_unused,="" calls="" into="" run="" pass="" figure="" 1="" shows="" computational="" graph="" arguments="" highlighted="" red="" blue,="" respectively:="" fgiure="" 1:="" correspondence="" `backward`="" `grad`="" graphs.="" going="" inside="" refreshing="" concepts:="" nodes="" edges="" saw="" 2="" comprises="" node="" edge="" objects.="" please="" read="" haven’t="" done="" yet.="" objects="" are="" function.h,="" they="" provide="" overload="" operator()="" associated="" list="" do="" traversal.="" base="" class="" functions="" inherit="" from="" override="" apply="" method="" execute="" struct="" torch_api="" :="" std::enable_shared_from_this&lt;node&gt;="" {="" ...="" evaluates="" given="" result="" call.="" variable_list="" operator()(variable_list&amp;&amp;="" inputs)="" }="" protected:="" performs="" `node`'s="" actual="" operation.="" virtual="" apply(variable_list&amp;&amp;="" …="" edge_list="" next_edges_;="" uint64_t="" topological_nr_="0;" called="" every="" object.="" number="" optimize="" execution="" allows="" discard="" branches="" under="" certain="" conditions.="" topological="" longest="" distance="" between="" any="" leaf="" 2.="" its="" property="" pair="" x,="" directed="" topo_nr(x)="" &lt;="" topo_nr(y)="" means="" no="" path="" y.="" so="" reducing="" paths="" need="" topological_nr="" comment="" further="" details.="" 2:="" example="" calculation="" links="" together,="" implementation="" straightforward.="" `edge`="" points="" to.="" std::shared_ptr&lt;node&gt;="" function;="" identifier="" particular="" uint32_t="" input_nr;="" };="" requires="" pointer="" index="" output="" preparing="" set="" before="" calling="" “function”,="" know="" what="" flowing="" should="" accumulated="" “input_nr”th="" flipped="" constructed="" gradient_edge="" method.="" gradient_edge(const="" variable&amp;="" self)="" (const="" auto&amp;="" gradient="self.grad_fn())" edge(gradient,="" self.output_nr());="" edge(grad_accumulator(self),="" 0);="" entering="" realm="" once="" torch.autograd.backward()="" been="" invoked,="" thpengine_run_backward="" routine="" starts="" schema="" body:="" pyobject="" *thpengine_run_backward(pyobject="" *self,="" *args,="" *kwargs)="" handle_th_errors="" *tensors="nullptr;" *grad_tensors="nullptr;" unsigned="" char="" keep_graph="0;" *inputs="nullptr;" convert="" const="" *accepted_kwargs[]="{" nolint="" "tensors",="" "grad_tensors",="" "keep_graph",="" "create_graph",="" "inputs",="" "allow_unreachable",="" "accumulate_grad",="" nullptr="" (!pyarg_parsetupleandkeywords(args,="" kwargs,="" "oobb|obb",="" (char**)accepted_kwargs,="" &amp;tensors,="" &amp;grad_tensors,="" &amp;keep_graph,="" &amp;create_graph,="" &amp;inputs,="" &amp;allow_unreachable,="" &amp;accumulate_grad))="" prepare="" for(const="" auto="" i="" c10::irange(num_tensors))="" require="" std::vector&lt;edge&gt;="" output_edges;="" (inputs="" !="nullptr)" pybind11::gil_scoped_release="" no_gil;="" grads,="" keep_graph,="" accumulate_grad,="" output_edges);="" clean="" up="" finish="" after="" converting="" contains="" which="" start="" these="" converted="" torch::autograd::impl::gradient_edge="" added="" roots="" where="" traversal="" starts.="" roots;="" roots.reserve(num_tensors);="" grads;="" grads.reserve(num_tensors);="" *_tensor="PyTuple_GET_ITEM(tensors," i);="" roots.push_back(std::move(gradient_edge));="" *grad="PyTuple_GET_ITEM(grad_tensors," (thpvariable_check(grad))="" grad_var="THPVariable_Unpack(grad);" grads.push_back(grad_var);="" now,="" api,="" creates="" accumulate="" end="" computation.="" uses="" later="" doesn’t="" add="" all="" nodes,="" ones.="" int="" num_inputs="PyTuple_GET_SIZE(inputs);" output_edges.reserve(num_inputs);="" c10::irange(num_inputs))="" *input="PyTuple_GET_ITEM(inputs," tensor="THPVariable_Unpack(input);" output_nr="tensor.output_nr();" grad_fn="tensor.grad_fn();" (!grad_fn)="" (accumulate_grad)="" tensor.retain_grad();="" output_edges.emplace_back(std::make_shared&lt;identity&gt;(),="" output_edges.emplace_back(grad_fn,="" output_nr);="" next="" step="" execution,="" finally,="" cleanup="" return.="" starting="" real="" engine.executeis="" present="" engine.cpp="" two="" differentiated="" steps="" here:="" analyze="" find="" dependencies="" create="" worker="" threads="" traverse="" data="" structures="" graphtask="" metadata="" managed="" engine.h="" graphtask:="" std::enable_shared_from_this&lt;graphtask&gt;="" std::atomic&lt;uint64_t&gt;="" outstanding_tasks_{0};="" std::unordered_map&lt;node*,="" inputbuffer&gt;="" not_ready_;="" int&gt;="" dependencies_;="" execinfo="" execinfo&gt;="" exec_info_;="" std::vector&lt;variable&gt;="" captured_vars_;="" std::shared_ptr&lt;readyqueue&gt;="" cpu_ready_queue_;="" see="" series="" variables="" dedicated="" maintaining="" state.="" outstanding_tasks_="" tracks="" tasks="" left="" executed="" complete.="" not_ready_="" holds="" ready="" executed.="" dependencies_="" track="" predecessors="" has.="" count="" reaches="" 0,="" execution;="" placed="" queue="" retrieved="" later.="" exec_info_="" autograd.grad().="" allow="" filter="" needeed="" since="" calculated="" list.="" captured_vars_="" results="" temporarily="" stored="" torch.autograd.grad()="" api="" filling="" inputs.="" nodetask="" basic="" fn_="" execute,="" inputs_="" buffer="" store="" derivatives="" derivatives.yaml="" file.="" user="" custom="" described="" second="" post.="" also="" previously="" aggregated,="" container="" facilities="" values="" position.="" std::weak_ptr&lt;graphtask&gt;="" base_;="" fn_;="" serves="" implicit="" "addition"="" here.="" finished,="" contents="" inputbuffer="" inputs_;="" graphroot="" special="" hold="" multiple="" single="" place.="" pretty="" simple="" acts="" variables.="" public="" graphroot(edge_list="" functions,="" node(std::move(functions)),="" outputs(std::move(inputs))="" t="" outputs)="" add_input_metadata(t);="" outputs;="" accumulategrad="" during="" creation="" have="" grad_fn.="" is,="" node.="" body="" accumulate_grad.cpp="" essentially="" accumulates="" grads="" object’s="" attribute.="" accumulategrad::apply(variable_list&amp;&amp;="" grads)="" check_input_variables("accumulategrad",="" 1,="" at::tensor="" new_grad="callHooks(variable," std::move(grads[0]));="" std::lock_guard&lt;std::mutex&gt;="" lock(mutex_);="" at::tensor&amp;="" grad="variable.mutable_grad();" accumulategrad(="" variable,="" new_grad,="" !post_hooks().empty()="" num_expected_refs="" ,="" [&amp;grad](at::tensor&amp;&amp;="" grad_update)="" });="" variable_list();="" }}="" namespace="" torch::autograd="" does="" several="" checks="" format="" eventually="" variable_grad="" accumulation.="" let’s="" walk="" through="" engine::execute.="" thing="" besides="" consistency="" above.="" keeps="" execution.="" engine::execute(const="" edge_list&amp;="" roots,="" variable_list&amp;="" validate_outputs(roots,="" const_cast&lt;variable_list&amp;&gt;(inputs),="" [](const="" std::string&amp;="" msg)="" msg;="" graph_task="std::make_shared<GraphTask>(" depth="" not_reentrant_backward_call="" ?="" 0="" total_depth="" cpu_ready_queue="" local_ready_queue);="" receive="" root,="" skip="" creating="" extra="" root="" computing="" launch="" graphtask,="" one="" before.="" skip_dummy_node="roots.size()" =="1;" graph_root="skip_dummy_node" roots.at(0).function="" std::make_shared&lt;graphroot&gt;(roots,="" inputs);="" fill="" map="" must="" task.="" passed="" python.="" but="" here,="" reversed="" names="" now="" on,="" concept="" backward,="" min_topo_nr="compute_min_topological_nr(outputs);" compute="" executable="" compute_dependencies(graph_root.get(),="" *graph_task,="" min_topo_nr);="" (!outputs.empty())="" graph_task-&gt;init_to_execute(*graph_root,="" preprocess="" nodes.="" compute_min_topological_nr="" obtain="" minimum="" (0="" kwarg="" supplied="" .backward="" .grad).="" computation="" prunes="" lead="" don’t="" grads.="" second,="" compute_dependencies="" node,="" each="" node.next_edges()="" increments="" counter="" dependencies_.="" 3="" graph.="" arriving="" it.="" 3:="" init_to_execute="" call,="" populates="" graphtask::exec_info_="" case="" were="" iterates="" again,="" records="" intermediate="" needed="" gradients.="" (skip_dummy_node)="" input_buffer(roots.at(0).function-&gt;num_inputs());="" input_buffer.add(roots.at(0).input_nr,="" std::move(input),="" input_stream,="" opt_next_stream);="" execute_with_graph_task(graph_task,="" graph_root,="" std::move(input_buffer));="" inputbuffer(variable_list()));="" avoid="" refcount="" bump="" future,="" distengine="" (see="" torch_internal_assert(futuregrads.use_count()="=" 1)="" dist_engine.cpp).="" fut="graph_task->future_result_;" fut-&gt;wait();="" fut-&gt;value().totensorvector();="" inputbuffer.="" begin="" copying="" (this="" backward)="" position="" input_buffer.="" small="" optimization="" avoids="" running="" rootnode="" reason.="" also,="" rest="" cpu,="" directly="" while="" always="" cpu="" queue.="" workers="" queues="" explained="" section="" below.="" other="" hand,="" enough="" empty="" devices,="" diving="" structured.="" all,="" multithreaded="" thread="" per="" device.="" example,="" caller="" additional="" created="" gpu="" devices="" available="" system.="" device="" thread-local="" storage="" worker_device="" variable.="" addition,="" located="" storage,="" local_ready_queue.="" work="" queued="" thread_main="" wonder="" task="" decided.="" device()="" non-cpu="" together="" engine::ready_queue="" select="" engine::ready_queue(std::shared_ptr&lt;readyqueue&gt;="" cpu_ready_queue,="" at::device="" device)="" std::shared_ptr&lt;readyqueue&gt;{="" (device.type()="=" at::kcpu="" ||="" device.type()="=" at::devicetype::meta)="" cpu_ready_queue;="" [allocating="" gpus="" threads]="" device_ready_queues_.at(device.index());="" readyqueue="" wrapper="" over="" std::priority_queue="" wait="" it’s="" empty.="" interesting="" increases="" graphtask::outstanding_tasks_="" determine="" completed="" not.="" readyqueue::push(nodetask="" item,="" incrementoutstandingtasks)="" void="" (incrementoutstandingtasks)="" std::shared_ptr&lt;graphtask&gt;="" ++graph_task-&gt;outstanding_tasks_;="" heap_.push(std::move(item));="" not_empty_.notify_one();="" readyqueue::pop()="" std::unique_lock&lt;std::mutex&gt;="" not_empty_.wait(lock,="" [this]{="" !heap_.empty();="" heap_.pop();="" task;="" reentrant="" happens="" again="" common="" case,="" reduce="" memory="" utilization="" could="" potentially="" saving="" results.="" more="" information,="" pytorch="" forum="" reentrantbackward(torch.autograd.function):="" @staticmethod="" forward(ctx,="" input):="" input.sum()="" backward(ctx,="" let's="" torch.enable_grad():="" out="input.sum()" out.backward()="" call!!="" out.detach()="" custom-defined="" situation="" deadlocks="" because="" needs="" some="" internal="" prevent="" completing="" subsection.="" initialization="" execute_with_graph_task="" charge="" initializing="" taking="" care="" placing="" produced="" c10::intrusive_ptr&lt;at::ivalue::future&gt;="" engine::execute_with_graph_task(="" std::shared_ptr&lt;graphtask&gt;&amp;="" graph_task,="" inputbuffer&amp;&amp;="" input_buffer)="" initialize_device_threads_pool();="" lock="" mutex="" graphtask.="" lock(graph_task-&gt;mutex_);="" input_buffer.device());="" (worker_device="=" no_device)="" set_device(cpu_device);="" graph_task-&gt;owner_="worker_device;" queue-&gt;push(nodetask(graph_task,="" std::move(graph_root),="" std::move(input_buffer)));="" lock.unlock();="" thread_main(graph_task);="" deals="" backwards,="" graph_task-&gt;future_result_;="" initializes="" (one="" initialize_device_threads_pool()="" things="" happen:="" created.="" local="" current="" thread.="" called,="" put="" their="" queues.="" then="" retrieves="" place="" based="" input_buffer="" ready_queue="" (the="" executing="" interpreter)="" no_device,="" living="" cpu.="" value,="" already="" started,="" .backward()="" places="" thread_main.="" magic="" long="" way,="" spawned="" threads,="" engine::thread_main(const="" graph_task)="" (graph_task="=" !graph_task-&gt;future_result_-&gt;completed())="" local_graph_task;="" (task.isshutdowntask_)="" break;="" (!(local_graph_task="task.base_.lock()))" longer="" valid,="" skipping="" continue;="" (task.fn_="" &amp;&amp;="" !local_graph_task-&gt;has_error_.load())="" at::threadlocalstateguard="" tls_guard(local_graph_task-&gt;thread_locals_);="" try="" graphtaskguard="" guard(local_graph_task);="" nodeguard="" ndguard(task.fn_);="" evaluate_function(="" local_graph_task,="" task.fn_.get(),="" task.inputs_,="" local_graph_task-&gt;cpu_ready_queue_);="" catch="" (std::exception&amp;="" e)="" thread_on_exception(local_graph_task,="" task.fn_,="" e);="" decrement="" outstanding="" tasks.="" --local_graph_task-&gt;outstanding_tasks_;="" we've="" (local_graph_task-&gt;completed())="" local_graph_task-&gt;mark_as_completed_and_run_post_processing();="" base_owner="local_graph_task->owner_;" std::atomic_thread_fence(std::memory_order_release);="" ready_queue_by_index(local_graph_task-&gt;cpu_ready_queue_,="" base_owner)="" -&gt;push(nodetask(local_graph_task,="" nullptr,="" inputbuffer(0)));="" simple,="" local_ready_queue="" assigned="" storage.="" loop="" until="" device-associated="" block="" local_ready_queue-&gt;pop()="" pushed="" shutdown,="" still="" valid).="" get="" invocation="" evaluate_function.="" evaluate_function,="" complete="" number.="" decreased="" local_graph_task-&gt;completed()="" done,="" finally="" wake="" waiting="" sending="" dummy="" unlocking="" new="" evaluate_function="" three="" purposes:="" inputbuffers.="" decrease="" enqueues="" reaching="" engine::evaluate_function(="" node*="" func,="" inputbuffer&amp;="" std::shared_ptr&lt;readyqueue&gt;&amp;="" cpu_ready_queue)="" empty,="" instrument="" (!exec_info_.empty())="" (!fn_info.needed_)="" don't="" return;="" fn="*func;" (!graph_task-&gt;keep_graph_)="" fn.release_variables();="" initially,="" structure="" remember="" calculating="" check,="" call_function.="" straightforward="" derivative="" registered="" hooks="" any.="" num_outputs="outputs.size();" (num_outputs="=" 0)="" stream="" (if="" applicable)="" (anomalymode::is_enabled())="" nan="" next,="" call_function="" done.="" safely="" requested.="" c10::irange(num_outputs))="" (!next.is_valid())="" returned="" previous="" post,="" producing="" essentially,="" output[0]="" pass,="" corresponds="" 4="" related="" c="" 4:="" iterate="" computed="" is_ready="false;" (it="=" dependencies.end())="" throw="" std::runtime_error(std::string("dependency="" found="" ")="" name);="" (--it-&gt;second="=" dependencies.erase(it);="" not_ready="graph_task->not_ready_;" not_ready_it="not_ready.find(next.function.get());" this,="" graph_task-&gt;dependencies_="" map.="" counter,="" mark="" pointed="" following,="" buffers="" indicated="" edges.="" (not_ready_it="=" not_ready.end())="" aren't="" supposed="" moves="" corresponding="" input_buffer(next.function-&gt;num_inputs());="" input_buffer.add(next.input_nr,="" std::move(output),="" opt_parent_stream,="" (is_ready)="" queue-&gt;push(="" nodetask(graph_task,="" next.function,="" not_ready.emplace(next.function.get(),="" look="" graph_task-&gt;not_ready_="" present,="" input_nr="" edge.="" executed,="" enqueue="" appropriate="" however,="" seen="" before,="" not_ready_map_.="" &amp;input_buffer="not_ready_it->second;" not_ready.erase(not_ready_it);="" existing="" one.="" processed,="" exits="" process="" summarized="" animation="" 5.="" peeks="" decrements="" nodes’="" dependencies,="" 5:="" flow="" above,="" problem="" currently="" nested="" happens,="" goes="" way="" down="" non-reentrant="" different.="" regular="" (i.e.="" cuda):="" re-entrant="" non-thread="" safe="" fields="" populated,="" (current_depth="" &gt;="max_recursion_depth_)" reached="" max="" depth,="" switch="" different="" add_thread_pool_task(graph_task);="" ++total_depth;="" ++current_depth;="" --current_depth;="" --total_depth;="" detects="" looks="" calls.="" exceeds="" limit,="" take="" graph,="" regularly.="" limit="" originally="" stack="" overflow="" due="" large="" stacks.="" reduced="" sanitizer="" tests="" maximum="" amount="" locks="" moment.="" engine.h.="" exceeded,="" add_thread_pool_task="" engine::add_thread_pool_task(const="" std::weak_ptr&lt;graphtask&gt;&amp;="" lck(thread_pool_shared_-&gt;mutex_);="" pending="" worker.="" create_thread="(thread_pool_shared_->num_workers_" thread_pool_shared_-&gt;graphtasks_queue_.push(graph_task);="" lck.unlock();="" (create_thread)="" std::thread="" t(&amp;engine::reentrant_thread_init,="" this);="" t.detach();="" thread_pool_shared_-&gt;work_.notify_one();="" in-depth,="" thread_pool_shared_="" manages="" information="" threadpoolshared="" num_workers_;="" std::condition_variable="" work_;="" std::mutex="" mutex_;="" std::queue&lt;std::weak_ptr&lt;graphtask&gt;&gt;="" graphtasks_queue_;="" nolintnextline(cppcoreguidelines-pro-type-member-init)="" threadpoolshared()="" num_workers_(0)="" {}="" holding="" synchronization="" mechanisms="" workers.="" easy="" understand="" enqueued="" insufficient="" them.="" reentrant_thread_init="" engine::reentrant_thread_init()="" at::init_num_threads();="" tp_shared="thread_pool_shared_;" while(true)="" lk(tp_shared-&gt;mutex_);="" ++thread_pool_shared_-&gt;num_workers_;="" tp_shared-&gt;work_.wait(lk,="" [&amp;tp_shared]{="" !tp_shared-&gt;graphtasks_queue_.empty();});="" --thread_pool_shared_-&gt;num_workers_;="" tp_shared-&gt;graphtasks_queue_.pop();="" lk.unlock();="" graph_task;="" (!(graph_task="task.lock()))" set_device(graph_task-&gt;owner_);="" graph_task-&gt;owner_);="" newly="" waits="" thread_pool_shared-&gt;graphtasks_queue_="" graphs="" notice="" task-ready="" started="" accessing="" error="" handling="" whenever="" threads.="" propagated="" achieve="" catches="" exception="" sets="" thread_on_exception="" setting="" local_graph_task="" engine::thread_on_exception(="" std::shared_ptr&lt;node&gt;&amp;="" fn,="" std::exception&amp;="" graph_task-&gt;set_exception(std::current_exception(),="" fn);="" graphtask::set_exception_without_signal(const="" fn)="" (!has_error_.exchange(true))="" (anomalymode::is_enabled()="" fn-&gt;metadata()-&gt;print_stack(fn-&gt;name());="" graphtask::set_exception(="" std::exception_ptr="" eptr,="" set_exception_without_signal(fn);="" (!future_completed_.exchange(true))="" nolintnextline(performance-move-const-arg)="" future_result_-&gt;seterror(std::move(eptr));="" set_exception="" has_error_="" true="" seterror="" future_result_="" make="" re-thrown="" future_result_-&gt;value()="" accessed.="" ivalue="" value()="" at_assert(completed());="" (eptr_)="" std::rethrow_exception(eptr_);="" value_;="" closing="" remarks="" last="" covering="" differentiation.="" hope="" enjoyed="" reading="" familiar="" internals="" contributing="" development!="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/">
-  <meta name="twitter:image" content="http://localhost:4000/">
+  <meta property="og:image" content="https://maskerprc.github.io/">
+  <meta name="twitter:image" content="https://maskerprc.github.io/">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -178,7 +178,7 @@ def backward(
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -186,7 +186,7 @@ def backward(
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -198,24 +198,24 @@ def backward(
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 食谱</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手指南 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -226,21 +226,27 @@ def backward(
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -248,18 +254,20 @@ def backward(
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>实现移动和边缘设备上的端到端推理能力解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -270,12 +278,12 @@ def backward(
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -283,31 +291,31 @@ def backward(
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">博客与新闻</a>
+        <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -321,7 +329,7 @@ def backward(
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -357,9 +365,9 @@ def backward(
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2022年6月27日</p>
+            <p class="featured-post">2022 年 6 月 27 日</p>
             <h1>
-                <a class="blog-title">PyTorch 中计算图是如何执行的</a>
+                <a class="blog-title">如何在 PyTorch 中执行计算图</a>
             </h1>
         </div>
     </div>
@@ -370,25 +378,25 @@ def backward(
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由 Preferred Networks 提供</p>
-                    <p>欢迎来到理解 PyTorch 自动微分引擎系列的最后一篇！如果您还没有阅读第 <a href="https://maskerprc.github.io/blog/overview-of-pytorch-autograd-engine/">1</a> &amp; <a href="https://maskerprc.github.io/blog/computational-graphs-constructed-in-pytorch/">2</a> 部分，请现在阅读它们，以便了解 PyTorch 如何为反向传播创建计算图！</p>
+                    <p>欢迎来到理解 PyTorch 自动微分引擎系列的最后一篇！如果你还没有阅读第 1 篇和第 2 篇，请现在阅读它们，以便了解 PyTorch 如何为反向传播创建计算图！</p>
 
 <p>本文基于 PyTorch v1.11 版本，因此一些突出显示的部分可能在不同版本中有所不同。</p>
 
 <h1 id="pytorch-autograd-graph-execution">PyTorch 自动微分图执行</h1>
 
-<p>上一篇文章展示了 PyTorch 在执行前向传播时如何构建计算图来计算输出相对于输入的导数。现在我们将通过查看整个过程，从 Python 到底层的 C++ 内部实现，来了解反向传播的执行是如何协调和完成的。</p>
+<p>上一篇文章展示了 PyTorch 在执行正向传播时如何构建计算图来计算输出相对于输入的导数。现在我们将通过查看整个过程，从 Python 到 C++底层的内部实现，来了解反向传播的执行是如何协调和完成的。</p>
 
-<h1 id="what-happens-when-calling-backwardgrad-from-python">当从 Python 调用 <code class="language-plaintext highlighter-rouge">backward()</code>/<code class="language-plaintext highlighter-rouge">grad()</code> 时会发生什么</h1>
-<h2 id="using-variablebackward">使用 <code class="language-plaintext highlighter-rouge">variable.backward()</code></h2>
+<h1 id="what-happens-when-calling-backwardgrad-from-python">当从 Python 调用 <code class="language-plaintext highlighter-rouge">backward()</code> / <code class="language-plaintext highlighter-rouge">grad()</code> 时会发生什么</h1>
+<h2 id="using-variablebackward">使用 <code class="language-plaintext highlighter-rouge">variable.backward()</code> </h2>
 
-<p>在使用输入集完成所有计算并需要梯度后，我们调用 <code class="language-plaintext highlighter-rouge">.backward()</code> 对结果进行操作以启动反向传播执行。</p>
+<p>在我们完成所有计算并将输入设置为需要梯度后，我们调用 <code class="language-plaintext highlighter-rouge">.backward()</code> 对结果进行反向传播执行。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.75</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">exp</span><span class="p">(</span><span class="n">x</span><span class="p">).</span><span class="nb">sum</span><span class="p">()</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">y</span><span class="p">.</span><span class="n">backward</span><span class="p">()</span>
 </code></pre></div></div>
 
-<p>对张量调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/_tensor.py#L307-L363"><code class="language-plaintext highlighter-rouge">.backward()</code></a> 将导致调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/autograd/__init__.py#L85-L175"><code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code></a>。</p>
+<p>在张量上调用 <code class="language-plaintext highlighter-rouge">.backward()</code> 将导致调用 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 。</p>
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># torch/_tensor.py
 </span>
 <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gradient</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">retain_graph</span><span class="o">=</span><span class="bp">None</span><span class="p">,</span> <span class="n">create_graph</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span> <span class="n">inputs</span><span class="o">=</span><span class="bp">None</span><span class="p">):</span>
@@ -396,7 +404,7 @@ def backward(
     <span class="n">torch</span><span class="p">.</span><span class="n">autograd</span><span class="p">.</span><span class="n">backward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gradient</span><span class="p">,</span> <span class="n">retain_graph</span><span class="p">,</span> <span class="n">create_graph</span><span class="p">,</span> <span class="n">inputs</span><span class="o">=</span><span class="n">inputs</span><span class="p">)</span>
 
 </code></pre></div></div>
-<p><code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 检查参数并调用 C++ 层的自动微分引擎。</p>
+<p> <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 检查参数并在 C++层调用自动微分引擎。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">backward</span><span class="p">(</span>
     <span class="n">tensors</span><span class="p">:</span> <span class="n">_TensorOrTensors</span><span class="p">,</span>
@@ -425,11 +433,11 @@ def backward(
         <span class="n">allow_unreachable</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span> <span class="n">accumulate_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>  <span class="c1"># allow_unreachable flag
 </span>
 </code></pre></div></div>
-<p>首先，检查是否指定了 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 参数，然后调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/autograd/__init__.py#L30-L74"><code class="language-plaintext highlighter-rouge">_make_grads</code></a> 函数。这个函数用于检查提供的 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 或根据 <code class="language-plaintext highlighter-rouge">tensors</code> 参数值的形状指定它们的默认值。有关反向传递中 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 的默认值，请参阅第一篇博客文章的详细说明。此函数仅提供如果未最初指定，则向量雅可比积的向量。</p>
+<p>首先，无论是否指定了 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 参数，都会调用 <code class="language-plaintext highlighter-rouge">_make_grads</code> 函数。这用于检查提供的 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 或通过查看 <code class="language-plaintext highlighter-rouge">tensors</code> 参数值的形状来指定它们的默认值。请查看第一篇博客文章，了解反向传播中 <code class="language-plaintext highlighter-rouge">grad_tensors</code> 的默认值详情。此函数仅提供如果最初未指定，则向量雅可比积的向量。</p>
 
-<p>在上述代码中，<code class="language-plaintext highlighter-rouge">Variable</code> 有一个 <code class="language-plaintext highlighter-rouge">_execution_engine</code> 属性，该属性在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/autograd/variable.py#L14"><code class="language-plaintext highlighter-rouge">torch.autograd.variable</code></a> 中定义为 <code class="language-plaintext highlighter-rouge">ImperativeEngine</code> 类型；这是导出到 Python 并在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/python_engine.cpp#L384"> <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/python_engine.cpp</code> </a> 中声明的 C++ 引擎。在接下来的章节中，我们将详细解释该对象如何执行反向传递。</p>
+<p>在上述代码中， <code class="language-plaintext highlighter-rouge">Variable</code> 有一个在 <code class="language-plaintext highlighter-rouge">torch.autograd.variable</code> 中定义的 <code class="language-plaintext highlighter-rouge">_execution_engine</code> 属性，其类型为 <code class="language-plaintext highlighter-rouge">ImperativeEngine</code> ；C++引擎导出到 Python 并在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/python_engine.cpp</code> 中声明。在接下来的章节中，我们将详细解释该对象如何执行反向传播。</p>
 
-<p>注意，<code class="language-plaintext highlighter-rouge">torch.autograd.backward</code> 函数有一个可选的 <code class="language-plaintext highlighter-rouge">inputs</code> 参数。当我们在正向传播中只想计算输入张量子集的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段时，会使用此参数。</p>
+<p>注意， <code class="language-plaintext highlighter-rouge">torch.autograd.backward</code> 函数有一个 <code class="language-plaintext highlighter-rouge">inputs</code> 可选参数。在正向传播中，当我们只想计算输入张量子集的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段时，会使用此参数。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.75</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
 <span class="o">&gt;&gt;&gt;</span> <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="p">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.90</span><span class="p">],</span> <span class="n">requires_grad</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
@@ -441,9 +449,9 @@ def backward(
 </span><span class="o">&gt;&gt;&gt;</span>
 
 </code></pre></div></div>
-<h2 id="using-torchautogradgrad">使用 <code class="language-plaintext highlighter-rouge">torch.autograd.grad</code></h2>
+<h2 id="using-torchautogradgrad">使用 <code class="language-plaintext highlighter-rouge">torch.autograd.grad</code> </h2>
 
-<p><code class="language-plaintext highlighter-rouge">backward()</code> 的一个替代方法是使用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/autograd/__init__.py#L177-L277"><code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code></a>。与 <code class="language-plaintext highlighter-rouge">backward()</code> 的主要区别在于，<code class="language-plaintext highlighter-rouge">grad()</code> 返回一个包含相对于 <code class="language-plaintext highlighter-rouge">outputs</code> 的 <code class="language-plaintext highlighter-rouge">inputs</code> 梯度的张量元组，而不是将它们存储在张量的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段中。正如您所看到的，下面的 <code class="language-plaintext highlighter-rouge">grad()</code> 代码与 backward 非常相似。</p>
+<p> <code class="language-plaintext highlighter-rouge">backward()</code> 的一个替代方案是使用 <code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code> 。与 <code class="language-plaintext highlighter-rouge">backward()</code> 相比，主要区别在于 <code class="language-plaintext highlighter-rouge">grad()</code> 返回一个包含相对于 <code class="language-plaintext highlighter-rouge">outputs</code> 的 <code class="language-plaintext highlighter-rouge">inputs</code> kwargs 梯度的张量元组，而不是将它们存储在张量的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段中。正如你所看到的，下面的 <code class="language-plaintext highlighter-rouge">grad()</code> 代码与反向传播非常相似。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">grad</span><span class="p">(</span>
     <span class="n">outputs</span><span class="p">:</span> <span class="n">_TensorOrTensors</span><span class="p">,</span>
@@ -487,7 +495,7 @@ def backward(
 </span>
 </code></pre></div></div>
 
-<p>图 1 展示了带有 <code class="language-plaintext highlighter-rouge">backward()</code> 和 <code class="language-plaintext highlighter-rouge">grad()</code> 参数的计算图，分别用红色和蓝色突出显示：</p>
+<p>图 1 显示了计算图，其中 <code class="language-plaintext highlighter-rouge">backward()</code> 和 <code class="language-plaintext highlighter-rouge">grad()</code> 参数分别用红色和蓝色突出显示：</p>
 
 <p align="center">
   <img src="/assets/images/backward-grad-fig-1.png" width="100%">
@@ -495,16 +503,15 @@ def backward(
 
 <p align="center">图 1：图中`backward`/`grad`参数的对应关系。</p>
 
-<h1 id="going-inside-the-autograd-engine">深入了解 Autograd 引擎。</h1>
+<h1 id="going-inside-the-autograd-engine">深入了解 Autograd 引擎</h1>
 
-<h2 id="refreshing-concepts-nodes-and-edges">更新概念：节点和边。</h2>
+<h2 id="refreshing-concepts-nodes-and-edges">更新概念：节点和边</h2>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">正如我们在 <a href="https://maskerprc.github.io/blog/computational-graphs-constructed-in-pytorch/">2</a> 中看到的。
-计算图由 <code class="language-plaintext highlighter-rouge"> 节点 </code> 和 <code class="language-plaintext highlighter-rouge"> 边 </code> 对象组成。如果您还没有阅读过那篇文章，请阅读一下。</font></font></font></p>
+<p>正如我们在 2 中看到的，计算图由 <code class="language-plaintext highlighter-rouge">Node</code> 和 <code class="language-plaintext highlighter-rouge">Edge</code> 对象组成。如果您还没有阅读过那篇文章，请务必阅读。</p>
 
 <h3 id="nodes">节点</h3>
 
-<p><code class="language-plaintext highlighter-rouge">节点 </code> 对象在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/function.h#L105-L176"> <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/function.h</code> </a> 中定义，并为关联函数提供 <code class="language-plaintext highlighter-rouge">operator()</code> 重载以及一条边列表以进行图遍历。请注意，<code class="language-plaintext highlighter-rouge"> 节点 </code> 是一个基类，自动微分函数从它继承并重写 <code class="language-plaintext highlighter-rouge">apply</code> 方法以执行反向函数。</p>
+<p> <code class="language-plaintext highlighter-rouge">Node</code> 对象定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/function.h</code> 中，并为关联函数提供 <code class="language-plaintext highlighter-rouge">operator()</code> 的重载以及用于图遍历的边列表。请注意， <code class="language-plaintext highlighter-rouge">Node</code> 是 autograd 函数继承并重写 <code class="language-plaintext highlighter-rouge">apply</code> 方法以执行反向函数的基类。</p>
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">TORCH_API</span> <span class="n">Node</span> <span class="o">:</span> <span class="n">std</span><span class="o">::</span><span class="n">enable_shared_from_this</span><span class="o">&lt;</span><span class="n">Node</span><span class="o">&gt;</span> <span class="p">{</span>
  <span class="p">...</span>
  <span class="c1">/// Evaluates the function on the given inputs and returns the result of the</span>
@@ -523,18 +530,17 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">每个节点对象都有一个名为 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/function.h#L481"><code class="language-plaintext highlighter-rouge">topological_nr_</code></a> 的属性。这个数字用于优化图执行，因为它允许在特定条件下丢弃图分支。拓扑编号是此节点与任何叶节点之间的最长距离，如图 2 所示。其主要特性是对于有向图中的任意一对节点 <code class="language-plaintext highlighter-rouge">x</code>、<code class="language-plaintext highlighter-rouge">y</code>，如果 <code class="language-plaintext highlighter-rouge">topo_nr(x) &lt; topo_nr(y)</code>，则表示从 <code class="language-plaintext highlighter-rouge">x</code> 到 <code class="language-plaintext highlighter-rouge">y</code> 没有路径。这允许减少需要遍历的图中的路径数量。请检查 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/function.h#L314-L343">topological_nr</a>
-) 方法注释，详情请见。</font></font></font></p>
+<p>每个节点对象都有一个名为 <code class="language-plaintext highlighter-rouge">topological_nr_</code> 的属性。这个数字用于优化图执行，因为它允许在特定条件下丢弃图分支。拓扑编号是此节点与任何叶节点之间的最长距离，如图 2 所示。其主要特性是对于有向图 <code class="language-plaintext highlighter-rouge">topo_nr(x) &lt; topo_nr(y)</code> 中的任意一对节点 <code class="language-plaintext highlighter-rouge">x</code> 、 <code class="language-plaintext highlighter-rouge">y</code> ，意味着从 <code class="language-plaintext highlighter-rouge">x</code> 到 <code class="language-plaintext highlighter-rouge">y</code> 没有路径。因此，这允许减少需要遍历的图中的路径数量。请查看 topological_nr()方法注释以获取更多详细信息。</p>
 
 <p align="center">
   <img src="/assets/images/topological-number-fig-2.png" width="100%">
 </p>
 
-<p align="center">图2：拓扑数计算的示例</p>
+<p align="center">图 2：拓扑数计算的示例</p>
 
 <h3 id="edges">边</h3>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/edge.h#L14-L39"><code class="language-plaintext highlighter-rouge">边</code></a>对象将<code class="language-plaintext highlighter-rouge">节点</code>连接起来，其实现方式简单直接。</p>
+<p> <code class="language-plaintext highlighter-rouge">Edge</code> 对象将 <code class="language-plaintext highlighter-rouge">Node</code> 连接在一起，其实现方法简单。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">Edge</span> <span class="p">{</span>
   <span class="p">...</span>
@@ -546,8 +552,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">它只需要一个指向 <code class="language-plaintext highlighter-rouge">Node</code> 的函数指针以及一个输入数字，这个数字是这个边指向的前向函数输出的索引。在调用“function”之前准备梯度集时，我们知道从这个边流出的应该累积在“input_nr”th 参数中。注意，这里的输入/输出名称是颠倒的，这是反向函数的输入。
-使用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/variable.cpp#L221-L233"><code class="language-plaintext highlighter-rouge">gradient_edge</code></a> 函数方法构建 <code class="language-plaintext highlighter-rouge">Edge</code> 对象。</font></font></font></p>
+<p>这只需要一个指向 <code class="language-plaintext highlighter-rouge">Node</code> 的函数指针以及一个输入数字，该数字是此边指向的前向函数输出的索引。在调用“函数”之前准备梯度集时，我们知道从这条边流出的应该累积在“input_nr”第个参数中。注意，这里的输入/输出名称是颠倒的，这是反向函数的输入。 <code class="language-plaintext highlighter-rouge">Edge</code> 对象使用 <code class="language-plaintext highlighter-rouge">gradient_edge</code> 函数方法构建。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">Edge</span> <span class="nf">gradient_edge</span><span class="p">(</span><span class="k">const</span> <span class="n">Variable</span><span class="o">&amp;</span> <span class="n">self</span><span class="p">)</span> <span class="p">{</span>
     <span class="k">if</span> <span class="p">(</span><span class="k">const</span> <span class="k">auto</span><span class="o">&amp;</span> <span class="n">gradient</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">grad_fn</span><span class="p">())</span> <span class="p">{</span>
@@ -558,10 +563,9 @@ def backward(
   <span class="p">}</span>
 
 </code></pre></div></div>
-<h2 id="entering-the-c-realm">进入 C++ 领域</h2>
+<h2 id="entering-the-c-realm">进入 C++领域</h2>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">一旦调用了 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code>，则
-<a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/python_engine.cpp#L152-L286"><code class="language-plaintext highlighter-rouge">THPEngine_run_backward</code></a> 程序开始图遍历。以下是函数体的结构：</font></font></font></p>
+<p>一旦调用 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> ， <code class="language-plaintext highlighter-rouge">THPEngine_run_backward</code> 例程开始图遍历。以下是函数体的架构：</p>
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">PyObject</span> <span class="o">*</span><span class="nf">THPEngine_run_backward</span><span class="p">(</span><span class="n">PyObject</span> <span class="o">*</span><span class="n">self</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="n">PyObject</span> <span class="o">*</span><span class="n">kwargs</span><span class="p">)</span>
 <span class="p">{</span>
   <span class="n">HANDLE_TH_ERRORS</span>
@@ -599,7 +603,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>首先，我们将 <code class="language-plaintext highlighter-rouge">PyObject</code> 参数转换为实际的 C++ 对象后准备输入参数。<code class="language-plaintext highlighter-rouge">tensors</code> 列表包含我们从其中开始反向传播的张量。这些张量通过 <code class="language-plaintext highlighter-rouge">torch::autograd::impl::gradient_edge</code> 转换为边，并添加到名为 <code class="language-plaintext highlighter-rouge">roots</code> 的列表中，图遍历从这里开始。</p>
+<p>首先，我们将 <code class="language-plaintext highlighter-rouge">PyObject</code> 参数转换为实际的 C++对象后准备输入参数。 <code class="language-plaintext highlighter-rouge">tensors</code> 列表包含我们从其中开始反向传播的张量。这些张量通过 <code class="language-plaintext highlighter-rouge">torch::autograd::impl::gradient_edge</code> 转换为边，并添加到名为 <code class="language-plaintext highlighter-rouge">roots</code> 的列表中，图遍历从这里开始。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">edge_list</span> <span class="n">roots</span><span class="p">;</span>
   <span class="n">roots</span><span class="p">.</span><span class="n">reserve</span><span class="p">(</span><span class="n">num_tensors</span><span class="p">);</span>
@@ -620,7 +624,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>现在，如果 <code class="language-plaintext highlighter-rouge">inputs</code> 参数在 <code class="language-plaintext highlighter-rouge">backward</code> 中指定，或者我们使用了 <code class="language-plaintext highlighter-rouge">torch.autograd.grad</code> API，以下代码将创建一个边列表，用于在计算结束时在指定的张量中累积梯度。引擎稍后会使用这个列表来优化执行，因为它不会在所有叶节点中添加梯度，而只添加指定的那些。</p>
+<p>现在，如果 <code class="language-plaintext highlighter-rouge">inputs</code> 参数已在 <code class="language-plaintext highlighter-rouge">backward</code> 中指定，或者我们使用了 <code class="language-plaintext highlighter-rouge">torch.autograd.grad</code> api，则以下代码将在计算结束时创建一个边列表，以累积指定张量中的梯度。引擎随后使用此列表来优化执行，因为它不会在所有叶节点中添加梯度，而只添加指定的那些。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Edge</span><span class="o">&gt;</span> <span class="n">output_edges</span><span class="p">;</span>
   <span class="k">if</span> <span class="p">(</span><span class="n">inputs</span> <span class="o">!=</span> <span class="nb">nullptr</span><span class="p">)</span> <span class="p">{</span>
@@ -660,19 +664,19 @@ def backward(
 
 </code></pre></div></div>
 
-<h1 id="starting-the-real-execution">开始真实执行</h1>
+<h1 id="starting-the-real-execution">开始实际执行</h1>
 
-<p><code class="language-plaintext highlighter-rouge">engine.execute</code> 存在于 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L969-L1044">torch/csrc/autograd/engine.cpp</a></p>
+<p> <code class="language-plaintext highlighter-rouge">engine.execute</code> 存在于 torch/csrc/autograd/engine.cpp</p>
 
 <p>这里有两个区分的步骤：</p>
 
-<p>分析图以找到函数之间的依赖关系 创建遍历图的线程工作员</p>
+<p>分析图以找到函数之间的依赖关系 创建遍历图的工人线程</p>
 
-<h2 id="data-structures-used-for-the-execution">执行所用的数据结构</h2>
+<h2 id="data-structures-used-for-the-execution">用于执行的数据结构</h2>
 
 <h3 id="graphtask">GraphTask</h3>
 
-<p>所有执行元数据都由 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.h#L51-L196"><code class="language-plaintext highlighter-rouge">GraphTask</code></a> 类在 <a href="https://github.com/pytorch/pytorch/blob/release/1.11/torch/csrc/autograd/engine.h">torch/csrc/autograd/engine.h</a> 中管理</p>
+<p>所有执行元数据都由 torch/csrc/autograd/engine.h 中的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 类管理</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">GraphTask</span><span class="o">:</span> <span class="n">std</span><span class="o">::</span><span class="n">enable_shared_from_this</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;</span> <span class="p">{</span>
   <span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span> <span class="n">outstanding_tasks_</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
@@ -691,18 +695,17 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">这里我们看到一系列用于维护执行状态的变量。
-<code class="language-plaintext highlighter-rouge">outstanding_tasks_</code> 跟踪向后传递完成前剩余的任务数量。 <code class="language-plaintext highlighter-rouge">not_ready_</code> 存储尚未准备就绪以执行 <code class="language-plaintext highlighter-rouge">Node</code> 的输入参数。 <code class="language-plaintext highlighter-rouge">dependencies_</code> 跟踪一个 <code class="language-plaintext highlighter-rouge">Node</code> 的前驱数量。当计数达到 <code class="language-plaintext highlighter-rouge">0</code> 时，该 <code class="language-plaintext highlighter-rouge">Node</code> 准备就绪，它将被放入就绪队列以供稍后检索和执行。</font></font></font></p>
+<p>这里我们看到一系列用于维护执行状态的变量。 <code class="language-plaintext highlighter-rouge">outstanding_tasks_</code> 跟踪反向传播完成前剩余的任务数量。 <code class="language-plaintext highlighter-rouge">not_ready_</code> 保存尚未准备就绪的 <code class="language-plaintext highlighter-rouge">Node</code> 的输入参数。 <code class="language-plaintext highlighter-rouge">dependencies_</code> 跟踪一个 <code class="language-plaintext highlighter-rouge">Node</code> 的前驱数量。当计数达到 <code class="language-plaintext highlighter-rouge">0</code> 时， <code class="language-plaintext highlighter-rouge">Node</code> 准备就绪；它被放入就绪队列以供稍后检索和执行。</p>
 
-<p><code class="language-plaintext highlighter-rouge">exec_info_</code> 和相关的 <code class="language-plaintext highlighter-rouge">ExecInfo</code> 结构体仅在指定 <code class="language-plaintext highlighter-rouge">inputs</code> 参数或调用 <code class="language-plaintext highlighter-rouge">autograd.grad()</code> 时使用。它们允许在图中过滤不需要的路径，因为只有 <code class="language-plaintext highlighter-rouge">inputs</code> 列表中的变量才计算梯度。</p>
+<p>只有在指定 <code class="language-plaintext highlighter-rouge">inputs</code> 参数或调用 <code class="language-plaintext highlighter-rouge">autograd.grad()</code> 时，才会使用 <code class="language-plaintext highlighter-rouge">exec_info_</code> 和相关的 <code class="language-plaintext highlighter-rouge">ExecInfo</code> 结构。它们允许在图中进行过滤路径，因为只有 <code class="language-plaintext highlighter-rouge">inputs</code> 列表中的变量才计算梯度。</p>
 
-<p>`<code class="language-plaintext highlighter-rouge">captured_vars_</code> 是在如果我们使用 <code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code> api 而不是 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 时，图形执行结果临时存储的地方，因为 <code class="language-plaintext highlighter-rouge">grad()</code> 返回的是张量形式的梯度，而不是仅仅填充输入的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段。`</p>
+<p>如果我们使用了 <code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code> api 而不是 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> ，则 <code class="language-plaintext highlighter-rouge">captured_vars_</code> 是临时存储图执行结果的地方，因为 <code class="language-plaintext highlighter-rouge">grad()</code> 返回梯度作为张量，而不是仅仅填充输入的 <code class="language-plaintext highlighter-rouge">.grad</code> 字段。</p>
 
-<h3 id="nodetask">NodeTask</h3>
+<h3 id="nodetask">节点任务</h3>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.h#L210-L242"><code class="language-plaintext highlighter-rouge">NodeTask</code></a> 结构体是一个基本类，它包含一个指向要执行的节点的 <code class="language-plaintext highlighter-rouge">fn_</code> 指针，以及一个 <code class="language-plaintext highlighter-rouge">inputs_</code> 缓冲区来存储该函数的输入参数。注意，反向传播过程中执行的是在 <code class="language-plaintext highlighter-rouge">derivatives.yaml</code> 文件中指定的导数，或者当使用自定义函数时，用户提供的反向函数，如第二篇博客中所述。</p>
+<p> <code class="language-plaintext highlighter-rouge">NodeTask</code> 结构体是一个基本类，它包含一个指向要执行的节点的 <code class="language-plaintext highlighter-rouge">fn_</code> 指针，以及一个用于存储该函数输入参数的 <code class="language-plaintext highlighter-rouge">inputs_</code> 缓冲区。请注意，反向传播过程中执行的是 <code class="language-plaintext highlighter-rouge">derivatives.yaml</code> 文件中指定的导数函数，或者在使用自定义函数时，如第二篇博客中所述，由用户提供的反向函数。</p>
 
-<p><code class="language-plaintext highlighter-rouge">inputs_</code> 缓冲区也是之前执行函数的输出梯度聚合的地方，它被定义为具有在给定位置累积值的 <a href="https://github.com/pytorch/pytorch/blob/release/1.10/torch/csrc/autograd/input_buffer.h"><code class="language-plaintext highlighter-rouge">std::vector&lt;Variable&gt;</code> 容器 </a>。</p>
+<p> <code class="language-plaintext highlighter-rouge">inputs_</code> 缓冲区也是之前执行函数的输出梯度汇总的地方，它被定义为具有在给定位置累积值的 <code class="language-plaintext highlighter-rouge">std::vector&lt;Variable&gt;</code> 容器。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">NodeTask</span> <span class="p">{</span>
   <span class="n">std</span><span class="o">::</span><span class="n">weak_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;</span> <span class="n">base_</span><span class="p">;</span>
@@ -716,7 +719,7 @@ def backward(
 </code></pre></div></div>
 <h3 id="graphroot">图根</h3>
 
-<p>《图根》是一个特殊函数，用于在单个位置存储多个输入变量。代码相当简单，因为它只充当变量的容器。</p>
+<p> <code class="language-plaintext highlighter-rouge">GraphRoot</code> 是一个特殊函数，用于在单个位置存储多个输入变量。代码很简单，它只作为变量的容器。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">struct</span> <span class="nc">TORCH_API</span> <span class="n">GraphRoot</span> <span class="o">:</span> <span class="k">public</span> <span class="n">Node</span> <span class="p">{</span>
   <span class="n">GraphRoot</span><span class="p">(</span><span class="n">edge_list</span> <span class="n">functions</span><span class="p">,</span> <span class="n">variable_list</span> <span class="n">inputs</span><span class="p">)</span>
@@ -733,9 +736,9 @@ def backward(
 
 </code></pre></div></div>
 
-<h3 id="accumulategrad">累积梯度</h3>
+<h3 id="accumulategrad">AccumulateGrad</h3>
 
-<p>此函数在创建图时设置，在 <code class="language-plaintext highlighter-rouge">gradient_edge</code> 中，当 <code class="language-plaintext highlighter-rouge">Variable</code> 对象没有 <code class="language-plaintext highlighter-rouge">grad_fn</code> 时。也就是说，它是一个叶子节点。</p>
+<p>此函数在创建图时设置于 <code class="language-plaintext highlighter-rouge">gradient_edge</code> ，当 <code class="language-plaintext highlighter-rouge">Variable</code> 对象没有 <code class="language-plaintext highlighter-rouge">grad_fn</code> 时。也就是说，它是一个叶子节点。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="k">if</span> <span class="p">(</span><span class="k">const</span> <span class="k">auto</span><span class="o">&amp;</span> <span class="n">gradient</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">grad_fn</span><span class="p">())</span> <span class="p">{</span>
       <span class="c1">// …</span>
@@ -745,7 +748,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>函数体定义在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/functions/accumulate_grad.cpp#L25-L63"> <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/functions/accumulate_grad.cpp</code> </a> 中，它本质上累积输入梯度到对象的 <code class="language-plaintext highlighter-rouge">.grad</code> 属性中。</p>
+<p>函数体定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/functions/accumulate_grad.cpp</code> 中，它本质上累积对象 <code class="language-plaintext highlighter-rouge">.grad</code> 属性中的输入梯度。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">AccumulateGrad</span><span class="o">::</span><span class="n">apply</span><span class="p">(</span><span class="n">variable_list</span><span class="o">&amp;&amp;</span> <span class="n">grads</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">variable_list</span> <span class="p">{</span>
   <span class="n">check_input_variables</span><span class="p">(</span><span class="s">"AccumulateGrad"</span><span class="p">,</span> <span class="n">grads</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
@@ -769,12 +772,11 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  "><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/functions/accumulate_grad.h#L100"><code class="language-plaintext highlighter-rouge">accumulateGrad</code></a>
-对张量的格式进行多项检查，最终执行 <code class="language-plaintext highlighter-rouge">variable_grad += new_grad;</code> 的累积操作。</font></font></font></p>
+<p> <code class="language-plaintext highlighter-rouge">accumulateGrad</code> 对张量格式进行多项检查，最终执行 <code class="language-plaintext highlighter-rouge">variable_grad += new_grad;</code> 累积操作。</p>
 
 <h2 id="preparing-the-graph-for-execution">准备执行图</h2>
 
-<p>现在，让我们来分析 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L969-L1126"><code class="language-plaintext highlighter-rouge">Engine::execute</code></a>。除了检查参数一致性之外，首先要做的是创建我们上面描述的真正的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象。该对象保存了图执行的所有元数据。</p>
+<p>现在，让我们来遍历 <code class="language-plaintext highlighter-rouge">Engine::execute</code> 。首先要做的事情除了参数一致性检查之外，就是创建我们上面描述的实际 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象。该对象保存了图执行的元数据。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">Engine</span><span class="o">::</span><span class="n">execute</span><span class="p">(</span><span class="k">const</span> <span class="n">edge_list</span><span class="o">&amp;</span> <span class="n">roots</span><span class="p">,</span>
                      <span class="k">const</span> <span class="n">variable_list</span><span class="o">&amp;</span> <span class="n">inputs</span><span class="p">,</span>
@@ -807,7 +809,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>创建了 <code class="language-plaintext highlighter-rouge">GraphTask</code> 之后，如果我们只有一个根节点，我们会使用其关联的函数。如果我们有多个根节点，我们会创建一个特殊的 <code class="language-plaintext highlighter-rouge">GraphRoot</code> 对象，正如之前所描述的。</p>
+<p>创建 <code class="language-plaintext highlighter-rouge">GraphTask</code> 之后，如果我们只有一个根节点，我们会使用其关联的函数。如果我们有多个根节点，我们会创建一个特殊的 <code class="language-plaintext highlighter-rouge">GraphRoot</code> 对象，如之前所述。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kt">bool</span> <span class="n">skip_dummy_node</span> <span class="o">=</span> <span class="n">roots</span><span class="p">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span><span class="p">;</span>
   <span class="k">auto</span> <span class="n">graph_root</span> <span class="o">=</span> <span class="n">skip_dummy_node</span> <span class="o">?</span>
@@ -816,7 +818,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>下一步是在 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象中填充 <code class="language-plaintext highlighter-rouge">dependencies_</code> 映射，因为引擎必须知道何时可以执行任务。《outputs》在这里是传递给 Python 中 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 调用的 <code class="language-plaintext highlighter-rouge">inputs</code> 参数。但在这里，我们反转了名称，因为正向传递的输入的梯度现在是反向传递的输出。从现在开始，没有正向/反向的概念，只有图遍历和执行。</p>
+<p>下一步是在 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象中填充 <code class="language-plaintext highlighter-rouge">dependencies_</code> 映射，因为引擎必须知道何时可以执行一个任务。这里的 <code class="language-plaintext highlighter-rouge">outputs</code> 是传递给 Python 中 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> 调用的 <code class="language-plaintext highlighter-rouge">inputs</code> 参数。但是在这里，我们反转了名称，因为相对于前向传递的输入的梯度现在是反向传递的输出。从现在开始，不再有前向/反向的概念，只有图遍历和执行。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">auto</span> <span class="n">min_topo_nr</span> <span class="o">=</span> <span class="n">compute_min_topological_nr</span><span class="p">(</span><span class="n">outputs</span><span class="p">);</span>
   <span class="c1">// Now compute the dependencies for all executable functions</span>
@@ -828,17 +830,17 @@ def backward(
 
 </code></pre></div></div>
 
-<p>我们首先对图进行预处理以执行节点。首先调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L922-L933"><code class="language-plaintext highlighter-rouge">compute_min_topological_nr</code></a> 来获取指定在 <code class="language-plaintext highlighter-rouge">outputs</code> 中的张量的最小拓扑数（如果没有为 <code class="language-plaintext highlighter-rouge">.backward</code> 或 <code class="language-plaintext highlighter-rouge">input</code> 对于 <code class="language-plaintext highlighter-rouge">.grad</code> 提供参数 <code class="language-plaintext highlighter-rouge">inputs</code>，则为 0）。这种计算会修剪图中指向我们不希望/不需要计算梯度的输入变量的路径。</p>
+<p>我们首先对图进行预处理以执行节点。首先调用 <code class="language-plaintext highlighter-rouge">compute_min_topological_nr</code> 以获取 <code class="language-plaintext highlighter-rouge">outputs</code> 中指定的张量的最小拓扑编号（如果没有为 <code class="language-plaintext highlighter-rouge">.backward</code> 或 <code class="language-plaintext highlighter-rouge">input</code> 提供 <code class="language-plaintext highlighter-rouge">inputs</code> kwarg，则为 0）。此计算会修剪图中导致我们不希望/不需要计算梯度的输入变量的路径。</p>
 
-<p>其次是 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L935-L967"><code class="language-plaintext highlighter-rouge">compute_dependencies</code></a> 调用。这个函数是一个非常简单的图遍历，从根 <code class="language-plaintext highlighter-rouge">Node</code> 开始，对于 <code class="language-plaintext highlighter-rouge">node.next_edges()</code> 中的每条边，它都会在 <code class="language-plaintext highlighter-rouge">dependencies_</code> 中增加计数器。图 3 展示了示例图的依赖计算结果。请注意，任何节点的依赖数只是到达该节点的边的数量。</p>
+<p>其次是 <code class="language-plaintext highlighter-rouge">compute_dependencies</code> 调用。这是一个非常简单的图遍历函数，从根 <code class="language-plaintext highlighter-rouge">Node</code> 开始，并对 <code class="language-plaintext highlighter-rouge">node.next_edges()</code> 中的每条边，它都会增加 <code class="language-plaintext highlighter-rouge">dependencies_</code> 中的计数器。图 3 显示了示例图中依赖关系计算的结果。请注意，任何节点的依赖关系数量只是到达该节点的边的数量。</p>
 
 <p align="center">
   <img src="/assets/images/node-fig-3.png" width="100%">
 </p>
 
-<p align="center">图 3：每个节点的依赖数</p>
+<p align="center">图 3：每个节点的依赖关系数量</p>
 
-<p>最后，是调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L1281-L1383"><code class="language-plaintext highlighter-rouge">init_to_execute</code></a>，这是填充 <code class="language-plaintext highlighter-rouge">GraphTask::exec_info_</code> 映射的那个调用，前提是在 python <code class="language-plaintext highlighter-rouge">backward</code> 调用中指定了 <code class="language-plaintext highlighter-rouge">inputs</code>。它再次遍历图，从根节点开始，并在 <code class="language-plaintext highlighter-rouge">exec_info_</code> 映射中记录计算给定 <code class="language-plaintext highlighter-rouge">inputs</code> 梯度所需的中间节点。</p>
+<p>最后是 <code class="language-plaintext highlighter-rouge">init_to_execute</code> 调用，这是在 Python <code class="language-plaintext highlighter-rouge">backward</code> 调用中指定 <code class="language-plaintext highlighter-rouge">inputs</code> 时填充 <code class="language-plaintext highlighter-rouge">GraphTask::exec_info_</code> 映射的调用。它再次遍历图，从根开始，并将计算给定 <code class="language-plaintext highlighter-rouge">inputs</code> 梯度的必要中间节点记录在 <code class="language-plaintext highlighter-rouge">exec_info_</code> 映射中。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="c1">// Queue the root</span>
   <span class="k">if</span> <span class="p">(</span><span class="n">skip_dummy_node</span><span class="p">)</span> <span class="p">{</span>
@@ -865,16 +867,16 @@ def backward(
 
 </code></pre></div></div>
 
-<p>现在，我们已经准备好开始实际执行，通过创建 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 来启动。如果我们只有一个根变量，我们首先将 <code class="language-plaintext highlighter-rouge">inputs</code> 张量的值（这是传递给 python <code class="language-plaintext highlighter-rouge">backward</code> 的 <code class="language-plaintext highlighter-rouge">gradients</code>）复制到 input_buffer 的位置 0。这是一个小的优化，可以避免无谓地运行 <code class="language-plaintext highlighter-rouge">RootNode</code>。另外，如果图的其余部分不在 cpu 上，我们直接在那个 worker 上开始，而 <code class="language-plaintext highlighter-rouge">RootNode</code> 总是放在 cpu 准备队列中。关于 worker 和准备队列的详细信息将在下面的章节中解释。</p>
+<p>现在，我们准备开始实际执行，通过创建 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 。如果我们只有一个根变量，我们首先将 <code class="language-plaintext highlighter-rouge">inputs</code> 张量的值（这是传递给 python 的 <code class="language-plaintext highlighter-rouge">gradients</code> ）复制到 input_buffer 的位置 0。这是一个小的优化，可以避免无谓地运行 <code class="language-plaintext highlighter-rouge">RootNode</code> 。另外，如果图的其他部分不在 cpu 上，我们直接在那个 worker 上开始，而 <code class="language-plaintext highlighter-rouge">RootNode</code> 始终放在 cpu 就绪队列中。下面将解释 worker 和就绪队列的详细信息。</p>
 
-<p>另一方面，如果我们有多个根，那么 <code class="language-plaintext highlighter-rouge">GraphRoot</code> 对象也包含输入，因此只需传递一个空的 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 即可。</p>
+<p>另一方面，如果我们有多个根， <code class="language-plaintext highlighter-rouge">GraphRoot</code> 对象也包含输入，所以只需要传递一个空的 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 。</p>
 
 <h2 id="graph-traversal-and-node-execution">图遍历和节点执行</h2>
 <h3 id="devices-threads-and-queues">设备、线程和队列</h3>
 
-<p>在深入实际执行之前，我们需要看看引擎的结构。</p>
+<p>在实际执行之前，我们需要看看引擎的结构。</p>
 
-<p>首先，该引擎是采用多线程设计的，每个设备对应一个线程。例如，调用线程与 CPU 相关联，而额外的线程则被创建并与系统中的每个 GPU 或其他设备相关联。每个线程使用线程局部存储中的 <code class="language-plaintext highlighter-rouge">worker_device</code> 变量跟踪其设备。此外，线程还有一个待执行的任务队列，也位于线程局部存储中，即 <code class="language-plaintext highlighter-rouge">local_ready_queue</code>。这是工作被排队等待在稍后解释的 <code class="language-plaintext highlighter-rouge">thread_main</code> 函数中执行的地方。您可能会想知道应该执行任务的设备是如何决定的。<code class="language-plaintext highlighter-rouge">InputBuffer</code> 类有一个 <code class="language-plaintext highlighter-rouge">device()</code> 函数，该函数返回所有其张量中的第一个非 CPU 设备。此函数与 <code class="language-plaintext highlighter-rouge"><code class="language-plaintext highlighter-rouge">Engine::ready_queue</code> 一起使用，以选择队列来排队任务。</code></p>
+<p>首先，该引擎是支持多线程的，每个设备对应一个线程。例如，调用线程与 CPU 相关联，而额外的线程被创建并与系统中的每个 GPU 或其他设备相关联。每个线程使用线程局部存储中的 <code class="language-plaintext highlighter-rouge">worker_device</code> 变量跟踪其设备。此外，线程还有一个任务队列，也位于线程局部存储中的 <code class="language-plaintext highlighter-rouge">local_ready_queue</code> ，这是工作被排队等待在 <code class="language-plaintext highlighter-rouge">thread_main</code> 函数中执行的地方（该函数将在后面解释）。你可能想知道一个任务应该在哪里执行所选择的设备。 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 类有一个 <code class="language-plaintext highlighter-rouge">device()</code> 函数，该函数返回所有其张量中的第一个非 CPU 设备。这个函数与 <code class="language-plaintext highlighter-rouge">Engine::ready_queue</code> 一起用于选择队列以排队任务。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">Engine</span><span class="o">::</span><span class="n">ready_queue</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ReadyQueue</span><span class="o">&gt;</span> <span class="n">cpu_ready_queue</span><span class="p">,</span> <span class="n">at</span><span class="o">::</span><span class="n">Device</span> <span class="n">device</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">ReadyQueue</span><span class="o">&gt;</span><span class="p">{</span>
   <span class="k">if</span> <span class="p">(</span><span class="n">device</span><span class="p">.</span><span class="n">type</span><span class="p">()</span> <span class="o">==</span> <span class="n">at</span><span class="o">::</span><span class="n">kCPU</span> <span class="o">||</span> <span class="n">device</span><span class="p">.</span><span class="n">type</span><span class="p">()</span> <span class="o">==</span> <span class="n">at</span><span class="o">::</span><span class="n">DeviceType</span><span class="o">::</span><span class="n">Meta</span><span class="p">)</span> <span class="p">{</span>
@@ -887,7 +889,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>《ReadyQueue》对象定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/engine.h</code> 中，它是对 <code class="language-plaintext highlighter-rouge">std::priority_queue</code> 的简单封装，允许线程在队列为空时 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L219"> 等待任务 </a>。<code class="language-plaintext highlighter-rouge">ReadyQueue</code> 的一个有趣特性是它会增加用于确定执行是否完成的 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L195"><code class="language-plaintext highlighter-rouge">GraphTask::outstanding_tasks_</code></a> 值。</p>
+<p> <code class="language-plaintext highlighter-rouge">ReadyQueue</code> 对象定义在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/engine.h</code> 中，它是对 <code class="language-plaintext highlighter-rouge">std::priority_queue</code> 的简单包装，允许线程在任务为空时等待。 <code class="language-plaintext highlighter-rouge">ReadyQueue</code> 的一个有趣特性是它会增加 <code class="language-plaintext highlighter-rouge">GraphTask::outstanding_tasks_</code> 值，该值用于确定执行是否完成。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">ReadyQueue</span><span class="o">::</span><span class="n">push</span><span class="p">(</span><span class="n">NodeTask</span> <span class="n">item</span><span class="p">,</span> <span class="kt">bool</span> <span class="n">incrementOutstandingTasks</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">void</span> <span class="p">{</span>
   <span class="p">{</span>
@@ -910,9 +912,9 @@ def backward(
 
 </code></pre></div></div>
 
-<h3 id="reentrant-backward">可重入反向传播</h3>
+<h3 id="reentrant-backward">可重入反向</h3>
 
-<p>当反向传播过程中的某个任务再次调用 <code class="language-plaintext highlighter-rouge">backward</code> 时，会发生可重入反向传播。这种情况并不常见，但它可以用来减少内存使用，因为它可能避免保存中间结果。更多详细信息，请查看这个 <a href="https://discuss.pytorch.org/t/what-is-the-scenario-of-reentrant-backwards-in-pytorch-source-code/19330/2">PyTorch 论坛帖子 </a>。</p>
+<p>重新进入的回传发生在回传过程中的一项任务再次调用 <code class="language-plaintext highlighter-rouge">backward</code> 。这种情况并不常见，但它可以用来减少内存使用，因为它可能避免保存中间结果。更多信息，请查看这个 PyTorch 论坛帖子。</p>
 
 <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">ReentrantBackward</span><span class="p">(</span><span class="n">torch</span><span class="p">.</span><span class="n">autograd</span><span class="p">.</span><span class="n">Function</span><span class="p">):</span>
     <span class="o">@</span><span class="nb">staticmethod</span>
@@ -930,10 +932,10 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在这里，我们在用户自定义的 autograd 函数中调用 <code class="language-plaintext highlighter-rouge">backward()</code> 时，会调用 <code class="language-plaintext highlighter-rouge">backward()</code>。这种情况可能导致死锁，因为第一个反向传播需要等待第二个反向传播完成。但一些内部实现细节可以防止第二个反向传播完成，具体内容在专门的子节中解释。</p>
+<p>在这里，我们在用户自定义的自动微分函数中调用 <code class="language-plaintext highlighter-rouge">backward()</code> 。这种情况可能导致死锁，因为第一个回传需要等待第二个回传完成。但一些内部实现细节可以防止第二个回传完成，如专用小节中所述。</p>
 <h2 id="thread-initialization">线程初始化</h2>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L1054-L1126"><code class="language-plaintext highlighter-rouge">execute_with_graph_task</code></a> 负责初始化负责计算和将 <code class="language-plaintext highlighter-rouge">root</code> 节点放入其产生的设备队列中的线程。</p>
+<p> <code class="language-plaintext highlighter-rouge">execute_with_graph_task</code> 负责初始化负责计算的线程，并将 <code class="language-plaintext highlighter-rouge">root</code> 节点放入产生它的设备的队列中。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">c10</span><span class="o">::</span><span class="n">intrusive_ptr</span><span class="o">&lt;</span><span class="n">at</span><span class="o">::</span><span class="n">ivalue</span><span class="o">::</span><span class="n">Future</span><span class="o">&gt;</span> <span class="n">Engine</span><span class="o">::</span><span class="n">execute_with_graph_task</span><span class="p">(</span>
     <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;&amp;</span> <span class="n">graph_task</span><span class="p">,</span>
@@ -961,13 +963,12 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">首先，此函数初始化多个线程（每个设备一个），调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L1046-L1052"> <code class="language-plaintext highlighter-rouge"> initialize_device_threads_pool()</code> </a>，其中发生几件事情：为每个设备创建一个 <code class="language-plaintext highlighter-rouge">ReadyQueue</code>。为每个非 CPU 设备创建一个线程。设置一个线程局部 <code class="language-plaintext highlighter-rouge">worker_device</code> 变量以跟踪与线程关联的当前设备。
-调用 <code class="language-plaintext highlighter-rouge">thread_main</code> 函数，线程等待将任务放入它们的队列中。</font></font></font></p>
+<p>首先，此函数初始化多个线程（每个设备一个），调用 <code class="language-plaintext highlighter-rouge"> initialize_device_threads_pool()</code> ，其中会发生几件事情：为每个设备创建一个 <code class="language-plaintext highlighter-rouge">ReadyQueue</code> 。为每个非 CPU 设备创建一个线程。设置一个线程局部 <code class="language-plaintext highlighter-rouge">worker_device</code> 变量来跟踪与线程关联的当前设备。调用 <code class="language-plaintext highlighter-rouge">thread_main</code> 函数，线程等待将任务放入它们的队列中。</p>
 
-<p>然后根据包含在 <code class="language-plaintext highlighter-rouge">input_buffer</code> 中的张量所在的设备，使用 <code class="language-plaintext highlighter-rouge">ready_queue</code> 函数检索队列以放置根节点。现在，主线程（同时执行 Python 解释器的线程）的 <code class="language-plaintext highlighter-rouge">worker_device</code> 被设置为 <code class="language-plaintext highlighter-rouge">NO_DEVICE</code>，并且它负责执行所有张量都位于 cpu 中的函数。如果 <code class="language-plaintext highlighter-rouge">worker_device</code> 设置为任何其他值，则图执行已经开始，并且在运行中的 <code class="language-plaintext highlighter-rouge">Node</code> 内调用了 <code class="language-plaintext highlighter-rouge">.backward()</code>，创建了一个重入的 backward 调用。这将在后面进行解释。现在，主线程将任务放入队列并调用 <code class="language-plaintext highlighter-rouge">thread_main</code>。</p>
+<p>然后，它根据包含在 <code class="language-plaintext highlighter-rouge">input_buffer</code> 中的张量所在的设备检索队列，以放置根节点，使用 <code class="language-plaintext highlighter-rouge">ready_queue</code> 函数。现在，主线程（也执行 Python 解释器的线程）的 <code class="language-plaintext highlighter-rouge">worker_device</code> 设置为 <code class="language-plaintext highlighter-rouge">NO_DEVICE</code> ，它负责执行所有张量都居住在 CPU 上的函数。如果 <code class="language-plaintext highlighter-rouge">worker_device</code> 设置为任何其他值，图执行已经启动，并且在运行中的 <code class="language-plaintext highlighter-rouge">.backward()</code> 内部调用了 <code class="language-plaintext highlighter-rouge">Node</code> ，创建了一个重入的后向调用。这将在后面解释。现在，主线程将任务放入队列并调用 <code class="language-plaintext highlighter-rouge">thread_main</code> 。</p>
 <h2 id="where-the-magic-happens">魔法发生的地方</h2>
 
-<p>路途遥远，但最终我们准备好遍历图并执行节点。每个生成的线程，包括主线程，都调用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L377-L464"><code class="language-plaintext highlighter-rouge">thread_main</code></a>。</p>
+<p>路程遥远，但最终我们准备好遍历图并执行节点。每个生成的线程和主线程都调用 <code class="language-plaintext highlighter-rouge">thread_main</code> 。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">auto</span> <span class="n">Engine</span><span class="o">::</span><span class="n">thread_main</span><span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;&amp;</span> <span class="n">graph_task</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kt">void</span> <span class="p">{</span>
 
@@ -1023,7 +1024,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>这里的代码很简单，给每个线程分配了在线程局部存储中的 <code class="language-plaintext highlighter-rouge">local_ready_queue</code>。线程会一直循环，直到图中没有剩余的任务执行。注意，对于与设备关联的线程，传递的 <code class="language-plaintext highlighter-rouge">graph_task</code> 参数是 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L326-L327"><code class="language-plaintext highlighter-rouge">nullptr</code></a>，并且它们在 <code class="language-plaintext highlighter-rouge">local_ready_queue-&gt;pop()</code> 中阻塞，直到它们的队列中推入任务。经过一些一致性检查（任务类型是关闭，或者图仍然有效）后，我们到达实际的函数调用 <code class="language-plaintext highlighter-rouge">evaluate_function</code>。</p>
+<p>这里的代码很简单，因为每个线程在线程局部存储中分配了 <code class="language-plaintext highlighter-rouge">local_ready_queue</code> 。线程会一直循环，直到图中没有剩余的任务要执行。注意，对于与设备关联的线程，传入的 <code class="language-plaintext highlighter-rouge">graph_task</code> 参数是 <code class="language-plaintext highlighter-rouge">nullptr</code> ，它们会在 <code class="language-plaintext highlighter-rouge">local_ready_queue-&gt;pop()</code> 中阻塞，直到队列中有任务被推入。在进行了某些一致性检查（任务类型是关闭，或者图仍然有效）之后，我们到达实际的函数调用在 <code class="language-plaintext highlighter-rouge">evaluate_function</code> 。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>        <span class="k">try</span> <span class="p">{</span>
           <span class="n">GraphTaskGuard</span> <span class="n">guard</span><span class="p">(</span><span class="n">local_graph_task</span><span class="p">);</span>
@@ -1042,7 +1043,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在调用 <code class="language-plaintext highlighter-rouge">evaluate_function</code> 之后，我们通过查看 <code class="language-plaintext highlighter-rouge">outstanding_tasks_</code> 的数量来检查 <code class="language-plaintext highlighter-rouge">graph_task</code> 的执行是否完成。这个数字在任务被推送到队列时增加，在 <code class="language-plaintext highlighter-rouge">local_graph_task-&gt;completed()</code> 中执行任务时减少。当执行完成后，我们返回结果，这些结果将存储在 <code class="language-plaintext highlighter-rouge">captured_vars_</code> 中，如果我们调用的是 <code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code> 而不是 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code>，因为该函数返回张量而不是将它们存储在输入的 <code class="language-plaintext highlighter-rouge">.grad</code> 属性中。最后，如果主线程正在等待，我们通过发送一个虚拟任务来唤醒它。</p>
+<p>调用 <code class="language-plaintext highlighter-rouge">evaluate_function</code> 之后，我们通过查看 <code class="language-plaintext highlighter-rouge">outstanding_tasks_</code> 的数量来检查 <code class="language-plaintext highlighter-rouge">graph_task</code> 的执行是否完成。这个数字在任务被推入队列时增加，在任务被执行时在 <code class="language-plaintext highlighter-rouge">local_graph_task-&gt;completed()</code> 中减少。当执行完成时，我们返回结果，这些结果将位于 <code class="language-plaintext highlighter-rouge">captured_vars_</code> ，如果我们调用 <code class="language-plaintext highlighter-rouge">torch.autograd.grad()</code> 而不是 <code class="language-plaintext highlighter-rouge">torch.autograd.backward()</code> ，因为这个函数返回张量而不是将它们存储在输入的 <code class="language-plaintext highlighter-rouge">.grad</code> 属性中。最后，如果主线程正在等待，我们通过发送一个虚拟任务来唤醒它。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>   <span class="c1">// Decrement the outstanding tasks.</span>
     <span class="o">--</span><span class="n">local_graph_task</span><span class="o">-&gt;</span><span class="n">outstanding_tasks_</span><span class="p">;</span>
@@ -1062,9 +1063,9 @@ def backward(
 
 <h2 id="calling-the-function-and-unlocking-new-tasks">调用函数并解锁新任务</h2>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L786-L920"><code class="language-plaintext highlighter-rouge">evaluate_function</code></a> 有三个作用：</p>
+<p> <code class="language-plaintext highlighter-rouge">evaluate_function</code> 有三个作用：</p>
 
-<p>运行函数。将其结果累积在下一个节点 <code class="language-plaintext highlighter-rouge">InputBuffers</code> 中。减少下一个节点的依赖计数器，并将达到 0 的任务入队以执行。</p>
+<p>运行函数。将结果累积到下一个节点 <code class="language-plaintext highlighter-rouge">InputBuffers</code> 。减少下一个节点的依赖计数器，并将依赖计数器为 0 的任务入队执行。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="n">Engine</span><span class="o">::</span><span class="n">evaluate_function</span><span class="p">(</span>
     <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;&amp;</span> <span class="n">graph_task</span><span class="p">,</span>
@@ -1091,9 +1092,9 @@ def backward(
 
 </code></pre></div></div>
 
-<p>初始时，我们检查 <code class="language-plaintext highlighter-rouge">exec_info_</code> 映射的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 结构，以确定当前节点是否需要执行。请记住，如果这个映射为空，则所有节点都会执行，因为我们正在计算前向传递的所有输入的梯度。</p>
+<p>首先，我们检查 <code class="language-plaintext highlighter-rouge">exec_info_</code> 映射的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 结构，以确定当前节点是否需要执行。记住，如果这个映射为空，则所有节点都会执行，因为我们正在计算前向传递的所有输入的梯度。</p>
 
-<p>检查完成后，通过运行 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L735-L784"><code class="language-plaintext highlighter-rouge">call_function</code></a> 来执行函数。其实现非常简单，调用实际的导数函数和已注册的钩子（如果有）。</p>
+<p>检查之后，通过运行 <code class="language-plaintext highlighter-rouge">call_function</code> 来执行函数。其实现非常简单，调用实际的导数函数和已注册的钩子（如果有）。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="kt">int</span> <span class="n">num_outputs</span> <span class="o">=</span> <span class="n">outputs</span><span class="p">.</span><span class="n">size</span><span class="p">();</span>
   <span class="k">if</span> <span class="p">(</span><span class="n">num_outputs</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
@@ -1107,7 +1108,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>接下来，我们检查 <code class="language-plaintext highlighter-rouge">call_function</code> 执行后的函数输出。如果输出数量为 0，则没有后续节点需要执行，因此我们可以安全地返回。这是与叶节点相关的 <code class="language-plaintext highlighter-rouge">AccumulateGrad</code> 节点的情况。</p>
+<p>接下来，我们检查函数运行后的输出。如果输出数量为 0，则没有后续节点需要执行，因此可以安全地返回。这是与叶节点关联的 <code class="language-plaintext highlighter-rouge">AccumulateGrad</code> 节点的情况。</p>
 
 <p>此外，如果需要，这里还会检查梯度中的 <code class="language-plaintext highlighter-rouge">NaN</code> 值。</p>
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>
@@ -1122,15 +1123,15 @@ def backward(
 
 </code></pre></div></div>
 
-<p>我们已经执行了一个返回每个相关正向传递函数输入的梯度的 <code class="language-plaintext highlighter-rouge">grad_fn</code>。正如我们在 <a href="https://maskerprc.github.io/blog/computational-graphs-constructed-in-pytorch/#linking-nodes-together"> 之前的博客文章 </a> 中所看到的，对于这些输入张量中的每一个，我们都有一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象，以及产生它们的正向传递中的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 函数。本质上，反向传递节点 Output[0] 对应于正向传递相关函数的第一个参数。图 4 展示了反向函数的输出与正向函数的输入之间的关系。请注意，<code class="language-plaintext highlighter-rouge">grad_fn C</code> 的输出是 <code class="language-plaintext highlighter-rouge">z</code> 关于 <code class="language-plaintext highlighter-rouge">Function C</code> 输入的梯度</p>
+<p>我们现在执行了一个 <code class="language-plaintext highlighter-rouge">grad_fn</code> ，它为每个关联的前向传递函数输入返回了一个梯度。正如我们在之前的博客文章中看到的，对于这些输入张量中的每一个，我们都有一个 <code class="language-plaintext highlighter-rouge">Edge</code> 对象，以及产生它们的函数的 <code class="language-plaintext highlighter-rouge">grad_fn</code> 。本质上，反向传播节点中的 Output[0]对应于前向传递关联函数的第一个参数。图 4 显示了反向函数的输出与前向函数的输入之间的关系。请注意， <code class="language-plaintext highlighter-rouge">grad_fn C</code> 的输出是 <code class="language-plaintext highlighter-rouge">z</code> 相对于 <code class="language-plaintext highlighter-rouge">Function C</code> 输入的梯度。</p>
 
 <p align="center">
   <img src="/assets/images/forward-backward-function-fig-4.png" width="100%">
 </p>
 
-<p align="center">图 4：正向和反向函数的输入输出对应关系</p>
+<p align="center">图 4：前向和反向函数的输入输出对应关系</p>
 
-<p>我们现在遍历这些边，检查相关的函数是否准备好执行。</p>
+<p>我们现在遍历这些边，检查关联的函数是否准备好执行。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="c1">// Check if the next function is ready to be computed</span>
     <span class="kt">bool</span> <span class="n">is_ready</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
@@ -1150,7 +1151,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>为了做到这一点，我们检查 <code class="language-plaintext highlighter-rouge">graph_task-&gt;dependencies_</code> 映射。我们递减计数器，如果它达到 0，我们就标记边指向的函数为可执行。接下来，我们准备由后续边指示的任务的输入缓冲区。</p>
+<p>因此，我们检查 <code class="language-plaintext highlighter-rouge">graph_task-&gt;dependencies_</code> 映射。我们递减计数器，如果它达到 0，我们将指向边的函数标记为准备执行。接下来，我们准备由下一个边指示的任务的输入缓冲区。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="k">if</span> <span class="p">(</span><span class="n">not_ready_it</span> <span class="o">==</span> <span class="n">not_ready</span><span class="p">.</span><span class="n">end</span><span class="p">())</span> <span class="p">{</span>
       <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">exec_info_</span><span class="p">.</span><span class="n">empty</span><span class="p">())</span> <span class="p">{</span>
@@ -1174,7 +1175,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在这里，我们在 <code class="language-plaintext highlighter-rouge">graph_task-&gt;not_ready_</code> 映射中查找任务。如果不存在，我们创建一个新的 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 对象，并将当前输出设置在关联边的 <code class="language-plaintext highlighter-rouge">input_nr</code> 位置。如果任务准备就绪可以执行，我们将其入队到适当的设备 <code class="language-plaintext highlighter-rouge">ready_queue</code> 并完成执行。然而，如果任务未就绪且我们之前已见过，它将存在于 <code class="language-plaintext highlighter-rouge">not_ready_map_</code> 中。</p>
+<p>在这里，我们在 <code class="language-plaintext highlighter-rouge">graph_task-&gt;not_ready_</code> 映射中查找任务。如果它不存在，我们创建一个新的 <code class="language-plaintext highlighter-rouge">InputBuffer</code> 对象，并将当前输出设置在边关联的缓冲区的 <code class="language-plaintext highlighter-rouge">input_nr</code> 位置。如果任务准备就绪，我们将其入队到适当的设备 <code class="language-plaintext highlighter-rouge">ready_queue</code> 并完成执行。然而，如果任务未就绪且我们之前已见过它，它就存在于 <code class="language-plaintext highlighter-rouge">not_ready_map_</code> 中。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    <span class="err">}</span> <span class="k">else</span> <span class="p">{</span>
       <span class="c1">// The function already has a buffer</span>
@@ -1195,17 +1196,17 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在这种情况下，我们将在现有的 <code class="language-plaintext highlighter-rouge">input_buffer</code> 中累积输出，而不是创建一个新的。一旦所有任务都处理完毕，工作线程将退出循环并完成。整个过程在图 5 的动画中进行了总结。我们看到线程如何查看就绪队列中的任务，并递减下一个节点的依赖项，从而解锁它们以供执行。</p>
+<p>在这种情况下，我们将输出累积到现有的 <code class="language-plaintext highlighter-rouge">input_buffer</code> 而不是创建一个新的。一旦所有任务都处理完毕，工作线程退出循环并完成。整个过程在图 5 的动画中进行了总结。我们看到线程如何查看就绪队列中的任务并递减下一个节点的依赖项，从而解锁它们以供执行。</p>
 
 <p align="center">
   <img src="/assets/images/computation-animation-fig-5.gif" width="100%">
 </p>
 
-<p align="center">图 5：计算图执行动画</p>
+<p align="center">图 5：计算图执行的动画</p>
 
-<h2 id="flow-with-reentrant-backward">带有重入式反向的流程</h2>
+<h2 id="flow-with-reentrant-backward">递归回退流程</h2>
 
-<p>如上所述，重入式回溯问题是指当前执行的函数进行嵌套调用 <code class="language-plaintext highlighter-rouge">backward</code> 的情况。当这种情况发生时，运行此函数的线程会一直下降到 <code class="language-plaintext highlighter-rouge">execute_with_graph_task</code>，就像非重入式情况一样，但这里有所不同。</p>
+<p>正如我们上面所看到的，递归回退问题是指当前正在执行的功能对 <code class="language-plaintext highlighter-rouge">backward</code> 进行嵌套调用。当这种情况发生时，运行此函数的线程会一直下降到 <code class="language-plaintext highlighter-rouge">execute_with_graph_task</code> ，就像非递归回退的情况一样，但这里有所不同。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">c10</span><span class="o">::</span><span class="n">intrusive_ptr</span><span class="o">&lt;</span><span class="n">at</span><span class="o">::</span><span class="n">ivalue</span><span class="o">::</span><span class="n">Future</span><span class="o">&gt;</span> <span class="n">Engine</span><span class="o">::</span><span class="n">execute_with_graph_task</span><span class="p">(</span>
     <span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;&amp;</span> <span class="n">graph_task</span><span class="p">,</span>
@@ -1246,9 +1247,9 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在这里，<code class="language-plaintext highlighter-rouge">execute_with_graph_task</code> 会检测到这是一个重入式调用，然后查找当前的嵌套调用次数。如果超过限制，我们会创建一个新的线程来处理这个图的执行，如果没有超过限制，我们就按常规执行这个重入式调用。嵌套调用的限制最初是为了避免重入式调用创建非常大的调用栈而设置的栈溢出。然而，当添加了 sanitizer 测试后，这个数字进一步减少了，因为线程在某一时刻可以持有的最大锁的数量。这可以在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.h#L36-L42"><code class="language-plaintext highlighter-rouge">torch/csrc/autograd/engine.h</code></a> 中看到。</p>
+<p>在这里， <code class="language-plaintext highlighter-rouge">execute_with_graph_task</code> 检测到这是一个递归调用，然后查找当前的嵌套调用次数。如果超过限制，我们创建一个新的线程来处理此图的执行，如果没有超过，我们则按常规执行这个递归调用。嵌套调用的限制最初是为了避免递归调用创建非常大的调用栈而导致的栈溢出。然而，当添加了 sanitizer 测试后，这个数字进一步减少了，因为线程在某一时刻可以持有的最大锁的数量。这可以在 <code class="language-plaintext highlighter-rouge">torch/csrc/autograd/engine.h</code> 中看到。</p>
 
-<p>当超过最大深度时，会使用 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L1239-L1255"><code class="language-plaintext highlighter-rouge">add_thread_pool_task</code></a> 函数创建一个新的线程。</p>
+<p>当超过这个最大深度时，会创建一个新的线程，并使用 <code class="language-plaintext highlighter-rouge">add_thread_pool_task</code> 函数。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="n">Engine</span><span class="o">::</span><span class="n">add_thread_pool_task</span><span class="p">(</span><span class="k">const</span> <span class="n">std</span><span class="o">::</span><span class="n">weak_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;&amp;</span> <span class="n">graph_task</span><span class="p">)</span> <span class="p">{</span>
   <span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">lck</span><span class="p">(</span><span class="n">thread_pool_shared_</span><span class="o">-&gt;</span><span class="n">mutex_</span><span class="p">);</span>
@@ -1270,7 +1271,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p>在深入了解之前，让我们看看 <code class="language-plaintext highlighter-rouge">thread_pool_shared_</code> 对象，它在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.h#L421"><code class="language-plaintext highlighter-rouge">Engine</code></a> 中管理所有与重入式向后调用相关的线程信息。</p>
+<p>在深入探讨之前，我们先看看 <code class="language-plaintext highlighter-rouge">Engine</code> 中的 <code class="language-plaintext highlighter-rouge">thread_pool_shared_</code> 对象，它管理着与可重入向后调用相关的所有线程信息。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>  <span class="k">struct</span> <span class="nc">ThreadPoolShared</span> <span class="p">{</span>
     <span class="kt">unsigned</span> <span class="kt">int</span> <span class="n">num_workers_</span><span class="p">;</span>
@@ -1286,11 +1287,11 @@ def backward(
 
 </code></pre></div></div>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.h#L398-L414"><code class="language-plaintext highlighter-rouge">ThreadPoolShared</code></a> 是一个简单的容器，它包含一个 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象的队列，具有同步机制和当前工作者的数量。</p>
+<p> <code class="language-plaintext highlighter-rouge">ThreadPoolShared</code> 是一个简单的容器，它包含一个队列，队列中存放着 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象，并具有同步机制以及当前工作进程的数量。</p>
 
-<p>现在很容易理解当有 <code class="language-plaintext highlighter-rouge">add_thread_pool_task</code> 创建线程时，队列中有 <code class="language-plaintext highlighter-rouge">graph_task</code> 对象，并且工作者数量不足。</p>
+<p>现在很容易理解当队列中有 <code class="language-plaintext highlighter-rouge">graph_task</code> 个对象且工作进程不足时， <code class="language-plaintext highlighter-rouge">add_thread_pool_task</code> 是如何创建线程的。</p>
 
-<p><code class="language-plaintext highlighter-rouge">add_thread_pool_task</code> 通过执行 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L471-L493"><code class="language-plaintext highlighter-rouge">reentrant_thread_init</code></a> 来初始化一个线程。</p>
+<p> <code class="language-plaintext highlighter-rouge">add_thread_pool_task</code> 通过执行 <code class="language-plaintext highlighter-rouge">reentrant_thread_init</code> 初始化一个线程。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="n">Engine</span><span class="o">::</span><span class="n">reentrant_thread_init</span><span class="p">()</span> <span class="p">{</span>
   <span class="n">at</span><span class="o">::</span><span class="n">init_num_threads</span><span class="p">();</span>
@@ -1319,13 +1320,13 @@ def backward(
 
 </code></pre></div></div>
 
-<p>代码结构简单。新创建的线程等待在 <code class="language-plaintext highlighter-rouge">thread_pool_shared-&gt;graphtasks_queue_</code> 上，以便可重入的向后图可用，然后执行它们。请注意，此线程通过访问在 <code class="language-plaintext highlighter-rouge">graph_task-&gt;owner_</code> 字段中设置的 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L1092"><code class="language-plaintext highlighter-rouge">execute_with_graph_task</code></a> 函数，使用与启动此调用的线程关联的设备任务就绪队列。</p>
+<p>代码结构简单。新创建的线程等待在 <code class="language-plaintext highlighter-rouge">thread_pool_shared-&gt;graphtasks_queue_</code> 上，以便可重入的向后图可用，然后执行它们。请注意，此线程通过访问在 <code class="language-plaintext highlighter-rouge">execute_with_graph_task</code> 函数中设置的 <code class="language-plaintext highlighter-rouge">graph_task-&gt;owner_</code> 字段，使用启动此调用的线程所关联的设备任务就绪队列。</p>
 
 <h2 id="error-handling">错误处理</h2>
 
 <p>当一个工作线程发生错误时，它将被传播到 <code class="language-plaintext highlighter-rouge">backward</code> 调用线程。</p>
 
-<p>为了实现这一点，在 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L415-L438"><code class="language-plaintext highlighter-rouge">thread_main</code></a> 中有一个 try/catch 块，它捕获 <code class="language-plaintext highlighter-rouge">Node</code> 函数调用中的任何异常，并将其设置为相关的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象。</p>
+<p>为了实现这一点，在 <code class="language-plaintext highlighter-rouge">thread_main</code> 中有一个 try/catch 块，它可以捕获 <code class="language-plaintext highlighter-rouge">Node</code> 函数调用中的任何异常，并将其设置为相关的 <code class="language-plaintext highlighter-rouge">GraphTask</code> 对象。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code>       <span class="k">try</span> <span class="p">{</span>
           <span class="err">…</span>
@@ -1343,7 +1344,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p><a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L495-L500"><code class="language-plaintext highlighter-rouge">thread_on_exception</code></a> 和它调用的 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/torch/csrc/autograd/engine.cpp#L605-L621"> 函数 </a> 最终会在 <code class="language-plaintext highlighter-rouge">local_graph_task</code> 对象中设置异常。</p>
+<p> <code class="language-plaintext highlighter-rouge">thread_on_exception</code> 和它调用的函数最终会在 <code class="language-plaintext highlighter-rouge">local_graph_task</code> 对象中设置异常。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="n">Engine</span><span class="o">::</span><span class="n">thread_on_exception</span><span class="p">(</span>
     <span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">GraphTask</span><span class="o">&gt;</span> <span class="n">graph_task</span><span class="p">,</span>
@@ -1372,8 +1373,7 @@ def backward(
 
 </code></pre></div></div>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">在 <code class="language-plaintext highlighter-rouge">set_exception</code> 中，它将 <code class="language-plaintext highlighter-rouge">has_error_</code> 标志设置为 <code class="language-plaintext highlighter-rouge">true</code> 并调用 <a href=""><code class="language-plaintext highlighter-rouge">setError</code></a>
-的 <a href="https://github.com/pytorch/pytorch/blob/bc2c6edaf163b1a1330e37a6e34caf8c553e4755/aten/src/ATen/core/ivalue_inl.h#L770-L1322"><code class="language-plaintext highlighter-rouge">future_result_</code></a> 对象的函数。这将使得错误在访问 <code class="language-plaintext highlighter-rouge">future_result_-&gt;value()</code> 时被重新抛给调用线程。</font></font></font></p>
+<p>在 <code class="language-plaintext highlighter-rouge">set_exception</code> 中，它将 <code class="language-plaintext highlighter-rouge">has_error_</code> 标志设置为 <code class="language-plaintext highlighter-rouge">true</code> ，并调用 <code class="language-plaintext highlighter-rouge">future_result_</code> 对象的 <code class="language-plaintext highlighter-rouge">setError</code> 函数。这将导致错误在访问 <code class="language-plaintext highlighter-rouge">future_result_-&gt;value()</code> 时在调用线程中被重新抛出。</p>
 
 <div class="language-c++ highlighter-rouge"><div class="highlight"><pre class="highlight"><code> <span class="n">IValue</span> <span class="nf">value</span><span class="p">()</span> <span class="p">{</span>
     <span class="n">std</span><span class="o">::</span><span class="n">unique_lock</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span> <span class="n">lock</span><span class="p">(</span><span class="n">mutex_</span><span class="p">);</span>
@@ -1388,7 +1388,7 @@ def backward(
 
 <h1 id="closing-remarks">结束语</h1>
 
-<p>这是本系列关于 PyTorch 如何进行自动求导的最后一篇帖子。我们希望您喜欢阅读它，并且现在您对 PyTorch 内部机制足够熟悉，可以开始为 PyTorch 开发做出贡献了！</p>
+<p>这是我们本系列关于 PyTorch 如何进行自动微分系列的最后一篇帖子。我们希望您喜欢阅读它，并且现在您已经足够熟悉 PyTorch 内部机制，可以开始为 PyTorch 开发做出贡献！</p>
 
                 </article>
             </div>
@@ -1404,14 +1404,14 @@ def backward(
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -1428,7 +1428,7 @@ def backward(
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -1441,7 +1441,7 @@ def backward(
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -1449,7 +1449,7 @@ def backward(
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -1478,9 +1478,7 @@ def backward(
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目。有关适用于 PyTorch Project a Series of LF Projects, LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -1490,7 +1488,7 @@ def backward(
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -1515,19 +1513,19 @@ def backward(
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手指南 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1554,17 +1552,17 @@ def backward(
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1580,7 +1578,7 @@ def backward(
         </ul>
 
         <li class="resources-mobile-menu-title">
-          <a>博客与新闻</a>
+          <a>博客 &amp; 新闻</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
@@ -1599,7 +1597,7 @@ def backward(
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -1613,7 +1611,7 @@ def backward(
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1681,7 +1679,7 @@ def backward(
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

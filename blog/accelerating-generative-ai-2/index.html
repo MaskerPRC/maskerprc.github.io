@@ -76,8 +76,8 @@ To apply it, we simply wrap a function (or a module) with it.
 
 torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" however,="" there="" are="" a="" couple="" of="" nuances="" here="" that="" make="" it="" somewhat="" nontrivial="" for="" folks="" to="" get="" significant="" performance="" boosts="" from="" applying="" torch.compile="" text="" generation.="" the="" first="" obstacle="" is="" kv-cache.="" kv-cache="" an="" inference-time="" optimization="" caches="" activations="" computed="" previous="" tokens="" (see="" more="" in-depth="" explanation).="" as="" we="" generate="" tokens,="" “logical="" length”="" grows.="" this="" problematic="" two="" reasons.="" one="" reallocating="" (and="" copying!)="" every="" time="" cache="" grows="" simply="" expensive.="" other="" dynamism="" makes="" harder="" reduce="" overhead,="" no="" longer="" able="" leverage="" approaches="" like="" cudagraphs.="" resolve="" this,="" use="" “static”="" kv-cache,="" which="" means="" statically="" allocate="" maximum="" size="" and="" then="" mask="" out="" unused="" values="" in="" attention="" portion="" computation.="" second="" prefill="" phase.="" transformer="" generation="" best="" thought="" phase="" process:="" 1.="" where="" entire="" prompt="" processed,="" 2.="" decoding="" each="" token="" generated="" autoregressively.="" although="" can="" be="" made="" entirely="" static="" once="" static,="" stage="" still="" requires="" significantly="" dynamism,="" due="" having="" variable="" length.="" thus,="" actually="" need="" compile="" stages="" with="" separate="" compilation="" strategies.="" these="" details="" bit="" tricky,="" actual="" implementation="" not="" very="" difficult="" at="" all="" gpt-fast)!="" boost="" dramatic.="" sudden,="" our="" improves="" by="" than="" 4x!="" such="" gains="" often="" common="" when="" one’s="" workload="" overhead="" bound.="" sidenote:="" how="" helping?="" worth="" disentangling="" exactly="" improving="" performance.="" there’s="" 2="" main="" factors="" leading="" torch.compile’s="" factor,="" mentioned="" above,="" reduction.="" through="" variety="" optimizations,="" but="" most="" effective="" ones="" called="" applies="" automatically="" you="" “reduce-overhead”="" set,="" saving="" extra="" work="" code="" write="" doing="" yourself="" manually="" without="" torch.compile.="" generates="" faster="" kernels.="" benchmark="" single="" kernel="" scratch,="" including="" both="" matrix="" multiplications="" attention!="" even="" cooler,="" kernels="" built="" alternatives="" (cublas="" flashattention2)!="" may="" sound="" implausible="" many="" you,="" considering="" hard="" efficient="" multiplication="" kernels,="" much="" manpower="" has="" been="" put="" into="" cublas="" flashattention.="" key="" here,="" unusual="" computational="" properties.="" particular,="" because="" bs="1" vector="" multiplication.="" computations="" completely="" memory-bandwidth="" bound,="" such,="" well="" within="" range="" compilers="" generate.="" fact,="" matrix-vector="" against="" cublas,="" find="" quite="" faster!="" step="" 2:="" alleviating="" memory="" bandwidth="" bottleneck="" int8="" weight-only="" quantization="" (157.4="" tok="" s)="" so,="" given="" we’ve="" already="" seen="" massive="" speedups="" torch.compile,="" possible="" do="" better?="" way="" think="" about="" problem="" compute="" close="" theoretical="" peak.="" case,="" largest="" cost="" loading="" weights="" gpu="" global="" registers.="" words,="" forward="" pass="" us="" “touch”="" parameter="" on="" gpu.="" fast="" theoretically="" model?="" measure="" model="" utilization="" (mbu).="" measures="" what="" percentage="" we’re="" during="" inference.="" computing="" pretty="" simple.="" take="" total="" (#="" params="" *="" bytes="" per="" param)="" multiply="" number="" inferences="" second.="" then,="" divide="" peak="" mbu.="" example,="" above="" have="" 7b="" model.="" stored="" fp16="" (2="" parameter),="" achieved="" 107="" s.="" finally,="" a100-80gb="" tb="" s="" bandwidth.="" putting="" together,="" **72%="" mbu!="" **this="" good,="" just="" copying="" struggles="" break="" 85%.="" but…="" does="" mean="" limit="" clearly="" bottlenecked="" memory.="" doesn’t="" matter="" -="" changing="" statement="" some="" manner,="" might="" only="" eek="" another="" 10%="" let’s="" look="" equation.="" can’t="" really="" change="" parameters="" (well,="" paying="" money).="" but,="" in!="" arrive="" next="" technique="" quantization.="" idea="" if="" bottleneck,="" why="" don’t="" smaller?="" note="" quantizing="" computation="" itself="" done="" bf16.="" form="" easy="" apply="" little="" accuracy="" degradation.="" moreover,="" also="" easily="" again="" benchmark,="" included.="" see="" dark="" blue="" line="" (torch.compile="" +="" int8),="" improvement="" using="" quantization!="" light-blue="" (no="" int8)="" worse="" performance!="" order="" advantage="" perf="" benefits="" quantization,="" fused.="" shows="" user!="" model,="" nice="" 50%="" improvement,="" bringing="" up="" 157.4="" s!="" 3:="" reframing="" speculative="" after="" techniques="" faced="" problem.="" 100="" must="" load="" times.="" quantized,="" over="" over,="" generate!="" any="" around="" this?="" glance,="" answer="" seem="" strict="" serial="" dependency="" autoregressive="" turns="" out,="" utilizing="" decoding,="" obtain="" speedups!="" imagine="" had="" senior="" engineer="" (called="" verity),="" who="" right="" technical="" decisions="" rather="" slow="" writing="" code.="" junior="" drake),="" always="" cheaper!)="" verity.="" drake="" (the="" engineer)="" while="" ensuring="" making="" decisions?="" first,="" goes="" labor-intensive="" process="" code,="" along="" way.="" next,="" give="" verity="" review.="" upon="" reviewing="" decide="" 3="" correct,="" last="" redone.="" back,="" throws="" away="" his="" decisions,="" restarts="" coding="" there.="" notably,="" looked="" once,="" pieces="" validated="" identical="" she="" would="" written!="" assuming="" review="" taken="" her="" those="" herself,="" approach="" comes="" ahead.="" context="" inference,="" played="" role="" larger="" whose="" outputs="" want="" task,="" verifier="" similarly,="" smaller="" that’s="" draft="" 8="" eight="" parallel="" throwing="" match.="" crucial="" property="" quality="" output.="" long="" takes="" generating="" verifying="" less="" come="" great="" things="" native="" pytorch="" implement!="" here’s="" entirety="" implementation,="" 50="" lines="" pytorch.="" guarantees="" mathematically="" results="" compared="" regular="" generation,="" runtime="" varies="" depending="" text,="" aligned="" are.="" running="" codellama-34b="" codellama-7b,="" 2x="" hand,="" llama-7b="" tinyllama-1b,="" 1.3x="" amd="" scratch="" converted="" openai="" triton.="" backend="" triton="" backend),="" go="" optimizations="" above…="" gpu!="" achieve="" 102.5="" gcd="" (i.e.="" half)="" mi250x!="" 4:="" reducing="" int4="" gptq="" (202.1="" course,="" down="" 16="" bits="" allows="" load,="" 4="" result="" unfortunately,="" 4-bits,="" starts="" become="" concern.="" preliminary="" evals,="" perceptible="" degradation,="" does.="" tricks="" degradation="" granular="" scaling="" factor.="" factor="" quantized="" tensor="" representation,="" sliding="" scale="" between="" floating="" point="" (each="" value="" factor)="" integer="" factor).="" row.="" higher="" accuracy,="" “one="" 32="" elements”.="" choose="" group="" minimize="" choice="" among="" community.="" advanced="" strategy="" rounding="" weights.="" example="" data="" calibrate="" accurately.="" prototype="" repository="" based="" off="" pytorch’s="" recently="" released="" torch.export.="" addition,="" fuse="" dequantize="" unfortunately="" so="" handwritten="" cuda="" require="" additional="" work,="" them="" together="" better="" 5:="" combining="" everything="" (244.7="" compose="" 6:="" parallelism="" far,="" restricting="" ourselves="" minimizing="" latency="" settings,="" access="" multiple="" gpus.="" improve="" further!="" intuitive="" sense="" allow="" latency,="" prior="" equation="" mbu,="" particularly="" denominator.="" gpus="" gives="" bandwidth,="" potential="" pick,="" across="" devices="" simultaneously.="" split="" processing="" devices.="" parallelism.="" luckily,="" provides="" low-level="" tools="" tensor-parallelism="" working="" higher-level="" apis="" expressing="" parallelism,="" stay="" tuned="" those!="" api,="" it’s="" add="" 150="" changes.="" previously,="" continue="" serve="" llama-70b="" 55="" conclusion="" accomplish.="" simplicity:="" ignoring="" model.py="" (244="" loc)="" generate.py="" (371="" tp.py="" (151="" 766="" loc="" implement="" inference="" tensor-parallelism.="" performance:="" llama-7b,="" quant="" reach="" 241="" llama-70b,="" throw="" 80="" or="" surpassing="" sota="" numbers!="" allowed="" simplicity,="" ease="" use,="" flexibility.="" well.="" found="" here:="" https:="" github.com="" pytorch-labs="" gpt-fast.="" hope="" community="" finds="" useful.="" goal="" repo="" provide="" library="" framework="" people="" import.="" instead,="" encourage="" users="" copy-paste,="" fork,="" modify="" repo.="" acknowledgements="" thank="" vibrant="" open="" source="" their="" continual="" support="" llms,="" including:="" lightning="" ai="" supporting="" flash="" attention,="" lora="" fine-tuning.="" ggml="" driving="" fast,="" device="" llms="" andrej="" karpathy="" spearheading="" simple,="" interpretable="" llm="" implementations="" mlc-llm="" pushing="" 4-bit="" heterogenous="" hardware="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/accelerating-generative-ai-2/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/accelerating-generative-ai-2/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/accelerating-generative-ai-2/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/accelerating-generative-ai-2/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -223,7 +223,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <div class="main-background blog-background blog-detail-background"></div>
     <div class="hello-bar">
-        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+        <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
       </div>
       
     <div class="container-fluid header-holder blog-detail-header">
@@ -231,7 +231,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
             
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -240,27 +240,27 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         <a class="with-down-arrow">学习</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/get-started">
-            <span class="dropdown-title">开始</span>
+            <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
-            <p>PyTorch 教程中的新内容</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
+            <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 菜谱</span>
-            <p>小巧型、即用型 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span>
-            <p>掌握我们的引人入胜的 YouTube 教程系列，精通 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新加入 PyTorch 基金会</span>
+            <span class="dropdown-title">New to PyTorch Foundation</span><p></p>
           </a>
         </div>
       </div>
@@ -271,21 +271,27 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
-            <p>一个讨论 PyTorch 代码、问题、安装、研究的场所</p>
+            <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">贡献者奖项 - 2024</span>
-            <p>本年 PyTorch 大会揭晓获奖者</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -293,18 +299,20 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <li class="main-menu-item">
       <div id="dropdownMenuButton" data-toggle="resources-dropdown" class="resources-dropdown">
-        <a class="with-down-arrow">边缘</a>
+        <a class="with-down-arrow">
+          Edge 
+        </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
             <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">ExecuTorch</span>
-            <p>端到端解决方案，实现移动和边缘设备上的设备端推理能力</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -315,12 +323,12 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>查阅文档以获取全面指导，了解如何使用 PyTorch。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解有关特定领域库的更多信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -331,28 +339,28 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>捕捉最新的技术新闻和事件</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
-            <p>学习如何我们的社区使用 PyTorch 解决真实、日常的机器学习问题</p>
+            <span class="dropdown-title">社区故事</span><p></p>
+            <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">通讯</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -366,7 +374,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -402,9 +410,9 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <div class="jumbotron jumbotron-fluid blog-detail-jumbotron">
         <div class="container blog-detail-container">
-            <p class="featured-post">2023年11月30日</p>
+            <p class="featured-post">2023 年 11 月 30 日</p>
             <h1>
-                <a class="blog-title">使用 PyTorch 加速生成式 AI II：GPT，快速</a>
+                <a class="blog-title">加速生成式 AI 的 PyTorch II：GPT，快速</a>
             </h1>
         </div>
     </div>
@@ -415,73 +423,73 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
                 <img src="/assets/images/logo-icon.svg" class="img-fluid author-icon">
                 <article class="pytorch-article">
                     <p class="author">由 PyTorch 团队</p>
-                    <p>这篇文章是关于如何使用纯、原生的 PyTorch 加速生成式 AI 模型的系列博客的第二部分。我们很高兴地分享一系列新发布的 PyTorch 性能特性，以及一些实际示例，以展示我们可以将 PyTorch 原生性能提升到何种程度。在第一部分中，我们展示了如何仅使用纯、原生的 PyTorch 将 <a href="https://maskerprc.github.io/blog/accelerating-generative-ai/">Segment Anything</a> 加速超过 8 倍。在本篇博客中，我们将重点关注LLM优化。</p>
+                    <p>这篇文章是关于如何使用纯、原生的 PyTorch 加速生成式 AI 模型的系列博客的第二部分。我们很高兴地分享一系列新发布的 PyTorch 性能特性，并通过实际示例展示我们可以将 PyTorch 原生性能提升到何种程度。在第一部分中，我们展示了如何仅使用纯、原生的 PyTorch 将 Segment Anything 加速超过 8 倍。在本篇博客中，我们将重点关注LLM优化。</p>
 
-<p>在过去的一年里，生成式 AI 的应用场景在流行度上有了爆炸性的增长。文本生成是一个特别受欢迎的领域，在诸如 <a href="https://github.com/ggerganov/llama.cpp">llama.cpp</a>、<a href="https://github.com/vllm-project/vllm">vLLM</a> 和 <a href="https://github.com/mlc-ai/mlc-llm">MLC-LLM</a> 等开源项目中，创新层出不穷。</p>
+<p>在过去的一年里，生成式 AI 的应用场景在流行度上有了爆炸性的增长。文本生成是一个特别受欢迎的领域，在诸如 llama.cpp、vLLM 和 MLC-LLM等开源项目中，创新层出不穷。</p>
 
-<p>虽然这些项目性能良好，但它们通常在易用性方面有所妥协，例如需要将模型转换为特定格式或构建和分发新的依赖项。这引发了一个问题：<strong> 我们能否仅使用纯、原生的 PyTorch 快速运行 transformer 推理？</strong></p>
+<p>虽然这些项目性能出色，但它们通常在易用性方面有所妥协，例如需要将模型转换为特定格式或构建和分发新的依赖项。这引发了一个问题：我们能否仅使用纯、原生的 PyTorch 实现 Transformer 推理的快速运行？</p>
 
-<p>如同我们最近宣布的 <a href="https://www.youtube.com/watch?v=IWpM_9AsC-U">PyTorch 开发者大会 </a> 上所宣布的那样，PyTorch 团队从头开始编写了一个LLM <strong> 几乎比基线快 10 倍 </strong>，且没有损失精度，全部使用原生 PyTorch 优化。我们利用了包括以下在内的多种优化：</p>
+<p>如在我们最近的 PyTorch 开发者大会上所宣布的，PyTorch 团队从头开始编写了一个LLM，其速度比基线快近 10 倍，且没有损失精度，全部使用原生 PyTorch 优化。我们利用了一系列优化，包括：</p>
 
 <ul>
-  <li><strong><a href="https://maskerprc.github.io/tutorials/intermediate/torch_compile_tutorial.html">Torch.compile</a></strong>：PyTorch 模型的编译器</li>
-  <li><strong><a href="https://github.com/pytorch-labs/ao/tree/main#torchao">GPU 量化 </a></strong>：通过降低精度操作加速模型</li>
-  <li><strong><a href="https://github.com/pytorch-labs/gpt-fast/blob/main/generate.py#L76">推测性解码 </a></strong>：使用一个小型“草案”模型来预测大型“目标”模型的输出，以加速LLMs</li>
-  <li><strong><a href="https://github.com/pytorch-labs/gpt-fast/blob/main/tp.py">张量并行 </a></strong>：通过在多个设备上运行模型来加速模型。</li>
+  <li>PyTorch 编译器：PyTorch 模型的编译器</li>
+  <li>GPU 量化：通过降低精度操作加速模型</li>
+  <li>推测性解码：使用小型“草案”模型预测大型“目标”模型的输出</li>
+  <li>张量并行：通过在多个设备上运行模型来加速模型</li>
 </ul>
 
-<p>更好的是，我们可以在 <strong> 少于 1000 行原生 PyTorch 代码 </strong> 中完成它。</p>
+<p>甚至更好，我们可以在不到 1000 行的原生 PyTorch 代码中完成它。</p>
 
-<p>如果这足以让你直接跳入代码，请查看 <a href="https://github.com/pytorch-labs/gpt-fast">https://github.com/pytorch-labs/gpt-fast</a>！</p>
+<p>如果这足以让你直接跳入代码，请查看 https://github.com/pytorch-labs/gpt-fast!</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/screen-recording.gif" alt="Screen recording" style="width:100%;"></p>
 
 <p><em>注意：我们将专注于所有这些基准的延迟（即 batch size=1）。除非另有说明，所有基准均在 A100-80GB 上运行，功率限制为 330W。</em></p>
 
-<h2 id="starting-point-255-toks">起始点（25.5 个 token/s）</h2>
+<h2 id="starting-point-255-toks">起始点（25.5 tok/s）</h2>
 
 <p>让我们从一个非常基础和简单的实现开始。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image23.png" alt="simple implementation" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
-<p>很遗憾，这并不表现得很出色。但是为什么呢？查看跟踪结果可以揭示答案——它严重受限于 CPU 开销！这意味着我们的 CPU 无法快速地告诉 GPU 该做什么，以至于 GPU 无法得到充分利用。</p>
+<p>很遗憾，这个实现表现并不好。但是为什么？查看跟踪信息就能找到答案——它严重受 CPU 开销限制！这意味着我们的 CPU 无法快速地告诉 GPU 该做什么，以至于 GPU 无法得到充分利用。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image14.png" alt="trace" style="width:100%;"></p>
 
-<p>想象 GPU 是一个拥有大量计算能力的超级巨大工厂。然后，想象 CPU 是一个来回传递指令的信使。记住，在大型深度学习系统中，GPU 负责完成 100%的工作！在这样的系统中，CPU 的唯一作用就是告诉 GPU 应该做什么工作。</p>
+<p>想象一下 GPU 就像一个超级巨大的工厂，拥有大量的计算能力。然后，想象 CPU 就像一个来回传递指令的信使。记住，在大规模深度学习系统中，GPU 负责完成 100%的工作！在这样的系统中，CPU 的唯一作用就是告诉 GPU 应该做什么工作。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image16.png" alt="factory" style="width:100%;display: block;max-width:500px; margin-left:auto; margin-right:auto;"></p>
 
-<p>因此，CPU 运行完毕后告诉 GPU 进行一次“加法”操作，但等到 CPU 可以给 GPU 分配另一块工作的时候，GPU 早已完成了之前的工作。</p>
+<p>因此，CPU 跑过去告诉 GPU 进行“加法”操作，但是当 CPU 可以给 GPU 另一块工作的时候，GPU 早已完成了之前的工作。</p>
 
-<p>尽管 GPU 需要执行数千次计算，而 CPU 只需要做编排工作，但这种情况却出奇地普遍！原因有很多，从 CPU 可能正在运行一些单线程的 Python 代码，到现在的 GPU 速度非常快。</p>
+<p>尽管 GPU 需要在执行数千次计算的同时，CPU 只需要做编排工作，但这种情况却出奇地普遍！这其中的原因有很多，从 CPU 可能正在运行一些单线程的 Python 到如今 GPU 的运行速度极其快。</p>
 
-<p>无论原因如何，我们现在发现自己处于&lt;强 id=0&gt;开销限制的状态。那么，我们能做什么呢？一方面，我们可以用 C++重写我们的实现，甚至完全放弃框架，直接编写原始 CUDA 代码。或者……我们可以一次性给 GPU 发送更多的工作。</p>
+<p>无论原因如何，我们现在都处于开销受限的状态。那么，我们能做什么呢？一方面，我们可以用 C++重写我们的实现，甚至完全放弃框架，直接编写原始的 CUDA 代码。或者……我们可以一次发送更多的工作到 GPU 上。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image3.png" alt="factory" style="width:100%;display: block;max-width:500px; margin-left:auto; margin-right:auto;"></p>
 
-<p>通过一次性发送大量工作，我们可以让 GPU 保持忙碌！虽然在训练过程中，这可以通过增加批次大小来实现，但在推理过程中我们该如何做呢？</p>
+<p>通过一次发送大量工作，我们可以让 GPU 保持忙碌！虽然在训练过程中，这可以通过增加批次大小来实现，但在推理过程中我们该如何做呢？</p>
 
-<p>输入 torch.compile.</p>
+<p>介绍 torch.compile。</p>
 
-<h2 id="step-1-reducing-cpu-overhead-through-torchcompile-and-a-static-kv-cache-1070-toks">步骤 1：通过 torch.compile 和静态 kv-cache（107.0 tok/s）减少 CPU 开销</h2>
+<h2 id="step-1-reducing-cpu-overhead-through-torchcompile-and-a-static-kv-cache-1070-toks">步骤 1：通过 torch.compile 和静态 kv-cache 降低 CPU 开销（107.0 tok/s）</h2>
 
-<p>Torch.compile 允许我们将更大的区域编译成一个单独的编译区域，尤其是在 mode="reduce-overhead" 模式下运行时，非常有效地减少了 CPU 开销。在这里，我们还指定了 fullgraph=True，这验证了您的模型中没有“图断裂”（即 torch.compile 无法编译的部分）。换句话说，它确保了 torch.compile 正在发挥其最大潜力。</p>
+<p>Torch.compile 允许我们将更大的区域编译成一个单独的编译区域，尤其是在 mode="reduce-overhead" 模式下运行时，非常有效地降低了 CPU 开销。在这里，我们还指定了 fullgraph=True，这验证了您的模型中没有“图断点”（即 torch.compile 无法编译的部分）。换句话说，它确保了 torch.compile 正在发挥其最大潜力。</p>
 
-<p>要应用它，我们只需用它<a href="https://github.com/pytorch-labs/gpt-fast/blob/main/generate.py#L296">包裹一个函数（或一个模块）</a>。</p>
+<p>要应用它，我们只需用它包装一个函数（或模块）即可。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>torch.compile(decode_one_token, mode="reduce-overhead", fullgraph=True)
 </code></pre></div></div>
 
 <p>然而，这里有几个细微之处，使得人们从应用 torch.compile 到文本生成中获得显著性能提升变得有些复杂。</p>
 
-<p>第一个障碍是 kv-cache。kv-cache 是一种推理时优化，它缓存了之前计算的激活值（更详细的解释请参见<a href="https://www.dipkumar.dev/becoming-the-unbeatable/posts/gpt-kvcache/">这里 </a>）。然而，随着我们生成更多标记，kv-cache 的“逻辑长度”会增长。这有两个问题。一是每次缓存增长时重新分配（以及复制！）kv-cache 的成本很高。另一个问题是这种动态性使得减少开销变得更加困难，因为我们不再能够利用 cudagraphs 等方法。</p>
+<p>第一个障碍是 kv-cache。kv-cache 是一个推理时优化，它缓存了之前标记计算出的激活（详见此处获取更深入的说明）。然而，随着我们生成更多的标记，“逻辑长度”的 kv-cache 会增长。这有两个问题。一是每次缓存增长时重新分配（以及复制！）kv-cache 简直太昂贵了。另一个问题是这种动态性使得减少开销变得更加困难，因为我们不再能够利用像 cudagraphs 这样的方法。</p>
 
-<p>为了解决这个问题，我们使用了一个 <a href="https://github.com/pytorch-labs/gpt-fast/blob/0afae1ace441ce4c5d02ef11a72da28cf7ca4795/generate.py#L154">“静态”的 kv-cache</a>，这意味着我们静态地分配 kv-cache 的最大大小，然后在计算注意力的部分屏蔽掉未使用的值。</p>
+<p>为了解决这个问题，我们使用一个“静态”的 kv-cache，这意味着我们静态地分配 kv-cache 的最大大小，然后在计算注意力的部分屏蔽未使用的值。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image2.png" alt="code" style="width:100%;"></p>
 
-<p>第二个障碍是预填充阶段。将 Transformer 文本生成视为一个两阶段过程：1. 预填充阶段，处理整个提示，2. 解码阶段，逐个自回归地生成标记。</p>
+<p>第二个障碍是预填充阶段。将 Transformer 文本生成视为一个两阶段过程：1. 预填充阶段，处理整个提示，2. 解码阶段，逐个自动回归生成标记。</p>
 
 <p>虽然解码一旦将 kv-cache 设置为静态后就可以完全静态化，但预填充阶段仍然需要更多的动态性，因为提示长度是可变的。因此，我们实际上需要使用不同的编译策略来编译这两个阶段。</p>
 
@@ -491,45 +499,45 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image28.png" alt="chart" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
-<p>突然之间，我们的性能提高了4倍以上！当工作负载是瓶颈时，这种性能提升通常是常见的。</p>
+<p>突然之间，我们的性能提高了 4 倍以上！当一个人的工作负载是瓶颈时，这种性能提升通常是常见的。</p>
 
 <h2 id="sidenote-how-is-torchcompile-helping">简单来说：torch.compile 是如何帮助的？</h2>
 
 <p>值得深入探讨 torch.compile 是如何提高性能的。导致 torch.compile 性能提升的主要因素有两个。</p>
 
-<p>首先，正如上文所述，是减少开销。torch.compile 能够通过多种优化来减少开销，但其中最有效的一种叫做 <a href="https://maskerprc.github.io/blog/accelerating-pytorch-with-cuda-graphs/">CUDAGraphs</a>。尽管 torch.compile 在设置“reduce-overhead”时自动应用此优化，节省了您手动进行此操作时需要编写的额外工作和代码。</p>
+<p>首先，正如上文所述，是减少开销。torch.compile 能够通过各种优化来减少开销，但其中最有效的一种叫做 CUDAGraphs。尽管 torch.compile 在设置“reduce-overhead”时自动应用此优化，节省了您手动进行此操作时需要编写的额外工作和代码。</p>
 
-<p>然而，第二个因素是 torch.compile 简单地生成了更快的内核。在上面的解码基准测试中，torch.compile 实际上从头开始生成了每个内核，包括矩阵乘法和注意力！更酷的是，这些内核实际上比内置的替代方案（CuBLAS 和 FlashAttention2）更快！</p>
+<p>然而，第二个因素是 torch.compile 简单地生成了更快的内核。在上面的解码基准测试中，torch.compile 实际上从头开始生成每个内核，包括矩阵乘法和注意力！更酷的是，这些内核实际上比内置的替代方案（CuBLAS 和 FlashAttention2）更快！</p>
 
-<p>对于很多人来说，这可能听起来有些不可思议，考虑到编写高效的矩阵乘法/注意力内核有多难，以及投入了这么多人力到 CuBLAS 和 FlashAttention 中。然而，关键在于，transformer 解码具有非常独特的计算特性。特别是，由于 KV 缓存，对于 BS=1，<em>transformer 中的每一次矩阵乘法实际上都是矩阵向量乘法 </em>。</p>
+<p>对于很多人来说，这可能听起来有些不可思议，考虑到编写高效的矩阵乘法/注意力内核有多难，以及 CuBLAS 和 FlashAttention 投入了多少人力。然而，关键在于，transformer 解码具有非常独特的计算特性。特别是，由于 KV 缓存，对于 BS=1，transformer 中的每一次矩阵乘法实际上都是矩阵向量乘法。</p>
 
-<p>这意味着计算完全受内存带宽限制，因此完全在编译器自动生成的范围内。事实上，当我们将 torch.compile 的矩阵向量乘法与 CuBLAS 进行基准测试时，我们发现 torch.compile 的内核实际上要快得多！</p>
+<p>这意味着计算完全受内存带宽限制，因此非常适合编译器自动生成。事实上，当我们将 torch.compile 的矩阵向量乘法与 CuBLAS 进行基准测试时，我们发现 torch.compile 的内核实际上要快得多！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image24.png" alt="code" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image17.png" alt="code" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
-<h2 id="step-2-alleviating-memory-bandwidth-bottleneck-through-int8-weight-only-quantization-1574-toks">第 2 步：通过 int8 权重仅量化缓解内存带宽瓶颈（157.4 tok/s）</h2>
+<h2 id="step-2-alleviating-memory-bandwidth-bottleneck-through-int8-weight-only-quantization-1574-toks">第 2 步：通过 int8 权重量化缓解内存带宽瓶颈（157.4 tok/s）</h2>
 
-<p>那么，鉴于我们已经从应用 torch.compile 中看到了巨大的速度提升，我们是否还能做得更好呢？思考这个问题的方法之一是计算我们距离理论峰值有多近。在这种情况下，最大的瓶颈是从 GPU 全局内存到寄存器的权重加载成本。换句话说，每次前向传播都需要我们“接触”GPU 上的每个参数。那么，理论上我们以多快的速度“接触”模型中的每个参数呢？</p>
+<p>那么，鉴于我们已经从应用 torch.compile 中看到了巨大的速度提升，是否还能做得更好呢？思考这个问题的方法之一是计算我们距离理论峰值有多近。在这种情况下，最大的瓶颈是从 GPU 全局内存到寄存器的权重加载成本。换句话说，每次前向传播都需要我们“接触”GPU 上的每个参数。那么，理论上我们以多快的速度“接触”模型中的每个参数呢？</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image11.png" alt="weights" style="width:100%;display: block;max-width:500px; margin-left:auto; margin-right:auto;"></p>
 
-<p>为了测量这一点，我们可以使用 <strong> 模型带宽利用率（MBU）。</strong> 这衡量了我们能在推理过程中使用多少内存带宽。</p>
+<p>为了测量这一点，我们可以使用模型带宽利用率（MBU）。这衡量了我们能在推理过程中使用多少内存带宽。</p>
 
-<p>计算它很简单。我们只需将模型的总体大小（参数数量乘以每个参数的字节数）乘以我们每秒可以进行的推理次数。然后，我们将这个结果除以 GPU 的峰值带宽，以获得我们的 MBU。</p>
+<p>计算它相当简单。我们只需将模型的总体大小（参数数量 * 每个参数的字节数）乘以我们每秒可以进行的推理次数。然后，我们将这个结果除以 GPU 的峰值带宽，以获得我们的 MBU。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image8.png" alt="MBU" style="width:100%;"></p>
 
-<p>例如，在我们的上述案例中，我们有一个 70 亿参数的模型。每个参数以 fp16 格式存储（每个参数 2 字节），我们实现了每秒 107 个 token。最后，我们的 A100-80GB 具有理论上的 2 TB/s 内存带宽。</p>
+<p>例如，在我们的上述案例中，我们有一个 70 亿参数的模型。每个参数以 fp16 存储（每个参数 2 字节），我们实现了每秒 107 个 token。最后，我们的 A100-80GB 具有理论上的 2 TB/s 内存带宽。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image25.png" alt="MBU" style="width:100%;"></p>
 
-<p>把这一切加在一起，我们得到 **72% MBU**！这已经相当不错了，考虑到仅仅复制内存都难以突破 85%。</p>
+<p>把这一切加在一起，我们得到了 **72% MBU**！这已经相当不错了，考虑到仅仅复制内存都难以突破 85%。</p>
 
-<p>但是……这也意味着我们接近理论极限了，而且很明显我们在加载权重到内存上遇到了瓶颈。无论我们做什么——如果不改变问题陈述，我们可能只能再挤出10%的性能。</p>
+<p>但是……这也意味着我们接近理论极限了，而且很明显我们在加载权重到内存上遇到了瓶颈。无论我们做什么——如果不改变问题陈述，我们可能只能再提高 10%的性能。</p>
 
-<p>让我们再次审视上面的公式。我们无法改变模型中的参数数量。我们也无法改变 GPU 的内存带宽（除非我们支付更多费用）。但是，我们可以改变每个参数存储的字节数！</p>
+<p>让我们再次审视上面的公式。我们无法真正改变模型中的参数数量。我们也无法真正改变 GPU 的内存带宽（除非我们支付更多费用）。但是，我们可以改变每个参数存储的字节数！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image18.png" alt="MBU" style="width:100%;"></p>
 
@@ -537,7 +545,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image7.png" alt="MBU" style="width:100%;"></p>
 
-<p>注意，这里只对权重进行量化 <em> 仅 </em>，计算本身仍在 bf16 中进行。这使得这种量化形式易于应用，几乎没有精度下降。</p>
+<p>注意，这里只是对权重进行量化——计算本身仍在 bf16 中进行。这使得这种量化形式易于应用，几乎没有精度下降。</p>
 
 <p>此外，torch.compile 还可以轻松生成用于 int8 量化的高效代码。让我们再次查看上述基准，这次包括 int8 权重仅量化。</p>
 
@@ -547,19 +555,19 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <p>如您从深蓝色线（torch.compile + int8）中看到，使用 torch.compile + int8 权重仅量化时，性能有显著提升！此外，浅蓝色线（无 torch.compile + int8）实际上比 fp16 性能还要差！这是因为为了利用 int8 量化的性能优势，我们需要内核融合。这展示了 torch.compile 的一个好处——这些内核可以自动为用户生成！</p>
 
-<p><a href="https://github.com/pytorch-labs/gpt-fast/blob/main/quantize.py#L314">将 int8 量化应用于我们的模型 </a>，我们看到性能提升了 50%，达到每秒 157.4 个 token！</p>
+<p>将 int8 量化应用于我们的模型，我们看到了 50%的性能提升，将速度提升到每秒 157.4 个 token！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image19.png" alt="chart" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
-<h2 id="step-3-reframing-the-problem-using-speculative-decoding">第3步：使用推测性解码重新定义问题</h2>
+<h2 id="step-3-reframing-the-problem-using-speculative-decoding">第 3 步：使用推测性解码重新定义问题</h2>
 
-<p>即使使用了量化等技术，我们仍然面临另一个问题。为了生成100个标记，我们必须加载我们的权重100次。</p>
+<p>即使使用了量化等技术，我们仍然面临另一个问题。为了生成 100 个标记，我们必须加载我们的权重 100 次。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image5.png" alt="diagram" style="width:100%;"></p>
 
 <p>即使权重已经量化，我们仍然必须反复加载我们的权重，每次生成一个标记时都要加载一次！有没有什么解决办法？</p>
 
-<p>初看之下，答案可能是否定的——在我们的自回归生成中存在严格的序列依赖性。然而，实际上，通过利用<a href="https://arxiv.org/abs/2211.17192">推测性解码 </a>，我们能够打破这种严格的序列依赖性，并获得加速！</p>
+<p>初看之下，答案可能是否定的——在我们的自回归生成中存在严格的序列依赖。然而，实际上，通过利用推测性解码，我们能够打破这种严格的序列依赖，并获得加速！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image21.png" alt="engineers" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
@@ -573,39 +581,39 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <p>在审查代码后，Verity 可能会决定 Drake 做出的前三个技术决策是正确的，但最后两个需要重做。因此，Drake 回到原点，放弃了他最后两个决策，并从那里重新开始编码。</p>
 
-<p>值得注意的是，尽管资深工程师 Verity 只审查了一次代码，但我们已经产生了 3 段经过验证的代码，与她亲自编写的代码完全相同！因此，假设 Verity 能够比她亲自编写这 3 段代码更快地审查代码，这种方法是更有利的。</p>
+<p>值得注意的是，尽管资深工程师 Verity 只审查了一次代码，但我们已经生成了 3 段经过验证的代码，与她亲自编写的代码完全相同！因此，假设 Verity 能够比她亲自编写这 3 段代码更快地审查代码，这种方法是更有利的。</p>
 
-<p>在 Transformer 推理的背景下，Verity 将扮演我们希望用于任务的输出较大的模型角色，称为&lt;强 id=0&gt;验证模型 。同样，Drake 将扮演一个较小的模型，其生成文本的速度比大模型快得多，称为&lt;强 id=1&gt;草案模型 。因此，我们将使用草案模型生成 8 个标记，然后并行处理这 8 个标记，丢弃那些不匹配的标记。</p>
+<p>在 Transformer 推理的背景下，Verity 将扮演我们想要用于任务的输出的大模型角色，称为验证器模型。同样，Drake 将扮演一个较小的模型，该模型能够比大模型更快地生成文本，称为草案模型。因此，我们将使用草案模型生成 8 个标记，然后并行处理这 8 个标记，丢弃那些不匹配的标记。</p>
 
-<p>如上所述，推测解码的一个关键特性是&lt;强 id=0&gt;它不会改变输出质量 。只要使用草案模型生成标记和验证标记所需的时间少于生成这些标记所需的时间，我们就处于领先地位。</p>
+<p>如上所述，推测解码的一个关键属性是它不会改变输出的质量。只要使用草案模型生成标记和验证标记所需的时间少于生成这些标记所需的时间，我们就处于领先地位。</p>
 
-<p>在原生 PyTorch 中完成所有这些事情的一个好处是，这种技术实际上非常容易实现！以下是整个实现<a href="https://github.com/pytorch-labs/gpt-fast/blob/main/generate.py#L76">的完整内容 </a>，大约 50 行原生 PyTorch 代码。</p>
+<p>在原生 PyTorch 中完成所有这些事情的一个好处是，这种技术实际上非常容易实现！以下是整个实现的全部内容，大约 50 行原生 PyTorch 代码。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image10.png" alt="code" style="width:100%;"></p>
 
-<p>虽然推测性解码保证了与常规生成相比，我们在数学上具有相同的结果，但它确实有一个属性，即运行时性能会根据生成的文本以及草案和验证器模型的匹配程度而变化。例如，当运行 CodeLlama-34B + CodeLlama-7B 时，我们能够将 tokens/s 的生成代码速度提高 2 倍。另一方面，当使用 Llama-7B + TinyLlama-1B 时，我们只能将 tokens/s 的速度提高大约 1.3 倍。</p>
+<p>虽然推测性解码保证了与常规生成相比，我们在数学上具有相同的结果，但它确实有一个属性，即运行时性能会根据生成的文本以及草案和验证器模型的匹配程度而变化。例如，当运行 CodeLlama-34B + CodeLlama-7B 时，我们能够获得每秒 2 倍的 token 提升用于生成代码。另一方面，当使用 Llama-7B + TinyLlama-1B 时，我们只能获得大约 1.3 倍的 token/s 提升。</p>
 
 <h2 id="sidenote-running-this-on-amd">旁注：在 AMD 上运行此操作</h2>
 
-<p>如上所述，解码中的每个内核都是通过 torch.compile 从头生成的，并转换为 OpenAI Triton。由于 AMD 有 <a href="https://maskerprc.github.io/blog/experience-power-pytorch-2.0/">torch.compile 后端 </a>（以及 Triton 后端），我们可以简单地通过上述所有优化……但在 AMD GPU 上！使用 int8 量化，我们能够使用一个 MI250x 的一半（即一个 GCD）达到 102.5 tokens/s！</p>
+<p>如上所述，解码过程中的每个内核都是通过 torch.compile 从头生成的，并转换为 OpenAI Triton。由于 AMD 有 torch.compile 后端（以及 Triton 后端），我们可以在 AMD GPU 上简单地执行上述所有优化……但使用 int8 量化，我们能够达到每秒 102.5 个 token，即 MI250x 的一半 GCD（即一半）！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image4.png" alt="chart" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
 <h2 id="step-4-reducing-the-size-of-the-weights-even-more-with-int4-quantization-and-gptq-2021-toks">第 4 步：使用 int4 量化和 GPTQ 进一步减小权重大小（202.1 tok/s）</h2>
 
-<p>当然，如果将权重从16位降低到8位可以通过减少需要加载的字节数来提高速度，那么将权重降低到4位将带来更大的速度提升！</p>
+<p>当然，如果将权重从 16 位降低到 8 位可以通过减少需要加载的字节数来提高速度，那么将权重降低到 4 位将带来更大的速度提升！</p>
 
-<p>不幸的是，当将权重降低到 4 位时，模型的准确性开始成为一个更大的问题。从我们的初步评估来看，虽然使用 int8 权重仅量化没有明显的准确性下降，但使用 int4 权重仅量化则不然。</p>
+<p>不幸的是，当将权重降低到 4 位时，模型的准确性开始成为一个更大的问题。从我们的初步评估来看，虽然使用 int8 权重仅量化没有明显的准确性下降，但使用 int4 权重仅量化则会有。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image13.png" alt="table" style="width:100%;"></p>
 
 <p>我们可以使用两种主要技巧来限制 int4 量化的准确性下降。</p>
 
-<p>第一种是有更细粒度的缩放因子。一种思考缩放因子的方式是，当我们有一个量化的张量表示时，它是在一个滑动尺度上，介于具有缩放因子的浮点张量（每个值都有一个缩放因子）和无缩放因子的整数张量（没有值有缩放因子）之间。例如，使用 int8 量化时，我们每行有一个缩放因子。然而，如果我们想要更高的准确性，我们可以将其改为“每 32 个元素一个缩放因子”。我们选择 32 作为组大小以最小化准确性下降，这也是社区中常见的选择。</p>
+<p>第一个技巧是使用更细粒度的缩放因子。我们可以这样考虑缩放因子：当我们有一个量化的张量表示时，它是在一个滑动尺度上，介于具有缩放因子的浮点张量（每个值都有一个缩放因子）和无缩放因子的整数张量（没有值有缩放因子）之间。例如，使用 int8 量化时，我们每行有一个缩放因子。然而，如果我们想要更高的准确性，我们可以将其改为“每 32 个元素一个缩放因子”。我们选择 32 作为组大小以最小化准确性下降，这也是社区中常见的选择。</p>
 
-<p>另一种方法是使用比简单四舍五入权重更高级的量化策略。例如，像 <a href="https://arxiv.org/abs/2210.17323">GPTQ</a> 这样的方法通过利用示例数据来更精确地校准权重。在这种情况下，我们在基于 PyTorch 最近发布的 <a href="https://maskerprc.github.io/tutorials/intermediate/torch_export_tutorial.html">torch.export</a> 的仓库中原型化了 GPTQ 的实现。</p>
+<p>另一种方法是使用比简单四舍五入权重更高级的量化策略。例如，GPTQ 等方法利用示例数据来更精确地校准权重。在这种情况下，我们基于 PyTorch 最近发布的 torch.export 在仓库中原型化了 GPTQ 的实现。</p>
 
-<p>此外，我们还需要融合 int4 反量化与矩阵向量乘法的内核。在这种情况下，不幸的是，torch.compile 无法从头生成这些内核，所以我们利用 PyTorch 中的一些手写 CUDA 内核。</p>
+<p>此外，我们还需要融合 int4 反量化与矩阵向量乘法的内核。在这种情况下，不幸的是，torch.compile 无法从头生成这些内核，所以我们利用 PyTorch 中的某些手写 CUDA 内核。</p>
 
 <p>这些技术需要一些额外的工作，但将它们全部结合起来，结果会带来更好的性能！</p>
 
@@ -617,23 +625,23 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image22.png" alt="chart" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
-<h2 id="step-6-using-tensor-parallelism">步骤6：使用张量并行</h2>
+<h2 id="step-6-using-tensor-parallelism">步骤 6：使用张量并行</h2>
 
 <p>到目前为止，我们一直在限制自己，以最小化单个 GPU 上的延迟。然而，在许多情况下，我们能够访问多个 GPU。这使得我们可以进一步提高延迟！</p>
 
-<p>为了直观地理解这如何使我们能够提高延迟，让我们看一下 MBU 的先前方程式，特别是分母部分。在多个 GPU 上运行使我们能够访问更多的内存带宽，从而具有更高的潜在性能。</p>
+<p>为了直观地理解为什么这会使我们提高延迟，让我们看看 MBU 的先前方程式，特别是分母部分。在多个 GPU 上运行使我们能够访问更多的内存带宽，从而具有更高的潜在性能。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image8.png" alt="MBU" style="width:100%;"></p>
 
-<p>关于选择哪种并行策略，请注意，为了降低我们处理一个示例的延迟，我们需要能够同时利用更多设备的内存带宽。这意味着我们需要将一个标记的处理分配给多个设备。换句话说，我们需要使用张量并行。</p>
+<p>关于选择哪种并行策略，请注意，为了降低我们处理一个示例的延迟，我们需要能够同时利用我们的内存带宽跨越更多设备。这意味着我们需要将一个标记的处理分配给多个设备。换句话说，我们需要使用张量并行。</p>
 
 <p>幸运的是，PyTorch 也为张量并行提供了与 torch.compile 兼容的低级工具。我们还在开发用于表达张量并行的更高级 API，敬请期待！</p>
 
-<p>即使没有高级 API，实际上添加张量并行也非常简单。我们的实现只有 150 行代码，并且不需要对模型进行任何修改。</p>
+<p>即使没有高级 API，实际上添加张量并行仍然相当简单。我们的实现只有 150 行代码，并且不需要对模型进行任何更改。</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image20.png" alt="code" style="width:100%;"></p>
 
-<p>我们仍然能够利用之前提到的所有优化，这些优化都可以与张量并行结合使用。结合这些优化，我们能够以 55 个标记/秒的速度使用 int8 量化来服务 Llama-70B！</p>
+<p>我们仍然能够利用之前提到的所有优化，这些优化都可以与张量并行一起使用。结合这些，我们能够以 55 个标记/秒的速度使用 int8 量化来服务 Llama-70B！</p>
 
 <p><img src="/assets/images/accelerating-generative-ai-2/image26.png" alt="chart" style="width:100%;display: block;max-width:600px; margin-left:auto; margin-right:auto;"></p>
 
@@ -642,23 +650,23 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 <p>让我们看看我们能完成什么。</p>
 
 <ol>
-  <li>简单性：忽略量化，<a href="https://github.com/pytorch-labs/gpt-fast/blob/main/model.py">model.py</a>（244 行代码）+ <a href="https://github.com/pytorch-labs/gpt-fast/blob/main/generate.py">generate.py</a>（371 行代码）+ <a href="https://github.com/pytorch-labs/gpt-fast/blob/main/tp.py">tp.py</a>（151 行代码）共计 766 行代码实现了快速推理、推测解码和张量并行。</li>
-  <li>性能：使用 Llama-7B，我们能够使用编译 + int4 量化 + 推测解码达到 241 tok/s。使用 llama-70B，我们还能加入张量并行，达到 80 tok/s。这两个性能都接近或超过了 SOTA 性能指标！</li>
+  <li>简单性：忽略量化，model.py（244 行代码）+ generate.py（371 行代码）+ tp.py（151 行代码）共计 766 行代码实现了快速推理、推测解码和张量并行。</li>
+  <li>性能：使用 Llama-7B，我们能够通过编译+int4 量化+推测解码达到 241 tok/s。使用 llama-70B，我们还能加入张量并行，达到 80 tok/s。这两个性能都接近或超过了 SOTA 性能指标！</li>
 </ol>
 
-<p>PyTorch 一直允许我们实现简单、易用和灵活。然而，有了 torch.compile，我们还能加入性能优势。</p>
+<p>PyTorch 一直允许简单、易用和灵活。然而，有了 torch.compile，我们还可以加入性能。</p>
 
-<p>代码可以在以下链接找到：[此处](https://github.com/pytorch-labs/gpt-fast)。我们希望社区觉得它很有用。我们创建这个仓库的目标不是为人们提供一个可以导入的库或框架。相反，我们鼓励用户复制粘贴、分叉并修改仓库中的代码。</p>
+<p>代码可以在以下链接找到：https://github.com/pytorch-labs/gpt-fast。我们希望社区觉得它很有用。我们创建这个仓库的目标不是为人们提供一个可以导入的库或框架。相反，我们鼓励用户复制粘贴、Fork 和修改仓库中的代码。</p>
 
 <h2 id="acknowledgements">致谢</h2>
 
 <p>我们想感谢充满活力的开源社区对LLMs扩展的持续支持，包括：</p>
 
 <ul>
-  <li>支持 PyTorch 和闪电注意力、int8 量化以及 LoRA 微调的 Lightning AI。</li>
-  <li>驱动快速前进的 GGML，设备端LLMs推理。</li>
-  <li>领导简单、可解释且快速的LLM实现的安德烈·卡帕西。</li>
-  <li>在异构硬件上推动 4 位量化性能的 MLC-LLM。</li>
+  <li>Lightning AI 支持 PyTorch 以及 Flash 注意力、int8 量化、LoRA 微调等工作。</li>
+  <li>GGML 助力快速推进，设备端LLMs推理</li>
+  <li>安德烈·卡帕西领导简单、可解释且快速的LLM实现</li>
+  <li>MLC-LLM推动在异构硬件上实现 4 位量化性能</li>
 </ul>
 
                 </article>
@@ -675,14 +683,14 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -699,7 +707,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800">保持联系以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -712,7 +720,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。<a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -720,7 +728,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -749,9 +757,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-关于网站使用条款、商标政策以及其他适用于 PyTorch 基金会的政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的一系列 LF 项目之一。有关适用于 PyTorch 项目的一系列 LF 项目，LLC 的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。<a href="https://www.linuxfoundation.org/privacy"> 隐私政策</a>和<a href="https://www.linuxfoundation.org/terms">使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -761,7 +767,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -783,22 +789,22 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
-            <a href="/get-started">开始</a> 
+            <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 菜谱</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新加入 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -825,17 +831,17 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
-          <a>边缘</a>
+          <a>Edge</a>
         </li>
         <ul class="resources-mobile-menu-items">
           <li>
             <a href="/edge">关于 PyTorch Edge</a>
           </li>
           <li>
-            <a href="/executorch-overview">ExecuTorch</a>
+            <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -870,7 +876,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">通讯</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -884,7 +890,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -952,7 +958,7 @@ torch.compile(decode_one_token, mode=" reduce-overhead",="" fullgraph="True)" ho
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>

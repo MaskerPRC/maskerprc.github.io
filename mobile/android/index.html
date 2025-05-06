@@ -50,8 +50,8 @@ traced_script_module = torch.jit.trace(model, example)
 traced_script_module_optimized = optimize_for_mobile(traced_script_module)
 traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="" assets="" model.ptl")="" if="" everything="" works="" well,="" we="" should="" have="" our="" model="" -="" model.ptl="" generated="" in="" the="" folder="" of="" android="" application.="" that="" will="" be="" packaged="" inside="" application="" as="" asset="" and="" can="" used="" on="" device.="" more="" details="" about="" torchscript="" you="" find="" tutorials="" pytorch.org="" 2.="" cloning="" from="" github="" git="" clone="" https:="" github.com="" pytorch="" android-demo-app.git="" cd="" helloworldapp="" sdk="" ndk="" are="" already="" installed="" install="" this="" to="" connected="" device="" or="" emulator="" with:="" .="" gradlew="" installdebug="" recommend="" open="" project="" studio="" 3.5.1+.="" at="" moment="" demo="" applications="" use="" gradle="" plugin="" version="" 3.5.0,="" which="" is="" supported="" only="" by="" 3.5.1="" higher.="" using="" able="" with="" ui.="" 3.="" dependencies="" added="" helloworld="" build.gradle:="" repositories="" {="" jcenter()="" }="" implementation="" 'org.pytorch:pytorch_android_lite:1.9.0'="" 'org.pytorch:pytorch_android_torchvision:1.9.0'="" where="" org.pytorch:pytorch_android="" dependency="" api,="" including="" libtorch="" native="" library="" for="" all="" 4="" abis="" (armeabi-v7a,="" arm64-v8a,="" x86,="" x86_64).="" further="" doc="" how="" rebuild="" it="" specific="" list="" abis.="" org.pytorch:pytorch_android_torchvision="" additional="" utility="" functions="" converting="" android.media.image="" android.graphics.bitmap="" tensors.="" 4.="" reading="" image="" logic="" happens="" org.pytorch.helloworld.mainactivity.="" a="" first="" step="" read="" image.jpg="" standard="" api.="" bitmap="" 5.="" loading="" mobile="" module="" "model.ptl"));="" org.pytorch.module="" represents="" torch::jit::mobile::module="" loaded="" load="" method="" specifying="" file="" path="" serialized="" model.="" 6.="" preparing="" input="" tensor="" inputtensor="TensorImageUtils.bitmapToFloat32Tensor(bitmap," tensorimageutils.torchvision_norm_mean_rgb,="" tensorimageutils.torchvision_norm_std_rgb);="" org.pytorch.torchvision.tensorimageutils="" part="" library.="" tensorimageutils#bitmaptofloat32tensor="" creates="" tensors="" torchvision="" format="" source.="" pre-trained="" models="" expect="" images="" normalized="" same="" way,="" i.e.="" mini-batches="" 3-channel="" rgb="" shape="" (3="" x="" h="" w),="" w="" expected="" least="" 224.="" range="" [0,="" 1]="" then="" mean="[0.485," 0.456,="" 0.406]="" std="[0.229," 0.224,="" 0.225]="" inputtensor’s="" 1x3xhxw,="" height="" width="" appropriately.="" 7.="" run="" inference="" outputtensor="module.forward(IValue.from(inputTensor)).toTensor();" float[]="" scores="outputTensor.getDataAsFloatArray();" org.pytorch.module.forward="" runs="" module’s="" forward="" gets="" result="" org.pytorch.tensor="" 1x1000.="" 8.="" processing="" results="" its="" retrieved="" org.pytorch.tensor.getdataasfloatarray()="" returns="" java="" array="" floats="" every="" net="" class.="" after="" just="" index="" maximum="" score="" retrieve="" predicted="" class="" imagenetclasses.imagenet_classes="" contains="" imagenet="" classes.="" float="" maxscore="-Float.MAX_VALUE;" int="" maxscoreidx="-1;" (int="" i="0;" &lt;="" scores.length;="" i++)="" (scores[i]="" &gt;="" maxscore)="" string="" classname="ImageNetClasses.IMAGENET_CLASSES[maxScoreIdx];" following="" sections="" detailed="" explanations="" code="" walk="" through="" bigger="" application,="" customize="" build="" also="" created="" another="" complex="" does="" classification="" camera="" output="" text="" repo.="" get="" uses="" camerax="" separated="" org.pytorch.demo.vision.abstractcameraxactivity="" void="" setupcamerax()="" final="" previewconfig="" previewconfig.builder().build();="" preview="" preview(previewconfig);="" preview.setonpreviewoutputupdatelistener(output="" -&gt;="" mtextureview.setsurfacetexture(output.getsurfacetexture()));="" imageanalysisconfig="" imageanalysisconfig.builder()="" .settargetresolution(new="" size(224,="" 224))="" .setcallbackhandler(mbackgroundhandler)="" .setimagereadermode(imageanalysis.imagereadermode.acquire_latest_image)="" .build();="" imageanalysis="" imageanalysis(imageanalysisconfig);="" imageanalysis.setanalyzer(="" (image,="" rotationdegrees)="" analyzeimage(image,="" rotationdegrees);="" });="" camerax.bindtolifecycle(this,="" preview,="" imageanalysis);="" analyzeimage(android.media.image,="" analyzeimage="" process="" output,="" android.media.image.="" aforementioned="" tensorimageutils.imageyuv420centercroptofloat32tensor="" convert="" yuv420="" tensor.="" getting="" finds="" top="" k="" classes="" highest="" shows="" language="" example="" natural="" processing,="" based="" an="" lstm="" model,="" trained="" reddit="" comments="" dataset.="" textclassificattionactivity.="" names="" initialized="" initial="" initialization.="" has="" get_classes="" list[str],="" called="" module.runmethod(methodname):="" mmodule="Module.load(moduleFileAbsoluteFilePath);" ivalue="" getclassesoutput="mModule.runMethod(&quot;get_classes&quot;);" returned="" converted="" ivalue.tolist()="" processed="" strings="" ivalue.tostr():="" ivalue[]="" classeslistivalue="getClassesOutput.toList();" string[]="" moduleclasses="new" string[classeslistivalue.length];="" (ivalue="" iv="" :="" classeslistivalue)="" moduleclasses[i++]="iv.toStr();" entered="" bytes="" utf-8="" encoding.="" tensor.fromblobunsigned="" dtype="uint8" bytes.="" byte[]="" long[]="" long[]{1,="" bytes.length};="" shape);="" running="" similar="" previous="" examples:="" that,="" processes="" finding="" scores.="" apps="" d2go="" demonstrates="" python="" script="" much="" lighter="" faster="" facebook="" powered="" 1.8,="" 0.9,="" detectron2="" built-in="" sota="" networks="" mobile,="" detect="" objects="" pictures="" your="" photos,="" taken="" camera,="" live="" camera.="" pre-built="" torchvision-ops="" segmentation="" converts="" deeplabv3="" segment="" images.="" object="" detection="" popular="" yolov5="" detects="" neural="" machine="" translation="" sequence-to-sequence="" nmt="" tutorial="" do="" french-english="" translation.="" question="" answering="" powerful="" transformer="" qa="" answer="" questions="" more.="" vision="" facebook’s="" latest="" deit="" classification,="" perform="" handwritten="" digit="" recognition.="" speech="" recognition="" ai’s="" wav2vec="" 2.0,="" one="" leading="" recognition,="" scripted="" video="" torchvideo="" available="" newly="" released="" pytorchvideo,="" see="" results,="" updated="" per="" second="" while="" plays,="" tested="" videos,="" videos="" photos="" library,="" even="" real-time="" videos.="" recipes="" comprehensive="" step-by-step="" prepare="" android.="" performance="" optimizations="" mobile.="" making="" prebuilt="" libraries="" learn="" make="" scratch="" c++="" api="" custom="" operator.="" fuse="" modules="" recipe="" into="" single="" reduce="" size="" before="" quantization.="" quantization="" without="" losing="" accuracy.="" optimize="" torchscipt="" (optional)="" apps.="" preparation="" add="" building="" source="" some="" cases="" might="" want="" local="" android,="" may="" binary="" set="" operators="" changes,="" try="" out="" code.="" scripts="" build_pytorch_android.sh="" script.="" pytorch.git="" sh="" workflow="" several="" steps:="" 1.="" x86_64)="" create="" symbolic="" links="" those="" builds:="" pytorch_android="" jnilibs="" ${abi}="" directory="" cpp="" libtorch_include="" headers.="" these="" directories="" libpytorch_jni.so="" pytorch_android-release.aar="" bundle,="" finally="" task="" assemblerelease="" requires="" sdk,="" ndk,="" installed.="" they="" specified="" environment="" variables:="" android_home="" android_ndk="" ndk.="" it’s="" recommended="" 21.x.="" gradle_home="" java_home="" jdk="" successful="" build,="" aar="" file:="" $="" -type="" f="" -name="" *aar="" outputs="" pytorch_android_torchvision="" pytorch_android_torchvision-release.aar="" built="" nightly="" two="" files="" above,="" downloaded="" repos="" here="" here,="" project’s="" lib="" folder,="" build.gradle="" allprojects="" flatdir="" dirs="" 'libs'="" implementation(name:'pytorch_android-release',="" ext:'aar')="" implementation(name:'pytorch_android_torchvision-release',="" 1.8.0-snapshot="" jan.="" 21,="" 2021="" implementation(name:'pytorch_android-1.8.0-20210121.092759-172',="" implementation(name:'pytorch_android_torchvision-1.8.0-20210121.092817-173',="" ...="" 'com.android.support:appcompat-v7:28.0.0'="" 'com.facebook.fbjni:fbjni-java-only:0.0.3'="" transitive="" aars.="" depends="" com.android.support:appcompat-v7:28.0.0="" androidx.appcompat:appcompat:1.2.0,="" need="" them.="" (in="" case="" maven="" automatically="" pom.xml).="" other="" than="" section,="" adding="" url="" follows:="" "https:="" oss.sonatype.org="" snapshots"="" 'org.pytorch:pytorch_android:1.8.0-snapshot'="" 'org.pytorch:pytorch_android_torchvision:1.8.0-snapshot'="" easiest="" way="" libraries,="" not="" any="" changes.="" but="" aware="" either="" quick="" commands="" like="" pip="" --pre="" torch="" -f="" download.pytorch.org="" whl="" cpu="" torch_nightly.html="" avoid="" possible="" mismatch="" errors="" when="" binaries="" required="" includes="" rebuilding="" list.="" verify="" 1.4.0="" above.="" checking="" value="" torch.__version__.="" prepared="" yaml="" function="" torch.jit.export_opnames().="" dump="" say="" mobilenetv2,="" lines="" code:="" #="" mobilenetv2:="" import="" torch,="" ops="torch.jit.export_opnames(model)" open('mobilenetv2.yaml',="" 'w')="" output:="" yaml.dump(ops,="" output)="" operators,="" specify="" variable="" selected_op_list.="" arguments,="" build;="" default="" builds="" customized="" selected_op_list="MobileNetV2.yaml" arm64-v8a="" integrate="" project,="" steps="" section="" (building="" source).="" jit="" interpreter="" 1.9="" (a="" size-efficient).="" still="" 1.9,="" via="" 'org.pytorch:pytorch_android:1.9.0'="" watch="" partner="" engineer="" brad="" heintz="" walks="" setting="" up="" runtime="" projects:="" corresponding="" found="" here.="" checkout="" cover="" check="" helped="" benchmarking.="" addition,="" follow="" libraries.="" docs="" javadoc.="" "="">
 
-  <meta property="og:image" content="http://localhost:4000/assets/images/social-share.jpg">
-  <meta name="twitter:image" content="http://localhost:4000/assets/images/social-share.jpg">
+  <meta property="og:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
+  <meta name="twitter:image" content="https://maskerprc.github.io/assets/images/social-share.jpg">
 
 <meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
@@ -144,14 +144,14 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
 <!-- End Google Tag Manager (noscript) -->
 
     <div class="hello-bar">
-  <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22 日至 23 日。现在开放 CFP！<a target="_blank" href="https://events.linuxfoundation.org/pytorch-conference/"> 了解更多 </a>。</div>
+  <div class="container">加入我们参加旧金山 PyTorch 大会，10 月 22-23 日。CFP 现已开放！了解更多。</div>
 </div>
 <div class="container-fluid header-holder mobile-header">
   <div class="container">
     
 
 <div class="header-container">
-  <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+  <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
 
   <div class="main-menu">
   <ul>
@@ -163,24 +163,24 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
             <span class="dropdown-title">开始使用</span>
             <p>在本地运行 PyTorch 或快速开始使用支持的云平台之一</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/">
-            <span class="dropdown-title">教程</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/">
+            <span class="dropdown-title">教程</span><p></p>
             <p>PyTorch 教程中有什么新内容</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">
-            <span class="dropdown-title">学习基础知识</span>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/basics/intro.html">
+            <span class="dropdown-title">学习基础知识</span><p></p>
             <p>熟悉 PyTorch 的概念和模块</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">
-            <span class="dropdown-title">PyTorch 烹饪秘籍</span>
-            <p>精简版、可直接部署的 PyTorch 代码示例</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/recipes/recipes_index.html">
+            <span class="dropdown-title">PyTorch 菜谱</span><p></p>
+            <p>短小精悍、可直接部署的 PyTorch 代码示例</p>
           </a>
-          <a class="nav-dropdown-item" href="https://maskerprc.github.io/tutorials/beginner/introyt.html">
-            <span class="dropdown-title">PyTorch 入门 - YouTube 系列</span>
-            <p>使用我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
+          <a class="nav-dropdown-item" href="https://pytorch.org/tutorials/beginner/introyt.html">
+            <span class="dropdown-title">PyTorch 简介 - YouTube 系列</span><p></p>
+            <p>通过我们引人入胜的 YouTube 教程系列掌握 PyTorch 基础知识</p>
           </a>
           <a class="nav-dropdown-item" href="/new">
-            <span class="dropdown-title">新手入门 PyTorch 基金会</span>
+            <span class="dropdown-title">PyTorch 基金会新手</span><p></p>
           </a>
         </div>
       </div>
@@ -191,21 +191,27 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
         <a class="with-down-arrow">生态系统</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://landscape.pytorch.org/" target="_blank">
-            <span class="dropdown-title">工具</span>
+            <span class="dropdown-title">工具</span><p></p>
             <p>了解 PyTorch 生态系统中的工具和框架</p>
           </a>
-          加入生态系统社区
+          <a class="nav-dropdown-item" href="https://github.com/pytorch-fdn/ecosystem" target="_blank">
+            <span class="dropdown-title">加入生态系统</span><p></p>
+          </a>
+          <a class="nav-dropdown-item" href="/#community-module">
+            <span class="dropdown-title">社区</span>
+            <p>加入 PyTorch 开发者社区，贡献、学习并获得问题的解答。</p>
+          </a>
           <a class="nav-dropdown-item" href="https://discuss.pytorch.org" target="_blank">
             <span class="dropdown-title">论坛</span>
             <p>讨论 PyTorch 代码、问题、安装、研究的地方</p>
           </a>
           <a class="nav-dropdown-item" href="/resources">
             <span class="dropdown-title">开发者资源</span>
-            <p>查找资源并获得问题解答</p>
+            <p>查找资源并解答问题</p>
           </a>
           <a class="nav-dropdown-item" href="/ecosystem/contributor-awards-2024">
-            <span class="dropdown-title">2024年贡献者奖项</span>
-            <p>本年 PyTorch 会议获奖者揭晓</p>
+            <span class="dropdown-title">2024 年度贡献者奖项</span><p></p>
+            <p>本年度 PyTorch 大会获奖者揭晓</p>
           </a>
         </div>
       </div>
@@ -218,15 +224,15 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
         </a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/edge">
-            <span class="dropdown-title">关于 PyTorch Edge</span>
-            <p>为边缘设备构建创新和注重隐私的 AI 体验</p>
+            <span class="dropdown-title">关于 PyTorch Edge</span><p></p>
+            <p>为边缘设备构建创新和隐私感知的 AI 体验</p>
           </a>
           <a class="nav-dropdown-item" href="/executorch-overview">
-            <span class="dropdown-title">执行火炬</span>
-            <p>针对移动和边缘设备实现设备端推理能力的端到端解决方案</p>
+            <span class="dropdown-title">ExecuTorch</span><p></p>
+            <p>搭载移动和边缘设备端到端推理能力的解决方案</p>
           </a>
-          <a class="nav-dropdown-item" target="_blank" href="https://maskerprc.github.io/executorch/stable/index.html">
-            <span class="dropdown-title">ExecuTorch 文档</span>
+          <a class="nav-dropdown-item" target="_blank" href="https://pytorch.org/executorch/stable/index.html">
+            <span class="dropdown-title">ExecuTorch Documentation</span><p></p>
           </a>
         </div>
       </div>
@@ -237,12 +243,12 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
         <a class="with-down-arrow">文档</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="https://pytorch.org/docs">
-            <span class="dropdown-title">PyTorch</span>
-            <p>探索文档以获取如何使用 PyTorch 的全面指南。</p>
+            <span class="dropdown-title">PyTorch</span><p></p>
+            <p>Explore the documentation for comprehensive guidance on how to use PyTorch.</p>
           </a>
           <a class="nav-dropdown-item" href="/pytorch-domains">
-            <span class="dropdown-title">PyTorch 领域</span>
-            <p>阅读 PyTorch Domains 文档以了解更多关于特定领域库的信息。</p>
+            <span class="dropdown-title">PyTorch 领域</span><p></p>
+            <p> Read the PyTorch Domains documentation to learn more about domain-specific libraries.</p>
           </a>
         </div>
       </div>
@@ -253,28 +259,28 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
         <a class="with-down-arrow">博客 &amp; 新闻</a>
         <div class="resources-dropdown-menu">
           <a class="nav-dropdown-item" href="/blog">
-            <span class="dropdown-title">PyTorch 博客</span>
-            <p>获取最新的技术新闻和动态。</p>
+            <span class="dropdown-title">PyTorch Blog</span><p></p>
+            <p>Catch up on the latest technical news and happenings</p>
           </a>
           <a class="nav-dropdown-item" href="/community-blog">
-            <span class="dropdown-title">社区博客</span>
-            <p>PyTorch 生态系统中的故事</p>
+            <span class="dropdown-title">社区博客</span><p></p>
+            <p>PyTorch 生态系统故事</p>
           </a>
           <a class="nav-dropdown-item" href="/videos">
-            <span class="dropdown-title">视频</span>
+            <span class="dropdown-title">视频</span><p></p>
             <p>了解最新的 PyTorch 教程、新内容等</p>
           </a>
           <a class="nav-dropdown-item" href="/community-stories">
-            <span class="dropdown-title">社区故事</span>
+            <span class="dropdown-title">社区故事</span><p></p>
             <p>了解我们的社区如何使用 PyTorch 解决真实、日常的机器学习问题</p>
           </a>
           <a class="nav-dropdown-item" href="/events">
-            <span class="dropdown-title">活动</span>
+            <span class="dropdown-title">Events</span>
             <p>查找活动、网络研讨会和播客</p>
           </a>
           <a class="nav-dropdown-item" href="/newsletter">
-            <span class="dropdown-title">新闻简报</span>
-            <p>保持最新更新</p>
+            <span class="dropdown-title">Newsletter</span>
+            <p>跟踪最新更新</p>
           </a>
         </div>
       </div>
@@ -288,7 +294,7 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
             <span class="dropdown-title">PyTorch 基金会</span>
             <p>了解更多关于 PyTorch 基金会的信息。</p>
           </a>
-          管理委员会云信用计划技术顾问委员会员工联系我们
+          管理委员会 云信用计划 技术顾问委员会 员工 联系我们
         </div>
       </div>
     </li>
@@ -329,7 +335,7 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
 
     <div class="jumbotron jumbotron-fluid on-dark-background">
       <div class="container">
-        <h1>PyTorch 移动端</h1>
+        <h1>PyTorch 移动</h1>
 
         <p class="lead">从训练到部署的端到端工作流程，适用于 iOS 和 Android 移动设备</p>
       </div>
@@ -373,23 +379,23 @@ traced_script_module_optimized._save_for_lite_interpreter(" app="" src="" main="
               <div class="article-wrapper" data-id="">
                 <article class="pytorch-article">
                   <div class="note-card">
-<h4>笔记</h4>
-<p>PyTorch Mobile 已不再积极维护。请查看 <a href="/executorch-overview">ExecuTorch</a>，PyTorch 全新的设备端推理库。您还可以查看 <a href="https://maskerprc.github.io/executorch/stable/demo-apps-android.html"> 此页面 </a> 了解如何使用 ExecuTorch 构建安卓应用的相关信息。</p>
+<h4>备注</h4>
+<p>PyTorch Mobile 已不再积极支持。请查看 ExecuTorch，PyTorch 全新的设备端推理库。您还可以查看此页面了解如何使用 ExecuTorch 构建安卓应用的相关信息。</p>
 </div>
 
-<h1 id="android">Android</h1>
+<h1 id="android">安卓</h1>
 
 <h2 id="quickstart-with-a-helloworld-example">使用 HelloWorld 示例快速入门</h2>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/HelloWorldApp">HelloWorld</a> 是一个简单的图像分类应用，演示了如何使用 PyTorch Android API。此应用在静态图像上运行 TorchScript 序列化的 TorchVision 预训练 resnet18 模型，该图像作为安卓资源打包在应用内部。</p>
+<p>HelloWorld 是一个简单的图像分类应用，演示了如何使用 PyTorch Android API。此应用在静态图像上运行 TorchScript 序列化的 TorchVision 预训练 resnet18 模型，该图像作为安卓资源打包在应用内部。</p>
 
 <h4 id="1-model-preparation">1. 模型准备</h4>
 
-<p>让我们从模型准备开始。如果你熟悉 PyTorch，你可能已经知道如何训练和保存你的模型。如果你不熟悉，我们将使用一个预训练的图像分类模型（<a href="https://maskerprc.github.io/hub/pytorch_vision_mobilenet_v2/">MobileNetV2</a>）。要安装它，请运行以下命令：</p>
+<p>让我们从模型准备开始。如果你熟悉 PyTorch，你可能已经知道如何训练和保存你的模型。如果你不熟悉，我们将使用一个预训练的图像分类模型（MobileNetV2）。要安装它，请运行以下命令：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>pip install torchvision
 </code></pre></div></div>
 
-<p>要序列化模型，你可以在 HelloWorld 应用的根目录中使用 python <a href="https://github.com/pytorch/android-demo-app/blob/master/HelloWorldApp/trace_model.py"> 脚本 </a>：</p>
+<p>要序列化模型，你可以在 HelloWorld 应用的根目录中使用 python 脚本：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>import torch
 import torchvision
 from torch.utils.mobile_optimizer import optimize_for_mobile
@@ -402,23 +408,23 @@ traced_script_module_optimized = optimize_for_mobile(traced_script_module)
 traced_script_module_optimized._save_for_lite_interpreter("app/src/main/assets/model.ptl")
 
 </code></pre></div></div>
-<p>如果一切顺利，我们应该在安卓应用的资产文件夹中生成我们的模型 - <code class="language-plaintext highlighter-rouge">model.ptl</code>。这将被打包进安卓应用作为 <code class="language-plaintext highlighter-rouge">asset</code>，并在设备上使用。</p>
+<p>如果一切顺利，我们应该在我们的模型 - <code class="language-plaintext highlighter-rouge">model.ptl</code> 中拥有它，它在安卓应用程序的 assets 文件夹中。它将被打包在安卓应用程序的 <code class="language-plaintext highlighter-rouge">asset</code> 中，可以在设备上使用。</p>
 
-<p>更多关于 TorchScript 的详细信息，您可以在 <a href="https://pytorch.org/docs/stable/jit.html">pytorch.org 上的教程</a>中找到。</p>
+<p>您可以在 pytorch.org 上的教程中找到更多关于 TorchScript 的详细信息</p>
 
-<h4 id="2-cloning-from-github">2. 从 GitHub 克隆</h4>
+<h4 id="2-cloning-from-github">2. 从 github 克隆</h4>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git clone https://github.com/pytorch/android-demo-app.git
 cd HelloWorldApp
 </code></pre></div></div>
-<p>如果 <a href="https://developer.android.com/studio/index.html#command-tools">Android SDK</a> 和 <a href="https://developer.android.com/ndk/downloads">Android NDK</a> 已经安装，您可以使用以下命令将此应用安装到已连接的安卓设备或模拟器中：</p>
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><font class=" " lang="zh-CN"><br hidden=""><font class="    "><font class="  "><code>./gradlew installDebug</code>
-</font></font></font></pre></div></div>
+<p>如果 Android SDK 和 Android NDK 已经安装，您可以使用以下命令将此应用程序安装到连接的 Android 设备或模拟器：</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>./gradlew installDebug
+</code></pre></div></div>
 
-<p>我们建议您使用 <a href="https://developer.android.com/studio">Android Studio 3.5.1+</a> 打开此项目。目前 PyTorch Android 和演示应用程序使用 <a href="https://developer.android.com/studio/releases/gradle-plugin#3-5-0">Android Gradle 插件版本 3.5.0</a>，该插件仅由 Android Studio 3.5.1 及以上版本支持。使用 Android Studio，您将能够通过 Android Studio UI 安装 Android NDK 和 Android SDK。</p>
+<p>我们建议您使用 Android Studio 3.5.1+打开此项目。目前 PyTorch Android 和演示应用程序使用 android gradle plugin 的版本 3.5.0，该版本仅由 Android Studio 版本 3.5.1 及以上支持。使用 Android Studio，您将能够通过 Android Studio UI 安装 Android NDK 和 Android SDK。</p>
 
 <h4 id="3-gradle-dependencies">3. Gradle 依赖项</h4>
 
-<p>PyTorch Android 已添加到 HelloWorld 的 <a href="https://github.com/pytorch/android-demo-app/blob/master/HelloWorldApp/app/build.gradle#L28-L29">gradle 依赖项 </a> 中 build.gradle 文件：</p>
+<p>在 HelloWorld 中添加 Pytorch android 作为 gradle 依赖项到 build.gradle 文件中：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>repositories {
     jcenter()
@@ -429,32 +435,32 @@ dependencies {
     implementation 'org.pytorch:pytorch_android_torchvision:1.9.0'
 }
 </code></pre></div></div>
-<p>其中 <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android</code> 是主要依赖项，包含 PyTorch Android API，以及适用于所有 4 个 Android ABI（armeabi-v7a、arm64-v8a、x86、x86_64）的 libtorch 本地库。在本文档中，您可以找到如何仅针对特定列表的 Android ABI 重新构建它的方法。</p>
+<p> <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android</code> 是主要依赖项，包含 PyTorch Android API，以及适用于所有 4 个 Android ABI（armeabi-v7a、arm64-v8a、x86、x86_64）的 libtorch 本地库。在此文档中，您可以找到如何仅针对特定列表的 Android ABI 重新构建它的方法。</p>
 
-<p> <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android_torchvision</code>  - 额外库，包含将 <code class="language-plaintext highlighter-rouge">android.media.Image</code> 和 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code> 转换为张量的实用函数。</p>
+<p> <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android_torchvision</code> - 额外的库，包含将 <code class="language-plaintext highlighter-rouge">android.media.Image</code> 和 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code> 转换为张量的实用函数。</p>
 
 <h4 id="4-reading-image-from-android-asset">4. 从 Android Asset 读取图像</h4>
 
-<p>所有逻辑都在 <a href="https://github.com/pytorch/android-demo-app/blob/master/HelloWorldApp/app/src/main/java/org/pytorch/helloworld/MainActivity.java#L31-L69"> <code class="language-plaintext highlighter-rouge">org.pytorch.helloworld.MainActivity</code> </a> 中发生。首先，我们使用标准的 Android API 将 <code class="language-plaintext highlighter-rouge">image.jpg</code> 读取到 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code>。</p>
+<p>所有逻辑都在 <code class="language-plaintext highlighter-rouge">org.pytorch.helloworld.MainActivity</code> 中发生。作为第一步，我们使用标准的 Android API 读取 <code class="language-plaintext highlighter-rouge">image.jpg</code> 到 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code> 。</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Bitmap bitmap = BitmapFactory.decodeStream(getAssets().open("image.jpg"));
 </code></pre></div></div>
 
 <h4 id="5-loading-mobile-module">5. 加载移动模块</h4>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Module module = Module.load(assetFilePath(this, "model.ptl"));
 </code></pre></div></div>
-<p><code class="language-plaintext highlighter-rouge">org.pytorch.Module</code> 代表 <code class="language-plaintext highlighter-rouge">torch::jit::mobile::Module</code>，可以通过指定文件路径的 <code class="language-plaintext highlighter-rouge">load</code> 方法加载已序列化到文件的模型。</p>
+<p> <code class="language-plaintext highlighter-rouge">org.pytorch.Module</code> 代表可以通过 <code class="language-plaintext highlighter-rouge">load</code> 方法加载的 <code class="language-plaintext highlighter-rouge">torch::jit::mobile::Module</code> ，该方法指定了保存到文件的模型文件路径。</p>
 
 <h4 id="6-preparing-input">6. 准备输入</h4>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Tensor inputTensor = TensorImageUtils.bitmapToFloat32Tensor(bitmap,
     TensorImageUtils.TORCHVISION_NORM_MEAN_RGB, TensorImageUtils.TORCHVISION_NORM_STD_RGB);
 </code></pre></div></div>
-<p> <code class="language-plaintext highlighter-rouge">org.pytorch.torchvision.TensorImageUtils</code> 是 <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android_torchvision</code> 库的一部分。 <code class="language-plaintext highlighter-rouge">TensorImageUtils#bitmapToFloat32Tensor</code> 方法使用 <a href="https://maskerprc.github.io/vision/stable/models.html">torchvision 格式 </a> 和 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code> 作为源来创建张量。</p>
+<p> <code class="language-plaintext highlighter-rouge">org.pytorch.torchvision.TensorImageUtils</code> 是 <code class="language-plaintext highlighter-rouge">org.pytorch:pytorch_android_torchvision</code> 库的一部分。 <code class="language-plaintext highlighter-rouge">TensorImageUtils#bitmapToFloat32Tensor</code> 方法使用 <code class="language-plaintext highlighter-rouge">android.graphics.Bitmap</code> 作为源创建 torchvision 格式的张量。</p>
 
 <blockquote>
   <p>所有预训练模型都期望输入图像以相同的方式进行归一化，即形状为 (3 x H x W) 的 3 通道 RGB 图像的 mini-batches，其中 H 和 W 至少为 224。图像必须加载到 <code class="language-plaintext highlighter-rouge">[0, 1]</code> 范围内，然后使用 <code class="language-plaintext highlighter-rouge">mean = [0.485, 0.456, 0.406]</code> 和 <code class="language-plaintext highlighter-rouge">std = [0.229, 0.224, 0.225]</code> 进行归一化。</p>
 </blockquote>
 
-<p><code class="language-plaintext highlighter-rouge">inputTensor</code> 的形状为 <code class="language-plaintext highlighter-rouge">1x3xHxW</code>，其中 <code class="language-plaintext highlighter-rouge">H</code> 和 <code class="language-plaintext highlighter-rouge">W</code> 是位图的高度和宽度。</p>
+<p> <code class="language-plaintext highlighter-rouge">inputTensor</code> 的形状是 <code class="language-plaintext highlighter-rouge">1x3xHxW</code> ，其中 <code class="language-plaintext highlighter-rouge">H</code> 和 <code class="language-plaintext highlighter-rouge">W</code> 是适当的位图高度和宽度。</p>
 
 <h4 id="7-run-inference">7. 运行推理</h4>
 
@@ -462,12 +468,12 @@ dependencies {
 float[] scores = outputTensor.getDataAsFloatArray();
 </code></pre></div></div>
 
-<p><code class="language-plaintext highlighter-rouge">org.pytorch.Module.forward</code> 方法运行加载的模块的 <code class="language-plaintext highlighter-rouge">forward</code> 方法，并获取结果为形状为 <code class="language-plaintext highlighter-rouge">1x1000</code> 的 <code class="language-plaintext highlighter-rouge">org.pytorch.Tensor</code> 输出 Tensor。</p>
+<p> <code class="language-plaintext highlighter-rouge">org.pytorch.Module.forward</code> 方法运行加载的模块的 <code class="language-plaintext highlighter-rouge">forward</code> 方法，并将结果作为 <code class="language-plaintext highlighter-rouge">org.pytorch.Tensor</code> 输出张量 <code class="language-plaintext highlighter-rouge">1x1000</code> 的形状返回。</p>
 
 <h4 id="8-processing-results">8. 处理结果</h4>
-<p>其内容通过 <code class="language-plaintext highlighter-rouge">org.pytorch.Tensor.getDataAsFloatArray()</code> 方法检索，该方法返回每个 ImageNet 类分数的 Java 浮点数数组。</p>
+<p>其内容通过 <code class="language-plaintext highlighter-rouge">org.pytorch.Tensor.getDataAsFloatArray()</code> 方法检索，该方法返回每个图像网络类得分的浮点数数组。</p>
 
-<p>之后，我们只需找到分数最高的索引，并从包含所有 ImageNet 类的 <code class="language-plaintext highlighter-rouge">ImageNetClasses.IMAGENET_CLASSES</code> 数组中检索预测的类名。</p>
+<p>之后我们只需找到具有最高分数的索引，并从包含所有 ImageNet 类名的 <code class="language-plaintext highlighter-rouge">ImageNetClasses.IMAGENET_CLASSES</code> 数组中检索预测的类名。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>float maxScore = -Float.MAX_VALUE;
 int maxScoreIdx = -1;
@@ -480,13 +486,13 @@ for (int i = 0; i &lt; scores.length; i++) {
 String className = ImageNetClasses.IMAGENET_CLASSES[maxScoreIdx];
 </code></pre></div></div>
 
-<p>在以下章节中，您可以找到 PyTorch Android API 的详细说明、更大<a href="https://github.com/pytorch/android-demo-app/tree/master/PyTorchDemoApp">演示应用程序</a>的代码演示、API 的实现细节以及如何自定义和从源代码构建它。</p>
+<p>在以下章节中，您可以找到 PyTorch Android API 的详细说明、更大演示应用程序的代码演示、API 的实现细节以及如何自定义和从源代码构建它。</p>
 
 <h2 id="pytorch-demo-application">PyTorch 演示应用程序</h2>
 
-<p>我们还创建了一个更复杂的 PyTorch Android 演示应用程序，该应用程序可以从相机输出进行图像分类，并在<a href="https://github.com/pytorch/android-demo-app/tree/master/PyTorchDemoApp">相同的 GitHub 仓库</a>中进行文本分类。</p>
+<p>我们还在同一 GitHub 仓库中创建了一个更复杂的 PyTorch Android 演示应用程序，该应用程序可以从相机输出中进行图像分类，并在同一仓库中进行文本分类。</p>
 
-<p>为了获取设备相机输出，它使用了 <a href="https://developer.android.com/training/camerax">Android CameraX API</a>。所有与 CameraX 相关的逻辑都被分离到 <a href="https://github.com/pytorch/android-demo-app/blob/master/PyTorchDemoApp/app/src/main/java/org/pytorch/demo/vision/AbstractCameraXActivity.java"> <code class="language-plaintext highlighter-rouge">org.pytorch.demo.vision.AbstractCameraXActivity</code> </a> 类中。</p>
+<p>获取设备相机输出时使用 Android CameraX API。与 CameraX 相关的所有逻辑都分离到 <code class="language-plaintext highlighter-rouge">org.pytorch.demo.vision.AbstractCameraXActivity</code> 类中。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>void setupCameraX() {
     final PreviewConfig previewConfig = new PreviewConfig.Builder().build();
@@ -511,21 +517,21 @@ String className = ImageNetClasses.IMAGENET_CLASSES[maxScoreIdx];
   void analyzeImage(android.media.Image, int rotationDegrees)
 </code></pre></div></div>
 
-<p>在哪里处理 <code class="language-plaintext highlighter-rouge">analyzeImage</code> 方法处理摄像头输出，<code class="language-plaintext highlighter-rouge">android.media.Image</code>。</p>
+<p> <code class="language-plaintext highlighter-rouge">analyzeImage</code> 方法处理相机输出， <code class="language-plaintext highlighter-rouge">android.media.Image</code> 。</p>
 
-<p>它使用上述 <a href="https://github.com/pytorch/pytorch/blob/master/android/pytorch_android_torchvision/src/main/java/org/pytorch/torchvision/TensorImageUtils.java#L90"> <code class="language-plaintext highlighter-rouge">TensorImageUtils.imageYUV420CenterCropToFloat32Tensor</code> </a> 方法将 <code class="language-plaintext highlighter-rouge">android.media.Image</code> 转换为 <code class="language-plaintext highlighter-rouge">YUV420</code> 格式的输入张量。</p>
+<p>使用上述 <code class="language-plaintext highlighter-rouge">TensorImageUtils.imageYUV420CenterCropToFloat32Tensor</code> 方法将 <code class="language-plaintext highlighter-rouge">android.media.Image</code> 转换为 <code class="language-plaintext highlighter-rouge">YUV420</code> 格式的输入张量。</p>
 
-<p>从模型获取预测分数后，它找到分数最高的前 K 个类别并在 UI 上显示。</p>
+<p>从模型获取预测分数后，找到分数最高的前 K 个类别并在 UI 上显示。</p>
 
 <h4 id="language-processing-example">语言处理示例</h4>
 
-<p>另一个例子是基于 LSTM 模型的自然语言处理，该模型在 Reddit 评论数据集上进行了训练。逻辑发生在 <a href="https://github.com/pytorch/android-demo-app/blob/master/PyTorchDemoApp/app/src/main/java/org/pytorch/demo/nlp/TextClassificationActivity.java"><code class="language-plaintext highlighter-rouge">TextClassificattionActivity</code></a> 中。</p>
+<p>另一个例子是基于 LSTM 模型的自然语言处理，该模型在 Reddit 评论数据集上训练。逻辑发生在 <code class="language-plaintext highlighter-rouge">TextClassificattionActivity</code> 。</p>
 
-<p>结果类名打包在 TorchScript 模型中，并在初始化模块后立即初始化。该模块有一个 <code class="language-plaintext highlighter-rouge">get_classes</code> 方法，它返回 <code class="language-plaintext highlighter-rouge">List[str]</code>，可以使用方法 <code class="language-plaintext highlighter-rouge">Module.runMethod(methodName)</code> 调用：</p>
+<p>结果类名打包在 TorchScript 模型中，并在初始化模块后立即初始化。该模块有一个 <code class="language-plaintext highlighter-rouge">get_classes</code> 方法，该方法返回 <code class="language-plaintext highlighter-rouge">List[str]</code> ，可以使用方法 <code class="language-plaintext highlighter-rouge">Module.runMethod(methodName)</code> 调用：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    mModule = Module.load(moduleFileAbsoluteFilePath);
     IValue getClassesOutput = mModule.runMethod("get_classes");
 </code></pre></div></div>
-<p>返回的 <code class="language-plaintext highlighter-rouge">IValue</code> 可以使用 <code class="language-plaintext highlighter-rouge">IValue.toList()</code> 转换为 <code class="language-plaintext highlighter-rouge">IValue</code> 的 Java 数组，并使用 <code class="language-plaintext highlighter-rouge">IValue.toStr()</code> 处理为字符串数组：</p>
+<p>返回的 <code class="language-plaintext highlighter-rouge">IValue</code> 可以使用 <code class="language-plaintext highlighter-rouge">IValue.toList()</code> 转换为 <code class="language-plaintext highlighter-rouge">IValue</code> 的 Java 数组，然后使用 <code class="language-plaintext highlighter-rouge">IValue.toStr()</code> 处理成字符串数组：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    IValue[] classesListIValue = getClassesOutput.toList();
     String[] moduleClasses = new String[classesListIValue.length];
     int i = 0;
@@ -534,13 +540,13 @@ String className = ImageNetClasses.IMAGENET_CLASSES[maxScoreIdx];
     }
 </code></pre></div></div>
 
-<p>输入文本使用 <code class="language-plaintext highlighter-rouge">UTF-8</code> 编码转换为 Java 字节数组。<code class="language-plaintext highlighter-rouge">Tensor.fromBlobUnsigned</code> 从该字节数组创建 <code class="language-plaintext highlighter-rouge">dtype=uint8</code> 的 tensor。</p>
+<p>输入文本被转换为使用 <code class="language-plaintext highlighter-rouge">UTF-8</code> 编码的字节 Java 数组。 <code class="language-plaintext highlighter-rouge">Tensor.fromBlobUnsigned</code> 从该字节数组创建 <code class="language-plaintext highlighter-rouge">dtype=uint8</code> 的张量。</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>    byte[] bytes = text.getBytes(Charset.forName("UTF-8"));
     final long[] shape = new long[]{1, bytes.length};
     final Tensor inputTensor = Tensor.fromBlobUnsigned(bytes, shape);
 </code></pre></div></div>
 
-<p>模型推理的运行与之前的示例类似：</p>
+<p>运行模型的推理与之前的示例类似：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Tensor outputTensor = mModule.forward(IValue.from(inputTensor)).toTensor()
 </code></pre></div></div>
 
@@ -550,71 +556,71 @@ String className = ImageNetClasses.IMAGENET_CLASSES[maxScoreIdx];
 
 <h3 id="d2go">D2go</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/D2Go">D2Go</a> 展示了一个 Python 脚本，该脚本创建了一个更轻量级、更快速的 Facebook <a href="https://github.com/facebookresearch/d2go">D2Go</a> 模型，该模型由 PyTorch 1.8、torchvision 0.9 和内置的 SOTA 网络的 Detectron2 驱动，适用于移动设备，并且还有一个 Android 应用程序，该应用程序使用它从您的照片、相机拍摄的照片或实时相机中检测对象。此演示应用程序还展示了如何使用本机预构建的 torchvision-ops 库。</p>
+<p>D2Go 演示了一个 Python 脚本，该脚本创建了一个由 PyTorch 1.8、torchvision 0.9 和 Detectron2 驱动的更轻量级、更快的 Facebook D2Go 模型，并内置了用于移动端的 SOTA 网络，以及一个 Android 应用程序，该应用程序使用它从您的照片、相机拍摄的照片或实时相机中检测对象。此演示应用程序还展示了如何使用本地的预构建 torchvision-ops 库。</p>
 
 <h3 id="image-segmentation">图像分割</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/ImageSegmentation">图像分割 </a> 展示了一个 Python 脚本，该脚本将 PyTorch <a href="https://maskerprc.github.io/hub/pytorch_vision_deeplabv3_resnet101/">DeepLabV3</a> 模型转换为 Android 应用程序，该应用程序使用该模型进行图像分割。</p>
+<p>图像分割演示了一个 Python 脚本，该脚本将 PyTorch DeepLabV3 模型转换为 Android 应用程序，该应用程序使用该模型进行图像分割。</p>
 
 <h3 id="object-detection">目标检测</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/ObjectDetection">目标检测 </a> 展示了如何将流行的 <a href="https://maskerprc.github.io/hub/ultralytics_yolov5/">YOLOv5</a> 模型转换为 Android 应用程序，并在其中使用该模型从您的照片、相机拍摄的照片或实时相机中检测对象。</p>
+<p>目标检测演示了如何将流行的 YOLOv5 模型转换为 Android 应用程序，并在该应用程序中使用它从您的照片、相机拍摄的照片或实时相机中检测对象。</p>
 
 <h3 id="neural-machine-translation">神经机器翻译</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/Seq2SeqNMT">神经机器翻译</a>演示了如何将使用 <a href="https://maskerprc.github.io/tutorials/intermediate/seq2seq_translation_tutorial.html">PyTorch NMT 教程</a>中的代码训练的序列到序列神经机器翻译模型进行转换，并在 Android 应用中使用该模型进行法英翻译。</p>
+<p>神经机器翻译演示了如何将使用 PyTorch NMT 教程中的代码训练的序列到序列神经机器翻译模型转换为在 Android 应用中进行法语-英语翻译。</p>
 
 <h3 id="question-answering">问答</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/QuestionAnswering">问答</a>演示了如何将强大的 Transformer 问答模型进行转换，并在 Android 应用中使用该模型回答有关 PyTorch Mobile 等问题。</p>
+<p>问答演示了如何将强大的 Transformer 问答模型转换为在 Android 应用中回答有关 PyTorch Mobile 等问题。</p>
 
 <h3 id="vision-transformer">视觉 Transformer</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/ViT4MNIST">视觉 Transformer</a> 演示了如何使用 Facebook 最新的视觉 Transformer 模型 <a href="https://github.com/facebookresearch/deit">DeiT</a> 进行图像分类，以及如何转换另一个视觉 Transformer 模型并在 Android 应用中进行手写数字识别。</p>
+<p>视觉 Transformer 展示了如何使用 Facebook 最新的视觉 Transformer DeiT 模型进行图像分类，以及如何将另一个视觉 Transformer 模型转换为 TorchScript 并在 Android 应用中使用它进行手写数字识别。</p>
 
 <h3 id="speech-recognition">语音识别</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/SpeechRecognition">语音识别</a>演示了如何将 Facebook AI 的 wav2vec 2.0，语音识别领域的领先模型之一，转换为 TorchScript，以及如何在 Android 应用中使用脚本化模型进行语音识别。</p>
+<p>语音识别演示了如何将 Facebook AI 的 wav2vec 2.0（语音识别领域的领先模型之一）转换为 TorchScript，以及如何在 Android 应用中使用脚本化的模型进行语音识别。</p>
 
 <h3 id="video-classification">视频分类</h3>
 
-<p><a href="https://github.com/pytorch/android-demo-app/tree/master/TorchVideo">TorchVideo</a> 演示了如何在 Android 上使用预训练的视频分类模型，该模型可在新发布的 <a href="https://github.com/facebookresearch/pytorchvideo">PyTorchVideo</a> 中找到，查看视频分类结果，视频播放时每秒更新，在测试视频中，照片库中的视频，甚至是实时视频。</p>
+<p>TorchVideo 演示了如何在 Android 上使用 PyTorchVideo 中提供的预训练视频分类模型，实时查看视频分类结果，包括在播放测试视频、照片库中的视频或实时视频时每秒更新的结果。</p>
 
 <h2 id="pytorch-android-tutorial-and-recipes">PyTorch Android 教程与食谱</h2>
 
-<h3 id="image-segmentation-deeplabv3-on-android"><a href="https://maskerprc.github.io/tutorials/beginner/deeplabv3_on_android.html">Android 上的图像分割 DeepLabV3</a></h3>
+<h3 id="image-segmentation-deeplabv3-on-android"><a href="https://pytorch.org/tutorials/beginner/deeplabv3_on_android.html">Android 上的 Image Segmentation DeepLabV3</a></h3>
 
-<p>PyTorch DeepLabV3 图像分割模型在 Android 上的准备和运行全面教程</p>
+<p>如何在 Android 上准备和运行 PyTorch DeepLabV3 图像分割模型的全面分步教程</p>
 
-<h3 id="pytorch-mobile-performance-recipes"><a href="https://maskerprc.github.io/tutorials/recipes/mobile_perf.html">PyTorch Mobile 性能秘籍</a></h3>
+<h3 id="pytorch-mobile-performance-recipes"><a href="https://pytorch.org/tutorials/recipes/mobile_perf.html">PyTorch 移动性能食谱</a></h3>
 
-<p>使用 PyTorch 在移动设备上性能优化的食谱列表</p>
+<p>使用 PyTorch 在移动设备上优化的食谱列表</p>
 
-<h3 id="making-android-native-application-that-uses-pytorch-android-prebuilt-libraries"><a href="https://maskerprc.github.io/tutorials/recipes/android_native_app_with_custom_op.html">使用 PyTorch Android 预构建库的 Android 原生应用程序制作</a></h3>
+<h3 id="making-android-native-application-that-uses-pytorch-android-prebuilt-libraries"><a href="https://pytorch.org/tutorials/recipes/android_native_app_with_custom_op.html">使用 PyTorch Android 预构建库制作 Android 原生应用程序</a></h3>
 
-<p>从零开始学习如何使用 LibTorch C++ API 制作 Android 应用程序，并使用自定义 C++运算符的 TorchScript 模型。</p>
+<p>学习如何从头开始制作使用 LibTorch C++ API 的 Android 应用程序，并使用自定义 C++运算符的 TorchScript 模型。</p>
 
-<h3 id="fuse-modules-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/fuse.html">模块融合食谱</a></h3>
+<h3 id="fuse-modules-recipe"><a href="https://pytorch.org/tutorials/recipes/fuse.html">混合模块配方</a></h3>
 
-<p>学习如何将 PyTorch 模块列表融合成一个单一模块，以在量化前减小模型大小。</p>
+<p>学习如何将一系列 PyTorch 模块融合成一个单一模块，以在量化之前减小模型大小。</p>
 
-<h3 id="quantization-for-mobile-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/quantization.html">移动量化食谱</a></h3>
+<h3 id="quantization-for-mobile-recipe"><a href="https://pytorch.org/tutorials/recipes/quantization.html">移动端量化配方</a></h3>
 
 <p>学习如何在不损失太多准确性的情况下减小模型大小并使其运行更快。</p>
 
-<h3 id="script-and-optimize-for-mobile"><a href="https://maskerprc.github.io/tutorials/recipes/script_optimized.html">为移动端编写和优化脚本</a></h3>
+<h3 id="script-and-optimize-for-mobile"><a href="https://pytorch.org/tutorials/recipes/script_optimized.html">脚本优化以适应移动端</a></h3>
 
-<p>学习如何将模型转换为 TorchScipt，并（可选）为移动应用进行优化。</p>
+<p>学习如何将模型转换为 TorchScript，并（可选）为移动应用优化。</p>
 
-<h3 id="model-preparation-for-android-recipe"><a href="https://maskerprc.github.io/tutorials/recipes/model_preparation_android.html">Android 食谱模型的准备</a></h3>
+<h3 id="model-preparation-for-android-recipe"><a href="https://pytorch.org/tutorials/recipes/model_preparation_android.html">安卓食谱模型准备</a></h3>
 
 <p>学习如何在 Android 项目中添加模型并使用 PyTorch 库。</p>
 
-<h2 id="building-pytorch-android-from-source">构建 PyTorch Android 源代码。</h2>
+<h2 id="building-pytorch-android-from-source">从源代码构建 PyTorch Android</h2>
 
-<p>在某些情况下，您可能想使用本地构建的 PyTorch Android，例如，您可能需要使用另一组操作符构建自定义 LibTorch 二进制文件，或进行本地更改，或尝试最新的 PyTorch 代码。</p>
+<p>在某些情况下，您可能想使用本地构建的 PyTorch Android，例如，您可能想使用另一组操作符构建自定义 LibTorch 二进制文件，或进行本地更改，或尝试最新的 PyTorch 代码。</p>
 
-<p>您可以使用 <code class="language-plaintext highlighter-rouge">./scripts/build_pytorch_android.sh</code> 脚本完成此操作。</p>
+<p>您可以使用 <code class="language-plaintext highlighter-rouge">./scripts/build_pytorch_android.sh</code> 脚本来完成此操作。</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>git clone https://github.com/pytorch/pytorch.git
 cd pytorch
 sh ./scripts/build_pytorch_android.sh
@@ -622,23 +628,21 @@ sh ./scripts/build_pytorch_android.sh
 
 <p>工作流程包含多个步骤：</p>
 
-<p>1. 为所有 4 个 Android ABI（armeabi-v7a、arm64-v8a、x86、x86_64）构建 libtorch for android</p>
+<p>1. 为所有 4 个 Android ABIs（armeabi-v7a、arm64-v8a、x86、x86_64）构建 libtorch for android</p>
 
-<p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">2. 创建指向这些构建结果的符号链接：
- <code class="language-plaintext highlighter-rouge">android/pytorch_android/src/main/jniLibs/${abi}</code>  到输出库的目录
-将头文件目录添加到路径中。这些目录用于构建 <code class="language-plaintext highlighter-rouge">libpytorch_jni.so</code> 库，作为 <code class="language-plaintext highlighter-rouge">pytorch_android-release.aar</code> 包的一部分，该包将在安卓设备上加载。</font></font></font></p>
+<p>2. 创建构建结果的符号链接： <code class="language-plaintext highlighter-rouge">android/pytorch_android/src/main/jniLibs/${abi}</code> 指向输出库目录， <code class="language-plaintext highlighter-rouge">android/pytorch_android/src/main/cpp/libtorch_include/${abi}</code> 指向头文件目录。这些目录用于构建 <code class="language-plaintext highlighter-rouge">libpytorch_jni.so</code> 库，作为 <code class="language-plaintext highlighter-rouge">pytorch_android-release.aar</code> 包的一部分，该包将在 Android 设备上加载。</p>
 
-<p>最后，在 <code class="language-plaintext highlighter-rouge">android/pytorch_android</code> 目录下运行 <code class="language-plaintext highlighter-rouge">gradle</code>，执行 <code class="language-plaintext highlighter-rouge">assembleRelease</code> 任务。</p>
+<p>3. 最后，在 <code class="language-plaintext highlighter-rouge">android/pytorch_android</code> 目录下运行 <code class="language-plaintext highlighter-rouge">gradle</code> 任务</p>
 
-<p>脚本要求安装 Android SDK、Android NDK、Java SDK 和 gradle。它们被指定为环境变量：</p>
+<p>4. 脚本要求安装 Android SDK、Android NDK、Java SDK 和 gradle。它们作为环境变量指定：</p>
 
-<p><code class="language-plaintext highlighter-rouge">ANDROID_HOME</code> - Android SDK 的路径</p>
+<p> <code class="language-plaintext highlighter-rouge">ANDROID_HOME</code> - Android SDK 路径</p>
 
-<p><code class="language-plaintext highlighter-rouge">ANDROID_NDK</code> - 路径到 <a href="https://developer.android.com/studio/projects/install-ndk">Android NDK</a>。建议使用 NDK 21.x。</p>
+<p> <code class="language-plaintext highlighter-rouge">ANDROID_NDK</code> - Android NDK 路径。建议使用 NDK 21.x 版本。</p>
 
-<p><code class="language-plaintext highlighter-rouge">GRADLE_HOME</code> - 路径到 <a href="https://gradle.org/releases/">gradle</a></p>
+<p> <code class="language-plaintext highlighter-rouge">GRADLE_HOME</code> - gradle 路径</p>
 
-<p><code class="language-plaintext highlighter-rouge">JAVA_HOME</code> - 路径到 <a href="https://www.oracle.com/java/technologies/javase-downloads.html#javasejdk">JAVA JDK</a></p>
+<p> <code class="language-plaintext highlighter-rouge">JAVA_HOME</code> - JAVA JDK 路径</p>
 
 <p>构建成功后，你应该看到结果为 aar 文件：</p>
 
@@ -647,9 +651,9 @@ android/pytorch_android/build/outputs/aar/pytorch_android-release.aar
 android/pytorch_android_torchvision/build/outputs/aar/pytorch_android_torchvision-release.aar
 </code></pre></div></div>
 
-<h2 id="using-the-pytorch-android-libraries-built-from-source-or-nightly">使用从源代码构建或夜间构建的 PyTorch Android 库</h2>
+<h2 id="using-the-pytorch-android-libraries-built-from-source-or-nightly">使用从源代码或夜间构建的 PyTorch Android 库</h2>
 
-<p>首先将上面构建的两个 aar 文件或从夜间构建的 PyTorch Android 仓库中下载的 aar 文件添加到 Android 项目的 <code class="language-plaintext highlighter-rouge">lib</code> 文件夹中，然后在项目的 app<code class="language-plaintext highlighter-rouge">build.gradle</code> 文件中添加：</p>
+<p>首先将上面构建的两个 aar 文件或从夜间构建的 PyTorch Android 仓库中下载的 aar 文件添加到 Android 项目的 <code class="language-plaintext highlighter-rouge">lib</code> 文件夹中，然后添加到项目的 app <code class="language-plaintext highlighter-rouge">build.gradle</code> 文件中：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>allprojects {
     repositories {
         flatDir {
@@ -674,11 +678,11 @@ dependencies {
 }
 </code></pre></div></div>
 
-<p>此外，我们还需要添加我们 aar 的所有传递依赖项。由于 <code class="language-plaintext highlighter-rouge">pytorch_android</code> 依赖于 <code class="language-plaintext highlighter-rouge">com.android.support:appcompat-v7:28.0.0</code> 或 <code class="language-plaintext highlighter-rouge">androidx.appcompat:appcompat:1.2.0</code> ，我们需要选择其中之一。（如果使用 maven 依赖项，它们会自动从 <code class="language-plaintext highlighter-rouge">pom.xml</code> 中添加）。</p>
+<p>此外，我们还需要添加我们 aar 的所有传递依赖。由于 <code class="language-plaintext highlighter-rouge">pytorch_android</code> 依赖于 <code class="language-plaintext highlighter-rouge">com.android.support:appcompat-v7:28.0.0</code> 或 <code class="language-plaintext highlighter-rouge">androidx.appcompat:appcompat:1.2.0</code> ，我们需要其中一个。（如果使用 maven 依赖，它们会自动从 <code class="language-plaintext highlighter-rouge">pom.xml</code> 添加）。</p>
 
-<h2 id="using-the-nightly-pytorch-android-libraries">使用夜间构建的 PyTorch Android 库</h2>
+<h2 id="using-the-nightly-pytorch-android-libraries">使用 PyTorch Android 夜间库</h2>
 
-<p>除了使用从源代码构建或从上一节中的链接下载的 aar 文件外，您还可以通过在您的 app <code class="language-plaintext highlighter-rouge">build.gradle</code> 文件中添加 maven URL 和夜间构建库实现来使用夜间构建的 Android PyTorch 和 TorchVision 库：</p>
+<p>除了使用上一节中从源代码构建或下载的 aar 文件外，您还可以通过在您的 app <code class="language-plaintext highlighter-rouge">build.gradle</code> 文件中添加 maven URL 和夜间构建的 Android PyTorch 和 TorchVision 库的实现来使用夜间构建的 Android PyTorch 和 TorchVision 库：</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>repositories {
     maven {
@@ -693,17 +697,17 @@ dependencies {
 }
 </code></pre></div></div>
 
-<p>如果您不需要进行任何本地更改，这是尝试最新 PyTorch 代码和 Android 库的最简单方法。但请注意，您可能需要使用最新的 PyTorch 构建在移动设备上使用的模型 - 要么使用最新的 PyTorch 代码，要么使用如 <code class="language-plaintext highlighter-rouge">pip install --pre torch torchvision -f https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html</code> 的命令进行快速夜间安装，以避免在移动设备上运行模型时可能出现的模型版本不匹配错误。</p>
+<p>这是最简单的方法来尝试最新的 PyTorch 代码和 Android 库，如果您不需要进行任何本地更改。但请注意，您可能需要使用最新的 PyTorch 构建在移动设备上使用的模型 - 使用最新的 PyTorch 代码或使用类似 <code class="language-plaintext highlighter-rouge">pip install --pre torch torchvision -f https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html</code> 的快速夜间安装命令 - 以避免在移动设备上运行模型时可能出现的模型版本不匹配错误。</p>
 
 <h2 id="custom-build">自定义构建</h2>
 
-<p>为了减小二进制文件的大小，您可以自定义构建 PyTorch Android，仅包含您模型所需的操作集。这包括两个步骤：从您的模型准备操作列表，使用指定的列表重新构建 PyTorch Android。</p>
+<p>为了减小二进制文件的大小，您可以仅使用模型所需的操作符自定义构建 PyTorch Android。这包括两个步骤：从您的模型中准备操作符列表，使用指定的列表重新构建 PyTorch Android。</p>
 
 <p>1. 验证您的 PyTorch 版本为 1.4.0 或更高版本。您可以通过检查 <code class="language-plaintext highlighter-rouge">torch.__version__</code> 的值来完成此操作。</p>
 
 <p>2. 准备操作符列表</p>
 
-<p>您可以使用 Python API 函数 <code class="language-plaintext highlighter-rouge">torch.jit.export_opnames()</code> 以 yaml 格式准备您的序列化 torchscript 模型的操作符列表。要导出模型 <code class="language-plaintext highlighter-rouge">MobileNetV2</code> 中的操作符，请运行以下 Python 代码行：</p>
+<p>您可以使用 Python API 函数 <code class="language-plaintext highlighter-rouge">torch.jit.export_opnames()</code> 以 yaml 格式准备您的序列化 torchscript 模型的操作符列表。要导出模型中的操作符，例如 <code class="language-plaintext highlighter-rouge">MobileNetV2</code> ，请运行以下 Python 代码行：</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Dump list of operators used by MobileNetV2:
 import torch, yaml
 model = torch.jit.load('MobileNetV2.pt')
@@ -711,9 +715,9 @@ ops = torch.jit.export_opnames(model)
 with open('MobileNetV2.yaml', 'w') as output:
     yaml.dump(ops, output)
 </code></pre></div></div>
-<p>3. 使用准备好的操作符列表构建 PyTorch Android。</p>
+<p>3. 使用准备好的算子列表构建 PyTorch Android。</p>
 
-<p>要构建带有准备好的 yaml 列表的 PyTorch Android，请在环境变量中指定 <code class="language-plaintext highlighter-rouge">SELECTED_OP_LIST</code>。同样，在参数中指定应构建哪些 Android ABIs；默认情况下，它会构建所有 4 个 Android ABIs。</p>
+<p>要使用准备好的算子 yaml 列表构建 PyTorch Android，请在环境变量中指定它 <code class="language-plaintext highlighter-rouge">SELECTED_OP_LIST</code> 。同时，在参数中指定应构建哪些 Android ABIs；默认情况下，它构建所有 4 个 Android ABIs。</p>
 
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code># Build PyTorch Android library customized for MobileNetV2:
 SELECTED_OP_LIST=MobileNetV2.yaml scripts/build_pytorch_android.sh arm64-v8a
@@ -723,7 +727,7 @@ SELECTED_OP_LIST=MobileNetV2.yaml scripts/build_pytorch_android.sh arm64-v8a
 
 <h2 id="use-pytorch-jit-interpreter">使用 PyTorch JIT 解释器</h2>
 
-<p>PyTorch JIT 解释器在 1.9 版本之前是默认解释器（我们 PyTorch 解释器中大小效率不是最高的一个版本）。它将在 1.9 版本中继续得到支持，并且可以通过 <code class="language-plaintext highlighter-rouge">build.gradle</code> 使用：</p>
+<p>PyTorch JIT 解释器在 1.9 版本之前是默认解释器（我们 PyTorch 解释器的一种，但大小效率不高）。它将在 1.9 版本中仍然得到支持，可以通过 <code class="language-plaintext highlighter-rouge">build.gradle</code> :来使用。</p>
 <div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>repositories {
     jcenter()
 }
@@ -734,21 +738,21 @@ dependencies {
 }
 </code></pre></div></div>
 
-<h2 id="android-tutorials">安卓教程</h2>
+<h2 id="android-tutorials">Android 教程</h2>
 
-<p>查看以下<a href="https://youtu.be/5Lxuu16_28o">视频 </a>，PyTorch 合作伙伴工程师 Brad Heintz 将指导您设置 PyTorch 运行时以用于 Android 项目步骤：</p>
+<p>请观看以下视频，PyTorch 合作伙伴工程师 Brad Heintz 将指导您设置 PyTorch 运行时在 Android 项目中的步骤：</p>
 
 <p><a href="https://youtu.be/5Lxuu16_28o" title="PyTorch Mobile Runtime for Android"><img src="https://i.ytimg.com/vi/O_2KBhkIvnc/maxresdefault.jpg" alt="PyTorch Mobile Runtime for Android" height="75%" width="75%"></a></p>
 
-<p>对应的代码可以在<a href="https://github.com/pytorch/workshops/tree/master/PTMobileWalkthruAndroid">这里</a>找到。</p>
+<p>相应的代码可以在这里找到。</p>
 
-<p>查看我们的<a href="https://maskerprc.github.io/tutorials/recipes/mobile_perf.html">移动性能秘籍 </a>，涵盖如何优化您的模型并通过基准测试检查优化是否有效。</p>
+<p>检查我们的移动性能菜谱，了解如何优化您的模型以及通过基准测试检查优化是否有所帮助。</p>
 
-<p>此外，按照以下食谱学习如何<a href="https://maskerprc.github.io/tutorials/recipes/android_native_app_with_custom_op.html">使用 PyTorch 预构建库制作原生 Android 应用程序 </a>。</p>
+<p>此外，按照这个菜谱学习如何制作使用 PyTorch 预构建库的本地 Android 应用程序。</p>
 
 <h2 id="api-docs">API 文档</h2>
 
-<p>您可以在 <a href="https://maskerprc.github.io/javadoc/">Javadoc</a> 中找到有关 PyTorch Android API 的更多详细信息。</p>
+<p>您可以在 Javadoc 中找到有关 PyTorch Android API 的更多详细信息。</p>
 
 <!-- Do not remove the below script -->
 
@@ -768,14 +772,14 @@ dependencies {
     <div class="row">
       <div class="col-md-4 text-center">
         <h2>文档</h2>
-        <p>查看 PyTorch 的全面开发者文档</p>
+        <p>访问 PyTorch 的全面开发者文档</p>
         <a class="with-right-arrow" href="/docs">查看文档</a>
       </div>
 
       <div class="col-md-4 text-center">
         <h2>教程</h2>
         <p>获取初学者和高级开发者的深入教程</p>
-        <a class="with-right-arrow" href="https://maskerprc.github.io/tutorials">查看教程</a>
+        <a class="with-right-arrow" href="https://pytorch.org/tutorials">查看教程</a>
       </div>
 
       <div class="col-md-4 text-center">
@@ -792,7 +796,7 @@ dependencies {
 
     <div class="newsletter" id="newsletter">
 
-      <p class="newsletter__title is-style-max-width-800"><strong>保持联系</strong>以获取更新、活动信息和最新新闻</p>
+      <p class="newsletter__title is-style-max-width-800">保持联系，获取更新、活动信息和最新新闻</p>
     
     
         <script charset="utf-8" type="text/javascript" src="//js.hsforms.net/forms/embed/v2.js"></script>
@@ -805,7 +809,7 @@ dependencies {
         </script>
         
     
-      <p class="newsletter__privacy">通过提交此表单，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。 <a href="https://www.linuxfoundation.org/privacy/"> 隐私政策 </a>。</p>
+      <p class="newsletter__privacy">通过提交此表格，我同意接收 LF 及其项目关于其活动、培训、研究、开发及相关公告的市场营销电子邮件。我理解我可以在收到的电子邮件页脚中的链接随时取消订阅。隐私政策。</p>
         
     </div>
     
@@ -813,7 +817,7 @@ dependencies {
 
     <div class="lf-grid">
       <div class="footer-logo-wrapper">
-        <a href="http://localhost:4000" class="footer-logo">
+        <a href="https://maskerprc.github.io" class="footer-logo">
           <img src="/assets/images/logo-icon.svg" alt="PyTorch logo" width="40" height="40">
         </a>
       </div>
@@ -842,9 +846,7 @@ dependencies {
 
     <div class="privacy-policy">
       <div class="copyright">
-        <p><font class=" " lang="zh-CN"><br hidden=""><font class="   "><font class="  ">© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。
-有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅
-<a href="https://www.linuxfoundation.org/legal/policies/">Linux 基金会政策 </a>。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF 项目系列的一部分，即 LF Projects, LLC 的 PyTorch 项目。有关适用于 LF Projects, LLC 的 PyTorch 项目的政策，请参阅 <a href="https://www.lfprojects.org/policies/">LF Projects, LLC 政策 </a>。 <a href="https://www.linuxfoundation.org/privacy"> 隐私政策 </a> 和 <a href="https://www.linuxfoundation.org/terms"> 使用条款 </a>。</font></font></font></p>
+        <p>© 版权所有 Linux 基金会。PyTorch 基金会是 Linux 基金会的一个项目。有关 PyTorch 基金会的网站使用条款、商标政策以及其他适用政策，请参阅 Linux 基金会政策。PyTorch 基金会支持 PyTorch 开源项目，该项目已被确立为 LF Projects, LLC 的 PyTorch 项目系列。有关适用于 LF Projects, LLC 的 PyTorch 项目系列的政策，请参阅 LF Projects, LLC 政策。隐私政策和使用条款。</p>
       </div>
     </div>
   </div>
@@ -854,7 +856,7 @@ dependencies {
   <div class="container-fluid">
     <div class="container">
       <div class="mobile-main-menu-header-container">
-        <a class="header-logo" href="http://localhost:4000" aria-label="PyTorch"></a>
+        <a class="header-logo" href="https://maskerprc.github.io" aria-label="PyTorch"></a>
         <a class="main-menu-close-button" href="#" data-behavior="close-mobile-menu"></a>
       </div>
     </div>
@@ -879,19 +881,19 @@ dependencies {
             <a href="/get-started">开始使用</a> 
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials">教程</a>
+            <a href="https://pytorch.org/tutorials">教程</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/basics/intro.html">学习基础知识</a>
+            <a href="https://pytorch.org/tutorials/beginner/basics/intro.html">学习基础知识</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/recipes/recipes_index.html">PyTorch 烹饪秘籍</a>
+            <a href="https://pytorch.org/tutorials/recipes/recipes_index.html">PyTorch 食谱</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
+            <a href="https://pytorch.org/tutorials/beginner/introyt.html">PyTorch 入门 - YouTube 系列</a>
           </li>
           <li>
-            <a href="/new">新手入门 PyTorch 基金会</a>
+            <a href="/new">PyTorch 基金会新入门</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -914,7 +916,7 @@ dependencies {
             <a href="/resources">开发者资源</a>
           </li>
           <li>
-            <a href="/ecosystem/contributor-awards-2024">2024年贡献者奖项</a>
+            <a href="/ecosystem/contributor-awards-2024">贡献者奖项 - 2024</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -928,7 +930,7 @@ dependencies {
             <a href="/executorch-overview">执行火炬</a>
           </li>
           <li>
-            <a href="https://maskerprc.github.io/executorch/stable/index.html">ExecuTorch 文档</a>
+            <a href="https://pytorch.org/executorch/stable/index.html">ExecuTorch 文档</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -963,7 +965,7 @@ dependencies {
             <a href="/events">活动</a>
           </li>
           <li>
-            <a href="/newsletter">新闻简报</a>
+            <a href="/newsletter">通讯简报</a>
           </li>
         </ul>
         <li class="resources-mobile-menu-title">
@@ -977,7 +979,7 @@ dependencies {
             <a href="/governing-board">管理委员会</a>
           </li>
           <li>
-            <a href="/credits">云信用计划</a>
+            <a href="/credits">云积分计划</a>
           </li>
           <li>          
             <a href="/tac">技术顾问委员会</a>
@@ -1045,7 +1047,7 @@ dependencies {
 
 <div class="cookie-banner-wrapper">
   <div class="container">
-    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：[Cookies 政策](<a href="https://www.facebook.com/policies/cookies/">Cookies 政策 </a>)。</p>
+    <p class="gdpr-notice">为了分析流量并优化您的体验，我们在本网站上使用 cookies。通过点击或导航，您同意允许我们使用 cookies。作为本网站的当前维护者，适用 Facebook 的 Cookies 政策。了解更多信息，包括关于可用控制的信息：Cookies 政策。</p>
     <img class="close-button" src="/assets/images/pytorch-x.svg" width="16" height="16">
   </div>
 </div>
